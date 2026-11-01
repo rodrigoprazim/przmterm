@@ -1,7 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
-default-members = ["crates/przmterm-app", "crates/przmterm-cli"]
+# `cargo run` starts the desktop app; the CLI runs with `cargo run -p przmterm-cli`.
+default-members = ["crates/przmterm-app"]
 
 [workspace.package]
 # Development versions carry a `-dev` suffix; see docs/VERSIONING.md.
