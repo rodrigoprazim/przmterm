@@ -15,8 +15,36 @@ pub const DEFAULT_FG: [u8; 3] = [216, 222, 233];
 pub const DEFAULT_BG: [u8; 3] = [24, 26, 31];
 const CURSOR: Color32 = Color32::from_rgb(110, 200, 255);
 
+/// The 16 ANSI colours, tuned to stay readable on the dark background.
+/// Indices 16–255 keep the standard xterm values.
+const ANSI_16: [[u8; 3]; 16] = [
+    [0, 0, 0],
+    [205, 49, 49],
+    [13, 188, 121],
+    [229, 229, 16],
+    [36, 114, 200],
+    [188, 63, 188],
+    [17, 168, 205],
+    [229, 229, 229],
+    [102, 102, 102],
+    [241, 76, 76],
+    [35, 209, 139],
+    [245, 245, 67],
+    [59, 142, 234],
+    [214, 112, 214],
+    [41, 184, 219],
+    [255, 255, 255],
+];
+
 fn rgb(c: [u8; 3]) -> Color32 {
     Color32::from_rgb(c[0], c[1], c[2])
+}
+
+fn resolve(color: przmterm_term::Color, default: [u8; 3]) -> [u8; 3] {
+    match color {
+        przmterm_term::Color::Indexed(i @ 0..=15) => ANSI_16[usize::from(i)],
+        other => other.to_rgb(default),
+    }
 }
 
 /// Foreground and background after bold-brightening and reverse video.
@@ -27,8 +55,8 @@ fn colors(style: &Style) -> (Color32, Color32) {
     {
         fg = przmterm_term::Color::Indexed(i + 8);
     }
-    let mut fg = fg.to_rgb(DEFAULT_FG);
-    let mut bg = style.bg.to_rgb(DEFAULT_BG);
+    let mut fg = resolve(fg, DEFAULT_FG);
+    let mut bg = resolve(style.bg, DEFAULT_BG);
     if style.reverse {
         std::mem::swap(&mut fg, &mut bg);
     }
@@ -220,7 +248,7 @@ mod tests {
             bold: true,
             ..Style::default()
         };
-        assert_eq!(colors(&bold_red).0, Color32::from_rgb(255, 0, 0));
+        assert_eq!(colors(&bold_red).0, rgb(ANSI_16[9]));
 
         let rev = Style {
             reverse: true,

@@ -7,6 +7,22 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- SSH sessions: password, public key files, ssh-agent (Pageant and the OpenSSH
+  agent on Windows) and keyboard-interactive (2FA) authentication.
+- Host keys are checked against PrzmTerm's own `known_hosts` and, read-only,
+  `~/.ssh/known_hosts`. Unknown keys are confirmed in the terminal; a changed
+  key blocks the connection and shows both fingerprints.
+- Host key, `login as:`, password and passphrase prompts appear in the terminal.
+- Quick-connect field (`user@host:port`, `telnet://host`) and double-click to
+  connect from the session tree. Press Enter in a closed session to reconnect.
+- `identity_file` session setting.
+
+### Changed
+
+- The 16 ANSI colours use a palette that stays readable on the dark background.
+
 ## [0.1.0] - 2026-11-01
 
 ### Added

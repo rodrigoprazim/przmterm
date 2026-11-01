@@ -5,8 +5,8 @@ serial consoles, a session tree with inherited settings, logging and automation.
 Written in Rust, one binary per platform for macOS, Windows and Linux. No
 Electron, no web view.
 
-> **Status:** early development, working toward **0.1.0**. SSH arrives in 0.2.0.
-> See the [roadmap](ROADMAP.md).
+> **Status:** early development. 0.1.0 is out; 0.2.0 adds SSH. Telnet and
+> serial arrive in 0.4.0. See the [roadmap](ROADMAP.md).
 
 ## Goals
 
@@ -28,6 +28,19 @@ cd przmterm
 cargo run --release            # desktop app (przmterm)
 cargo run --release -p przmterm-cli -- --help   # CLI (przm)
 ```
+
+## Connecting
+
+Type `user@host:port` in **Quick connect**, or double-click a saved session.
+Host key questions, `login as:`, passwords, key passphrases and two-factor
+prompts appear in the terminal, as with OpenSSH. Authentication tries, in
+order: ssh-agent (Pageant or the OpenSSH agent on Windows), the session's
+`identity_file`, `~/.ssh/id_ed25519`, `id_ecdsa`, `id_rsa`, keyboard-interactive
+and password.
+
+Accepted host keys go to `known_hosts` in the configuration directory (OpenSSH
+format). `~/.ssh/known_hosts` is also consulted, read-only. If a host's key
+changes, PrzmTerm refuses to connect and shows the old and new fingerprints.
 
 ## Sessions
 
@@ -57,6 +70,7 @@ protocol = "ssh"          # ssh | telnet | serial | local
 host = "10.0.0.1"
 port = 22
 username = "admin"
+identity_file = "~/.ssh/id_lab"
 serial_port = "/dev/ttyUSB0"
 baud_rate = 9600
 

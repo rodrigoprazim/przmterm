@@ -4,11 +4,24 @@
 //! [`Transport`] contract: it moves raw bytes and knows nothing about terminal
 //! emulation. The emulator in `przmterm-term` interprets what comes out.
 //!
-//! Phase 0 keeps the contract synchronous; the SSH implementation (russh) will
-//! drive it from a Tokio task per session.
+//! The contract is synchronous and non-blocking so the GUI can poll it every
+//! frame. Network transports ([`ssh::SshTransport`]) run as a Tokio task and
+//! call a [`Waker`] when bytes arrive, so the GUI repaints only when needed.
+
+pub mod ssh;
 
 use std::collections::VecDeque;
 use std::io;
+use std::sync::Arc;
+
+/// Called from a network task when data arrives or the connection ends.
+/// The GUI passes a closure that requests a repaint.
+pub type Waker = Arc<dyn Fn() + Send + Sync>;
+
+/// A waker that does nothing, for tests and headless use.
+pub fn noop_waker() -> Waker {
+    Arc::new(|| {})
+}
 
 /// Terminal size in character cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +67,11 @@ pub trait Transport: Send {
     }
 
     fn close(&mut self) -> Result<(), TransportError>;
+
+    /// True once the connection has ended and no more bytes will arrive.
+    fn is_closed(&self) -> bool {
+        false
+    }
 }
 
 /// In-memory transport that echoes everything written back to the reader.
@@ -112,6 +130,10 @@ impl Transport for Loopback {
     fn close(&mut self) -> Result<(), TransportError> {
         self.closed = true;
         Ok(())
+    }
+
+    fn is_closed(&self) -> bool {
+        self.closed
     }
 }
 

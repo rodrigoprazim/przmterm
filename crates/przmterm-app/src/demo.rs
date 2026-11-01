@@ -34,8 +34,9 @@ impl DemoShell {
             closed: false,
         };
         shell.emit(&format!(
-            "\x1b[1mPrzmTerm {}\x1b[0m — demo shell (SSH arrives in 0.2.0)\r\n\
-             Type \x1b[33mhelp\x1b[0m for commands.\r\n\r\n{PROMPT}",
+            "\x1b[1mPrzmTerm {}\x1b[0m — demo shell\r\n\
+             Connect with \x1b[33mQuick connect\x1b[0m or double-click a session. \
+             Type \x1b[33mhelp\x1b[0m for demo commands.\r\n\r\n{PROMPT}",
             przmterm_core::VERSION
         ));
         shell

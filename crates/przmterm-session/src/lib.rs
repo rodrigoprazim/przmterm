@@ -26,6 +26,8 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULTS_FILE: &str = "defaults.toml";
 pub const FOLDER_FILE: &str = "folder.toml";
 pub const SESSIONS_DIR: &str = "sessions";
+/// PrzmTerm's own SSH known-hosts file, in OpenSSH format.
+pub const KNOWN_HOSTS_FILE: &str = "known_hosts";
 
 pub const DEFAULT_TERM_TYPE: &str = "xterm-256color";
 pub const DEFAULT_SCROLLBACK: usize = 10_000;
@@ -74,6 +76,8 @@ pub struct SessionSettings {
     pub host: Option<String>,
     pub port: Option<u16>,
     pub username: Option<String>,
+    /// SSH private key tried before the agent's and the default ones.
+    pub identity_file: Option<String>,
     pub serial_port: Option<String>,
     pub baud_rate: Option<u32>,
     pub terminal: TerminalSettings,
@@ -95,6 +99,7 @@ impl SessionSettings {
             host: pick(&self.host, &over.host),
             port: pick(&self.port, &over.port),
             username: pick(&self.username, &over.username),
+            identity_file: pick(&self.identity_file, &over.identity_file),
             serial_port: pick(&self.serial_port, &over.serial_port),
             baud_rate: pick(&self.baud_rate, &over.baud_rate),
             terminal: TerminalSettings {
@@ -133,6 +138,8 @@ pub struct Session {
     pub path: PathBuf,
     pub protocol: Protocol,
     pub target: Target,
+    /// SSH private key, with `~` expanded.
+    pub identity_file: Option<PathBuf>,
     pub term_type: String,
     pub scrollback: usize,
     pub log_enabled: bool,
@@ -184,6 +191,7 @@ impl Session {
             folder,
             protocol,
             target,
+            identity_file: settings.identity_file.as_deref().map(expand_tilde),
             term_type: settings
                 .terminal
                 .term_type
@@ -194,6 +202,57 @@ impl Session {
             log_path: settings.log.path.clone(),
             path,
         })
+    }
+
+    /// Builds a session from a quick-connect string:
+    /// `host`, `user@host`, `host:port`, `user@[::1]:2222`, or `telnet://host`.
+    pub fn quick_connect(target: &str) -> Result<Session, String> {
+        let target = target.trim();
+        let (protocol, rest) = match target.split_once("://") {
+            Some(("ssh", rest)) => (Protocol::Ssh, rest),
+            Some(("telnet", rest)) => (Protocol::Telnet, rest),
+            Some((scheme, _)) => return Err(format!("unsupported protocol `{scheme}`")),
+            None => (Protocol::Ssh, target),
+        };
+        let (username, hostport) = match rest.rsplit_once('@') {
+            Some((u, h)) if !u.is_empty() => (Some(u.to_string()), h),
+            Some((_, h)) => (None, h),
+            None => (None, rest),
+        };
+        let (host, port) = if let Some(inner) = hostport.strip_prefix('[') {
+            let (host, after) = inner
+                .split_once(']')
+                .ok_or("missing `]` after IPv6 address")?;
+            let port = match after.strip_prefix(':') {
+                Some(p) => Some(p),
+                None if after.is_empty() => None,
+                None => return Err(format!("unexpected `{after}` after `]`")),
+            };
+            (host, port)
+        } else if hostport.matches(':').count() == 1 {
+            let (h, p) = hostport.split_once(':').unwrap_or((hostport, ""));
+            (h, Some(p))
+        } else {
+            // No colon, or a bare IPv6 address without brackets.
+            (hostport, None)
+        };
+        if host.is_empty() || host.contains(char::is_whitespace) {
+            return Err("enter a host, e.g. admin@10.0.0.1:22".into());
+        }
+        let port = match port {
+            Some(p) => p
+                .parse::<u16>()
+                .map_err(|_| format!("invalid port `{p}`"))?,
+            None => protocol.default_port().unwrap_or(22),
+        };
+        let settings = SessionSettings {
+            protocol: Some(protocol),
+            host: Some(host.to_string()),
+            port: Some(port),
+            username,
+            ..SessionSettings::default()
+        };
+        Session::resolve(target, Vec::new(), PathBuf::new(), &settings).map_err(|e| e.to_string())
     }
 
     /// Short description such as `admin@10.0.0.1:22` or `/dev/ttyUSB0 @ 9600`.
@@ -276,6 +335,16 @@ pub fn default_config_dir() -> Option<PathBuf> {
         return Some(PathBuf::from(home));
     }
     dirs::config_dir().map(|d| d.join("przmterm"))
+}
+
+/// Expands a leading `~` or `~/` to the home directory.
+pub fn expand_tilde(path: &str) -> PathBuf {
+    match (path.strip_prefix('~'), dirs::home_dir()) {
+        (Some(rest), Some(home)) if rest.is_empty() || rest.starts_with(['/', '\\']) => {
+            home.join(rest.trim_start_matches(['/', '\\']))
+        }
+        _ => PathBuf::from(path),
+    }
 }
 
 fn read_settings(path: &Path) -> Result<Option<SessionSettings>, SessionError> {
@@ -386,6 +455,33 @@ mod tests {
         assert_eq!(merged.username.as_deref(), Some("admin"));
         assert_eq!(merged.port, Some(22));
         assert_eq!(merged.terminal.scrollback, Some(500));
+    }
+
+    #[test]
+    fn quick_connect_forms() {
+        let t = |s: &str| Session::quick_connect(s).map(|s| (s.protocol, s.display_target()));
+        assert_eq!(t("10.0.0.1"), Ok((Protocol::Ssh, "10.0.0.1:22".into())));
+        assert_eq!(
+            t("admin@sw1:2222"),
+            Ok((Protocol::Ssh, "admin@sw1:2222".into()))
+        );
+        assert_eq!(t("a@b@host"), Ok((Protocol::Ssh, "a@b@host:22".into())));
+        assert_eq!(t("u@[::1]:2200"), Ok((Protocol::Ssh, "u@::1:2200".into())));
+        assert_eq!(t("fe80::1"), Ok((Protocol::Ssh, "fe80::1:22".into())));
+        assert_eq!(t("telnet://rtr"), Ok((Protocol::Telnet, "rtr:23".into())));
+        assert!(t("host:99999").is_err());
+        assert!(t("").is_err());
+        assert!(t("ftp://x").is_err());
+    }
+
+    #[test]
+    fn identity_file_expands_tilde() {
+        let s = SessionSettings::from_toml("host = 'h'\nidentity_file = '~/.ssh/lab'").unwrap();
+        let session = Session::resolve("h", vec![], "h.toml", &s).unwrap();
+        let expected = dirs::home_dir().unwrap().join(".ssh/lab");
+        assert_eq!(session.identity_file, Some(expected));
+        assert_eq!(expand_tilde("/abs"), PathBuf::from("/abs"));
+        assert_eq!(expand_tilde("~user/x"), PathBuf::from("~user/x"));
     }
 
     #[test]
