@@ -7,6 +7,19 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Tabs and split panes (side by side or stacked). A new tab or pane opens the
+  same session. Shortcuts: Ctrl+Shift+T / ⌘⇧T new tab, Ctrl+Shift+D and
+  Ctrl+Shift+E split, Ctrl+Shift+W close pane, Ctrl+Tab next tab.
+- Mouse selection: drag, double-click for a word (IP addresses and paths stay
+  whole), triple-click for a line. Copy with Ctrl+Shift+C, or Ctrl+C when text
+  is selected; paste with Ctrl+Shift+V or Ctrl+V (⌘C / ⌘V on macOS); right-click menu.
+- Scrollback browsing with the mouse wheel and Shift+PageUp/PageDown/Home/End.
+  On full-screen programs (less, vim) the wheel sends arrow keys.
+- Wide characters (CJK, emoji) take two cells.
+- DEC Special Graphics line-drawing charset.
+
 ## [0.2.0] - 2026-11-01
 
 ### Added

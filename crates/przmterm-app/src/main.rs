@@ -2,20 +2,17 @@
 
 mod demo;
 mod input;
+mod pane;
 mod view;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use eframe::egui;
-use przmterm_core::Protocol;
-use przmterm_session::{Folder, Session, SessionTree, Target};
-use przmterm_term::Terminal;
-use przmterm_transport::ssh::{SshConfig, SshTransport};
-use przmterm_transport::{Size, Transport, TransportError, Waker};
+use eframe::egui::{self, Key, Modifiers};
+use przmterm_session::{Folder, Session, SessionTree};
+use przmterm_transport::{TransportError, Waker};
 
-use crate::demo::DemoShell;
-use crate::view::TerminalView;
+use crate::pane::Pane;
 
 fn main() -> eframe::Result {
     tracing_subscriber::fmt()
@@ -39,155 +36,66 @@ fn main() -> eframe::Result {
     )
 }
 
-/// One terminal and the connection behind it.
+/// How the panes of a tab are arranged.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Layout {
+    /// Side by side.
+    Columns,
+    /// Stacked.
+    Rows,
+}
+
+/// A tab: one or more panes, one of them active.
 struct Tab {
-    term: Terminal,
-    transport: Box<dyn Transport>,
-    view: TerminalView,
-    /// Shown in the status bar, e.g. `ssh admin@10.0.0.1:22`.
-    label: String,
-    /// The session to reconnect to, if any.
-    origin: Option<Session>,
-    closed_announced: bool,
+    panes: Vec<Pane>,
+    active: usize,
+    layout: Layout,
 }
 
 impl Tab {
-    fn demo() -> Self {
+    fn new(pane: Pane) -> Self {
         Self {
-            term: Terminal::new(80, 24),
-            transport: Box::new(DemoShell::new()),
-            view: TerminalView::default(),
-            label: "demo shell".into(),
-            origin: None,
-            closed_announced: false,
+            panes: vec![pane],
+            active: 0,
+            layout: Layout::Columns,
         }
     }
 
-    fn open(session: &Session, known_hosts: &Path, size: Size, waker: Waker) -> Self {
-        let transport: Box<dyn Transport> = match (&session.protocol, &session.target) {
-            (
-                Protocol::Ssh,
-                Target::Network {
-                    host,
-                    port,
-                    username,
-                },
-            ) => {
-                let mut config = SshConfig::new(host.clone(), *port, known_hosts);
-                config.username = username.clone();
-                config.term_type = session.term_type.clone();
-                config.identity_files = session.identity_file.iter().cloned().collect();
-                Box::new(SshTransport::connect(config, size, waker))
-            }
-            (protocol, _) => {
-                let version = match protocol {
-                    Protocol::Telnet | Protocol::Serial => "0.4.0",
-                    _ => "a later version",
-                };
-                message(&format!(
-                    "\x1b[33m{protocol} sessions arrive in PrzmTerm {version}.\x1b[0m\r\n"
-                ))
-            }
-        };
-        Self {
-            term: Terminal::with_scrollback(
-                usize::from(size.cols),
-                usize::from(size.rows),
-                session.scrollback,
-            ),
-            transport,
-            view: TerminalView::default(),
-            label: format!("{} {}", session.protocol, session.display_target()),
-            origin: Some(session.clone()),
-            closed_announced: false,
-        }
+    fn pane(&self) -> &Pane {
+        &self.panes[self.active]
     }
 
-    fn size(&self) -> Size {
-        let s = self.term.screen();
-        Size {
-            cols: s.cols().min(usize::from(u16::MAX)) as u16,
-            rows: s.rows().min(usize::from(u16::MAX)) as u16,
-        }
+    fn pane_mut(&mut self) -> &mut Pane {
+        &mut self.panes[self.active]
     }
 
-    /// Moves bytes transport → emulator and emulator replies → transport.
-    /// Returns true if anything arrived.
-    fn pump(&mut self) -> bool {
-        let mut buf = [0u8; 16 * 1024];
-        let mut got = false;
-        loop {
-            match self.transport.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    self.term.feed(&buf[..n]);
-                    got = true;
-                }
-                Err(e) => {
-                    tracing::warn!("transport read failed: {e}");
-                    break;
-                }
-            }
-        }
-        let replies = self.term.take_output();
-        if !replies.is_empty() {
-            self.send(&replies);
-        }
-        if self.transport.is_closed() && !self.closed_announced {
-            self.closed_announced = true;
-            if self.origin.is_some() {
-                self.term
-                    .feed(b"\x1b[2mPress Enter to reconnect.\x1b[0m\r\n");
-            }
-            got = true;
-        }
-        got
-    }
-
-    fn send(&mut self, bytes: &[u8]) {
-        match self.transport.write(bytes) {
-            Ok(()) | Err(TransportError::Closed) => {}
-            Err(e) => tracing::warn!("transport write failed: {e}"),
+    fn title(&self) -> String {
+        let title = self.pane().title();
+        if self.panes.len() > 1 {
+            format!("{title} (+{})", self.panes.len() - 1)
+        } else {
+            title
         }
     }
 }
 
-/// A transport that only shows `text` and is already closed.
-fn message(text: &str) -> Box<dyn Transport> {
-    Box::new(Message(text.as_bytes().to_vec().into()))
-}
-
-struct Message(std::collections::VecDeque<u8>);
-
-impl Transport for Message {
-    fn protocol(&self) -> Protocol {
-        Protocol::Local
-    }
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, TransportError> {
-        let n = buf.len().min(self.0.len());
-        for (slot, b) in buf.iter_mut().zip(self.0.drain(..n)) {
-            *slot = b;
-        }
-        Ok(n)
-    }
-    fn write(&mut self, _: &[u8]) -> Result<(), TransportError> {
-        Err(TransportError::Closed)
-    }
-    fn resize(&mut self, _: Size) -> Result<(), TransportError> {
-        Ok(())
-    }
-    fn close(&mut self) -> Result<(), TransportError> {
-        Ok(())
-    }
-    fn is_closed(&self) -> bool {
-        true
-    }
+/// User actions, collected while drawing and applied afterwards.
+enum Action {
+    Open(Box<Session>),
+    NewTab,
+    CloseTab(usize),
+    SelectTab(usize),
+    Split(Layout),
+    ClosePane,
+    FocusPane(usize),
+    Reconnect,
 }
 
 struct PrzmApp {
     config_dir: Option<PathBuf>,
     sessions: SessionTree,
-    tab: Tab,
+    tabs: Vec<Tab>,
+    active_tab: usize,
     title: String,
     quick_connect: String,
     quick_error: Option<String>,
@@ -206,7 +114,8 @@ impl PrzmApp {
         Self {
             config_dir,
             sessions,
-            tab: Tab::demo(),
+            tabs: vec![Tab::new(Pane::demo())],
+            active_tab: 0,
             title: String::new(),
             quick_connect: String::new(),
             quick_error: None,
@@ -226,12 +135,105 @@ impl PrzmApp {
             .join(przmterm_session::KNOWN_HOSTS_FILE)
     }
 
-    fn open(&mut self, session: &Session, ctx: &egui::Context) {
-        let ctx = ctx.clone();
-        let waker: Waker = Arc::new(move || ctx.request_repaint());
-        let size = self.tab.size();
-        let _ = self.tab.transport.close();
-        self.tab = Tab::open(session, &self.known_hosts(), size, waker);
+    fn tab(&self) -> &Tab {
+        &self.tabs[self.active_tab]
+    }
+
+    fn tab_mut(&mut self) -> &mut Tab {
+        &mut self.tabs[self.active_tab]
+    }
+
+    fn apply(&mut self, action: Action, ctx: &egui::Context) {
+        let ctx2 = ctx.clone();
+        let waker: Waker = Arc::new(move || ctx2.request_repaint());
+        let known_hosts = self.known_hosts();
+        match action {
+            Action::Open(session) => {
+                let size = self.tab().pane().size();
+                let pane = Pane::open(&session, &known_hosts, size, waker);
+                // The first demo shell is just a placeholder: replace it.
+                let tab = self.tab_mut();
+                if tab.panes.len() == 1 && tab.pane().origin.is_none() {
+                    *tab = Tab::new(pane);
+                } else {
+                    self.tabs.push(Tab::new(pane));
+                    self.active_tab = self.tabs.len() - 1;
+                }
+            }
+            Action::NewTab => {
+                let pane = self.tab().pane().clone_session(&known_hosts, waker);
+                self.tabs.push(Tab::new(pane));
+                self.active_tab = self.tabs.len() - 1;
+            }
+            Action::CloseTab(index) => {
+                let mut tab = self.tabs.remove(index);
+                for pane in &mut tab.panes {
+                    let _ = pane.transport.close();
+                }
+                if self.tabs.is_empty() {
+                    self.tabs.push(Tab::new(Pane::demo()));
+                }
+                if self.active_tab >= index && self.active_tab > 0 {
+                    self.active_tab -= 1;
+                }
+                self.active_tab = self.active_tab.min(self.tabs.len() - 1);
+            }
+            Action::SelectTab(index) => self.active_tab = index,
+            Action::Split(layout) => {
+                let pane = self.tab().pane().clone_session(&known_hosts, waker);
+                let tab = self.tab_mut();
+                tab.layout = layout;
+                tab.panes.insert(tab.active + 1, pane);
+                tab.active += 1;
+            }
+            Action::ClosePane => {
+                let tab = self.tab_mut();
+                if tab.panes.len() == 1 {
+                    let index = self.active_tab;
+                    self.apply(Action::CloseTab(index), ctx);
+                    return;
+                }
+                let mut pane = tab.panes.remove(tab.active);
+                let _ = pane.transport.close();
+                tab.active = tab.active.min(tab.panes.len() - 1);
+            }
+            Action::FocusPane(index) => self.tab_mut().active = index,
+            Action::Reconnect => {
+                let tab = self.tab_mut();
+                let old = tab.pane();
+                if let Some(session) = old.origin.clone() {
+                    let size = old.size();
+                    tab.panes[tab.active] = Pane::open(&session, &known_hosts, size, waker);
+                }
+            }
+        }
+        let tab = self.tab_mut();
+        tab.pane_mut().view.focus();
+    }
+
+    /// Window-level shortcuts, taken before the terminal sees the keys.
+    /// Cmd on macOS, Ctrl elsewhere, always with Shift so plain Ctrl
+    /// combinations still reach the remote side.
+    fn shortcuts(&self, ctx: &egui::Context) -> Option<Action> {
+        let cmd_shift = Modifiers::COMMAND | Modifiers::SHIFT;
+        ctx.input_mut(|i| {
+            if i.consume_key(cmd_shift, Key::T) {
+                Some(Action::NewTab)
+            } else if i.consume_key(cmd_shift, Key::W) {
+                Some(Action::ClosePane)
+            } else if i.consume_key(cmd_shift, Key::D) {
+                Some(Action::Split(Layout::Columns))
+            } else if i.consume_key(cmd_shift, Key::E) {
+                Some(Action::Split(Layout::Rows))
+            } else if i.consume_key(Modifiers::CTRL | Modifiers::SHIFT, Key::Tab) {
+                let n = self.tabs.len();
+                Some(Action::SelectTab((self.active_tab + n - 1) % n))
+            } else if i.consume_key(Modifiers::CTRL, Key::Tab) {
+                Some(Action::SelectTab((self.active_tab + 1) % self.tabs.len()))
+            } else {
+                None
+            }
+        })
     }
 }
 
@@ -262,21 +264,27 @@ fn folder_ui<'a>(ui: &mut egui::Ui, folder: &'a Folder) -> Option<&'a Session> {
 
 impl eframe::App for PrzmApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        if self.tab.pump() {
-            ui.ctx().request_repaint();
+        let ctx = ui.ctx().clone();
+        let mut actions: Vec<Action> = Vec::new();
+
+        // Every pane keeps reading, visible or not.
+        let mut got = false;
+        for tab in &mut self.tabs {
+            for pane in &mut tab.panes {
+                got |= pane.pump();
+            }
+        }
+        if got {
+            ctx.request_repaint();
         }
 
-        let title = match self.tab.term.screen().title() {
-            "" => "PrzmTerm".to_string(),
-            t => format!("{t} — PrzmTerm"),
-        };
+        let title = format!("{} — PrzmTerm", self.tab().pane().title());
         if title != self.title {
-            ui.ctx()
-                .send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.title = title;
         }
 
-        let mut to_open: Option<Session> = None;
+        actions.extend(self.shortcuts(&ctx));
 
         egui::Panel::top("toolbar").show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -284,14 +292,14 @@ impl eframe::App for PrzmApp {
                 let edit = ui.add(
                     egui::TextEdit::singleline(&mut self.quick_connect)
                         .hint_text("user@host:port")
-                        .desired_width(260.0),
+                        .desired_width(240.0),
                 );
-                let submitted = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let submitted = edit.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
                 if ui.button("Connect").clicked() || submitted {
                     match Session::quick_connect(&self.quick_connect) {
                         Ok(session) => {
                             self.quick_error = None;
-                            to_open = Some(session);
+                            actions.push(Action::Open(Box::new(session)));
                         }
                         Err(e) => self.quick_error = Some(e),
                     }
@@ -299,18 +307,82 @@ impl eframe::App for PrzmApp {
                 if let Some(err) = &self.quick_error {
                     ui.colored_label(ui.visuals().error_fg_color, err);
                 }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let shortcut = |k: &str| {
+                        if cfg!(target_os = "macos") {
+                            format!("⌘⇧{k}")
+                        } else {
+                            format!("Ctrl+Shift+{k}")
+                        }
+                    };
+                    if ui
+                        .button("✕ Pane")
+                        .on_hover_text(format!("Close pane ({})", shortcut("W")))
+                        .clicked()
+                    {
+                        actions.push(Action::ClosePane);
+                    }
+                    if ui
+                        .button("⬓ Split")
+                        .on_hover_text(format!("Split stacked ({})", shortcut("E")))
+                        .clicked()
+                    {
+                        actions.push(Action::Split(Layout::Rows));
+                    }
+                    if ui
+                        .button("◫ Split")
+                        .on_hover_text(format!("Split side by side ({})", shortcut("D")))
+                        .clicked()
+                    {
+                        actions.push(Action::Split(Layout::Columns));
+                    }
+                });
+            });
+        });
+
+        egui::Panel::top("tabs").show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for (i, tab) in self.tabs.iter().enumerate() {
+                    let mut title = tab.title();
+                    if title.chars().count() > 28 {
+                        title = title.chars().take(27).collect::<String>() + "…";
+                    }
+                    if tab.pane().transport.is_closed() && tab.pane().origin.is_some() {
+                        title = format!("○ {title}");
+                    }
+                    let tab_button = ui.selectable_label(i == self.active_tab, title);
+                    if tab_button.clicked() {
+                        actions.push(Action::SelectTab(i));
+                    }
+                    if tab_button.middle_clicked() {
+                        actions.push(Action::CloseTab(i));
+                    }
+                    if ui.small_button("×").on_hover_text("Close tab").clicked() {
+                        actions.push(Action::CloseTab(i));
+                    }
+                    ui.separator();
+                }
+                let new_tab = if cfg!(target_os = "macos") {
+                    "New tab with the same session (⌘⇧T)"
+                } else {
+                    "New tab with the same session (Ctrl+Shift+T)"
+                };
+                if ui.button("+").on_hover_text(new_tab).clicked() {
+                    actions.push(Action::NewTab);
+                }
             });
         });
 
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
-                let s = self.tab.term.screen();
+                let pane = self.tab().pane();
+                let s = pane.term.screen();
                 ui.label(format!("PrzmTerm {}", przmterm_core::VERSION));
                 ui.separator();
                 ui.label(format!("{}×{}", s.cols(), s.rows()));
                 ui.separator();
-                ui.label(&self.tab.label);
-                if self.tab.transport.is_closed() {
+                ui.label(&pane.label);
+                if pane.transport.is_closed() {
                     ui.weak("(closed)");
                 }
             });
@@ -338,7 +410,7 @@ impl eframe::App for PrzmApp {
                         };
                         ui.weak(hint);
                     } else if let Some(s) = folder_ui(ui, &self.sessions.root) {
-                        to_open = Some(s.clone());
+                        actions.push(Action::Open(Box::new(s.clone())));
                     }
                     if !self.sessions.errors.is_empty() {
                         ui.separator();
@@ -359,29 +431,65 @@ impl eframe::App for PrzmApp {
             });
 
         egui::CentralPanel::no_frame().show(ui, |ui| {
-            let tab = &mut self.tab;
-            let out = tab.view.show(ui, &mut tab.term);
-            if out.resized.is_some() {
-                let size = tab.size();
-                match tab.transport.resize(size) {
-                    Ok(()) | Err(TransportError::Closed) => {}
-                    Err(e) => tracing::warn!("resize failed: {e}"),
-                }
-            }
-            if !out.input.is_empty() {
-                if tab.transport.is_closed() {
-                    if out.input.contains(&b'\r') {
-                        to_open = tab.origin.clone();
+            let tab = &mut self.tabs[self.active_tab];
+            let area = ui.available_rect_before_wrap();
+            let n = tab.panes.len();
+            let gap = 4.0;
+            for (i, pane) in tab.panes.iter_mut().enumerate() {
+                let rect = match tab.layout {
+                    Layout::Columns => {
+                        let w = (area.width() - gap * (n - 1) as f32) / n as f32;
+                        egui::Rect::from_min_size(
+                            area.min + egui::vec2(i as f32 * (w + gap), 0.0),
+                            egui::vec2(w, area.height()),
+                        )
                     }
-                } else {
-                    tab.send(&out.input);
+                    Layout::Rows => {
+                        let h = (area.height() - gap * (n - 1) as f32) / n as f32;
+                        egui::Rect::from_min_size(
+                            area.min + egui::vec2(0.0, i as f32 * (h + gap)),
+                            egui::vec2(area.width(), h),
+                        )
+                    }
+                };
+                let active = i == tab.active;
+                let out = ui
+                    .scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                        pane.view.show(ui, &mut pane.term, active)
+                    })
+                    .inner;
+                if n > 1 && active {
+                    ui.painter().rect_stroke(
+                        rect,
+                        egui::CornerRadius::ZERO,
+                        egui::Stroke::new(1.0, egui::Color32::from_rgb(110, 200, 255)),
+                        egui::StrokeKind::Inside,
+                    );
                 }
-                ui.ctx().request_repaint();
+                if out.clicked && !active {
+                    actions.push(Action::FocusPane(i));
+                }
+                if out.resized.is_some() {
+                    match pane.transport.resize(pane.size()) {
+                        Ok(()) | Err(TransportError::Closed) => {}
+                        Err(e) => tracing::warn!("resize failed: {e}"),
+                    }
+                }
+                if !out.input.is_empty() {
+                    if pane.transport.is_closed() {
+                        if active && out.input.contains(&b'\r') {
+                            actions.push(Action::Reconnect);
+                        }
+                    } else {
+                        pane.send(&out.input);
+                    }
+                    ctx.request_repaint();
+                }
             }
         });
 
-        if let Some(session) = to_open {
-            self.open(&session, ui.ctx());
+        for action in actions {
+            self.apply(action, &ctx);
         }
     }
 }

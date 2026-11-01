@@ -42,6 +42,21 @@ Accepted host keys go to `known_hosts` in the configuration directory (OpenSSH
 format). `~/.ssh/known_hosts` is also consulted, read-only. If a host's key
 changes, PrzmTerm refuses to connect and shows the old and new fingerprints.
 
+## Keyboard and mouse
+
+| Action | Linux / Windows | macOS |
+| --- | --- | --- |
+| New tab (same session) | Ctrl+Shift+T | ⌘⇧T |
+| Split side by side / stacked | Ctrl+Shift+D / Ctrl+Shift+E | ⌘⇧D / ⌘⇧E |
+| Close pane | Ctrl+Shift+W | ⌘⇧W |
+| Next / previous tab | Ctrl+Tab / Ctrl+Shift+Tab | same |
+| Copy | Ctrl+Shift+C, or Ctrl+C with a selection | ⌘C |
+| Paste | Ctrl+Shift+V or Ctrl+V | ⌘V |
+| Scroll back | wheel, Shift+PageUp/PageDown, Shift+Home/End | same |
+
+Drag to select, double-click selects a word, triple-click a line. Right-click
+opens Copy / Paste / Select all.
+
 ## Sessions
 
 PrzmTerm reads its configuration from `$PRZMTERM_HOME`, or by default from:

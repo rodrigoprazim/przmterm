@@ -6,13 +6,18 @@
 //! for (cursor position reports, device attributes) are queued and collected
 //! with [`Terminal::take_output`].
 //!
-//! Coverage in 0.1: VT100/VT220/xterm cursor movement, erase, insert/delete,
-//! scroll regions, SGR with 16/256/truecolor, the alternate screen, DECCKM and
-//! bracketed paste flags. Wide (CJK) characters and line-drawing charsets come
-//! in a later version (see ROADMAP.md).
+//! Coverage: VT100/VT220/xterm cursor movement, erase, insert/delete, scroll
+//! regions, SGR with 16/256/truecolor, the alternate screen, DECCKM and
+//! bracketed paste flags, wide (CJK, emoji) characters and the DEC Special
+//! Graphics line-drawing charset.
+//!
+//! Lines are addressed two ways: viewport rows (`0..rows()`, shifted by the
+//! scrollback [display offset](Screen::display_offset)) and combined indices
+//! (`0..total_lines()`: scrollback first, then the screen) for selections.
 
 use std::collections::VecDeque;
 
+use unicode_width::UnicodeWidthChar;
 use vte::{Params, Parser, Perform};
 
 /// Default number of lines kept in scrollback.
@@ -92,6 +97,29 @@ pub struct Style {
 pub struct Cell {
     pub ch: char,
     pub style: Style,
+    /// [`Cell::WIDE`], [`Cell::SPACER`], [`Cell::WRAPPED`].
+    pub flags: u8,
+}
+
+impl Cell {
+    /// First half of a double-width character.
+    pub const WIDE: u8 = 1;
+    /// Second half of a double-width character; holds no text of its own.
+    pub const SPACER: u8 = 2;
+    /// Last cell of a line that continues on the next one (soft wrap).
+    pub const WRAPPED: u8 = 4;
+
+    pub fn is_wide(&self) -> bool {
+        self.flags & Self::WIDE != 0
+    }
+
+    pub fn is_spacer(&self) -> bool {
+        self.flags & Self::SPACER != 0
+    }
+
+    pub fn is_wrapped(&self) -> bool {
+        self.flags & Self::WRAPPED != 0
+    }
 }
 
 impl Default for Cell {
@@ -99,7 +127,56 @@ impl Default for Cell {
         Self {
             ch: ' ',
             style: Style::default(),
+            flags: 0,
         }
+    }
+}
+
+/// Character set designated to G0 or G1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Charset {
+    #[default]
+    Ascii,
+    /// DEC Special Graphics: `q` is `─`, `x` is `│`, `l` is `┌` …
+    DecGraphics,
+}
+
+/// Maps a character through the DEC Special Graphics set.
+fn dec_graphics(c: char) -> char {
+    match c {
+        '_' => ' ',
+        '`' => '◆',
+        'a' => '▒',
+        'b' => '␉',
+        'c' => '␌',
+        'd' => '␍',
+        'e' => '␊',
+        'f' => '°',
+        'g' => '±',
+        'h' => '␤',
+        'i' => '␋',
+        'j' => '┘',
+        'k' => '┐',
+        'l' => '┌',
+        'm' => '└',
+        'n' => '┼',
+        'o' => '⎺',
+        'p' => '⎻',
+        'q' => '─',
+        'r' => '⎼',
+        's' => '⎽',
+        't' => '├',
+        'u' => '┤',
+        'v' => '┴',
+        'w' => '┬',
+        'x' => '│',
+        'y' => '≤',
+        'z' => '≥',
+        '{' => 'π',
+        '|' => '≠',
+        '}' => '£',
+        '~' => '·',
+        other => other,
     }
 }
 
@@ -114,6 +191,8 @@ pub struct Cursor {
 struct Saved {
     cursor: Cursor,
     pen: Style,
+    charsets: [Charset; 2],
+    gl: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -144,6 +223,13 @@ pub struct Screen {
     title: String,
     bell: bool,
     output: Vec<u8>,
+    charsets: [Charset; 2],
+    /// Which of G0/G1 is active (SI/SO).
+    gl: usize,
+    /// How many lines the viewport is scrolled back into history.
+    display_offset: usize,
+    /// Lines ever dropped from the front of the scrollback.
+    history_base: u64,
 }
 
 impl Screen {
@@ -170,6 +256,10 @@ impl Screen {
             title: String::new(),
             bell: false,
             output: Vec::new(),
+            charsets: [Charset::Ascii; 2],
+            gl: 0,
+            display_offset: 0,
+            history_base: 0,
         }
     }
 
@@ -235,6 +325,94 @@ impl Screen {
         self.scrollback.get(index).map(Vec::as_slice)
     }
 
+    /// Lines the viewport is scrolled back into history (0 = live).
+    pub fn display_offset(&self) -> usize {
+        self.display_offset
+    }
+
+    /// Scrolls the viewport: positive `delta` goes back into history.
+    /// Does nothing on the alternate screen, which has no history.
+    pub fn scroll_display(&mut self, delta: isize) {
+        if self.primary.is_some() {
+            return;
+        }
+        let max = self.scrollback.len() as isize;
+        self.display_offset = (self.display_offset as isize + delta).clamp(0, max) as usize;
+    }
+
+    /// Returns the viewport to the live screen.
+    pub fn reset_display(&mut self) {
+        self.display_offset = 0;
+    }
+
+    /// Cells of a viewport row, taking the display offset into account.
+    pub fn view_line(&self, row: usize) -> &[Cell] {
+        let off = self.display_offset;
+        if row < off {
+            &self.scrollback[self.scrollback.len() - off + row]
+        } else {
+            &self.lines[row - off]
+        }
+    }
+
+    /// Scrollback plus screen lines.
+    pub fn total_lines(&self) -> usize {
+        self.scrollback.len() + self.rows
+    }
+
+    /// Combined index of a viewport row.
+    pub fn view_row_index(&self, row: usize) -> usize {
+        self.scrollback.len() - self.display_offset + row
+    }
+
+    /// A line by combined index: scrollback first, then the screen.
+    pub fn line_at(&self, index: usize) -> Option<&[Cell]> {
+        let sb = self.scrollback.len();
+        if index < sb {
+            self.scrollback.get(index).map(Vec::as_slice)
+        } else {
+            self.lines.get(index - sb).map(Vec::as_slice)
+        }
+    }
+
+    /// Lines ever dropped from the front of the scrollback. A combined index
+    /// plus this value stays the same line while history scrolls away.
+    pub fn history_base(&self) -> u64 {
+        self.history_base
+    }
+
+    /// Text between two combined `(line, col)` positions, inclusive and in
+    /// either order. Soft-wrapped lines are joined without a line break.
+    pub fn text_range(&self, a: (usize, usize), b: (usize, usize)) -> String {
+        let (start, end) = if a <= b { (a, b) } else { (b, a) };
+        let mut out = String::new();
+        for index in start.0..=end.0 {
+            let Some(line) = self.line_at(index) else {
+                break;
+            };
+            let from = if index == start.0 { start.1 } else { 0 };
+            let to = if index == end.0 {
+                (end.1 + 1).min(line.len())
+            } else {
+                line.len()
+            };
+            let mut text: String = line[from.min(to)..to]
+                .iter()
+                .filter(|c| !c.is_spacer())
+                .map(|c| c.ch)
+                .collect();
+            let wrapped = index != end.0 && line.last().is_some_and(Cell::is_wrapped);
+            if !wrapped {
+                text.truncate(text.trim_end().len());
+            }
+            out.push_str(&text);
+            if index != end.0 && !wrapped {
+                out.push('\n');
+            }
+        }
+        out
+    }
+
     /// Returns `true` once after the remote side rang the bell.
     pub fn take_bell(&mut self) -> bool {
         std::mem::take(&mut self.bell)
@@ -247,6 +425,7 @@ impl Screen {
                 bg: self.pen.bg,
                 ..Style::default()
             },
+            flags: 0,
         }
     }
 
@@ -288,6 +467,7 @@ impl Screen {
         }
         self.cols = cols;
         self.rows = rows;
+        self.display_offset = 0;
         self.scroll_top = 0;
         self.scroll_bottom = rows - 1;
         self.cursor.row = self.cursor.row.min(rows - 1);
@@ -301,23 +481,100 @@ impl Screen {
         }
         if self.scrollback.len() == self.scrollback_limit {
             self.scrollback.pop_front();
+            self.history_base += 1;
         }
         self.scrollback.push_back(line);
+        // Keep a scrolled-back view on the same lines while output continues.
+        if self.display_offset > 0 {
+            self.display_offset = (self.display_offset + 1).min(self.scrollback.len());
+        }
     }
 
     fn put_char(&mut self, ch: char) {
+        let ch = match self.charsets[self.gl] {
+            Charset::DecGraphics => dec_graphics(ch),
+            Charset::Ascii => ch,
+        };
+        let mut width = ch.width().unwrap_or(1);
+        if width == 0 {
+            // Combining marks are not stored yet.
+            return;
+        }
+        if self.cols < 2 {
+            width = 1;
+        }
         if self.wrap_pending {
-            self.cursor.col = 0;
-            self.linefeed();
-            self.wrap_pending = false;
+            self.wrap_line();
+        }
+        if width == 2 && self.cursor.col + 1 >= self.cols {
+            // No room for both halves: wrap first, as xterm does.
+            if self.autowrap {
+                let Cursor { row, col } = self.cursor;
+                self.unlink_wide(row, col);
+                self.lines[row][col] = self.blank_cell();
+                self.wrap_line();
+            } else {
+                width = 1;
+            }
         }
         let pen = self.pen;
         let Cursor { row, col } = self.cursor;
-        self.lines[row][col] = Cell { ch, style: pen };
-        if col + 1 >= self.cols {
+        self.unlink_wide(row, col);
+        if width == 2 {
+            self.unlink_wide(row, col + 1);
+            self.lines[row][col] = Cell {
+                ch,
+                style: pen,
+                flags: Cell::WIDE,
+            };
+            self.lines[row][col + 1] = Cell {
+                ch: ' ',
+                style: pen,
+                flags: Cell::SPACER,
+            };
+        } else {
+            self.lines[row][col] = Cell {
+                ch,
+                style: pen,
+                flags: 0,
+            };
+        }
+        let next = col + width;
+        if next >= self.cols {
+            self.cursor.col = self.cols - 1;
             self.wrap_pending = self.autowrap;
         } else {
-            self.cursor.col += 1;
+            self.cursor.col = next;
+        }
+    }
+
+    /// Moves to the next line after the last column, marking the soft wrap.
+    fn wrap_line(&mut self) {
+        let row = self.cursor.row;
+        let last = self.cols - 1;
+        self.lines[row][last].flags |= Cell::WRAPPED;
+        self.cursor.col = 0;
+        self.linefeed();
+        self.wrap_pending = false;
+    }
+
+    /// Before overwriting `(row, col)`, clears the other half of a wide character.
+    fn unlink_wide(&mut self, row: usize, col: usize) {
+        let cell = self.lines[row][col];
+        if cell.is_spacer() && col > 0 {
+            let style = self.lines[row][col - 1].style;
+            self.lines[row][col - 1] = Cell {
+                ch: ' ',
+                style,
+                flags: 0,
+            };
+        } else if cell.is_wide() && col + 1 < self.cols {
+            let style = self.lines[row][col + 1].style;
+            self.lines[row][col + 1] = Cell {
+                ch: ' ',
+                style,
+                flags: 0,
+            };
         }
     }
 
@@ -392,7 +649,11 @@ impl Screen {
                     self.erase_cells(r, 0, self.cols);
                 }
             }
-            3 => self.scrollback.clear(),
+            3 => {
+                self.history_base += self.scrollback.len() as u64;
+                self.scrollback.clear();
+                self.display_offset = 0;
+            }
             _ => {}
         }
     }
@@ -457,12 +718,21 @@ impl Screen {
         self.saved = Saved {
             cursor: self.cursor,
             pen: self.pen,
+            charsets: self.charsets,
+            gl: self.gl,
         };
     }
 
     fn restore_cursor(&mut self) {
-        let Saved { cursor, pen } = self.saved.clone();
+        let Saved {
+            cursor,
+            pen,
+            charsets,
+            gl,
+        } = self.saved.clone();
         self.pen = pen;
+        self.charsets = charsets;
+        self.gl = gl;
         self.move_to(cursor.row, cursor.col);
     }
 
@@ -607,6 +877,8 @@ impl Perform for Screen {
                 self.linefeed();
                 self.wrap_pending = false;
             }
+            0x0E => self.gl = 1,
+            0x0F => self.gl = 0,
             0x0D => {
                 self.cursor.col = 0;
                 self.wrap_pending = false;
@@ -679,8 +951,22 @@ impl Perform for Screen {
     }
 
     fn esc_dispatch(&mut self, intermediates: &[u8], ignore: bool, byte: u8) {
-        if ignore || !intermediates.is_empty() {
-            // Charset designations (ESC ( 0 …) arrive with intermediates; not yet supported.
+        if ignore {
+            return;
+        }
+        if let [designator] = intermediates {
+            let slot = match designator {
+                b'(' => 0,
+                b')' => 1,
+                _ => return,
+            };
+            self.charsets[slot] = match byte {
+                b'0' => Charset::DecGraphics,
+                _ => Charset::Ascii,
+            };
+            return;
+        }
+        if !intermediates.is_empty() {
             return;
         }
         match byte {
@@ -878,6 +1164,77 @@ mod tests {
         assert_eq!(t.screen().text(), "c\nd");
         assert_eq!(t.screen().scrollback_len(), 2);
         assert_eq!(t.screen().cursor(), Cursor { row: 1, col: 1 });
+    }
+
+    #[test]
+    fn wide_characters_take_two_cells() {
+        let t = term(6, 2, "a日b");
+        let line = t.screen().line(0);
+        assert!(line[1].is_wide() && line[2].is_spacer());
+        assert_eq!(line[3].ch, 'b');
+        assert_eq!(t.screen().cursor().col, 4);
+        assert_eq!(t.screen().text_range((0, 0), (0, 5)), "a日b");
+    }
+
+    #[test]
+    fn wide_character_at_last_column_wraps() {
+        let t = term(4, 2, "abc日");
+        assert_eq!(t.screen().line_text(0), "abc");
+        assert_eq!(t.screen().line(1)[0].ch, '日');
+        assert!(t.screen().line(0)[3].is_wrapped());
+    }
+
+    #[test]
+    fn overwriting_half_a_wide_character_clears_it() {
+        let t = term(6, 1, "日本\x1b[1;2Hx");
+        let line = t.screen().line(0);
+        assert_eq!(line[0].ch, ' ');
+        assert!(!line[0].is_wide());
+        assert_eq!(line[1].ch, 'x');
+        assert!(line[2].is_wide());
+    }
+
+    #[test]
+    fn dec_line_drawing() {
+        let t = term(10, 2, "\x1b(0lqqk\x1b(B ok\r\n\x1b)0\x0ex\x0fx");
+        assert_eq!(t.screen().line_text(0), "┌──┐ ok");
+        assert_eq!(t.screen().line_text(1), "│x");
+    }
+
+    #[test]
+    fn scrollback_viewport_stays_anchored() {
+        let mut t = Terminal::with_scrollback(4, 2, 100);
+        t.feed(b"1\r\n2\r\n3\r\n4");
+        t.screen_mut().scroll_display(2);
+        let s = t.screen();
+        assert_eq!(s.display_offset(), 2);
+        assert_eq!(cells_text(s.view_line(0)), "1");
+        assert_eq!(cells_text(s.view_line(1)), "2");
+        t.feed(b"\r\n5");
+        assert_eq!(cells_text(t.screen().view_line(0)), "1");
+        t.screen_mut().scroll_display(-100);
+        assert_eq!(t.screen().display_offset(), 0);
+        assert_eq!(cells_text(t.screen().view_line(1)), "5");
+        t.screen_mut().scroll_display(100);
+        assert_eq!(t.screen().display_offset(), 3);
+    }
+
+    #[test]
+    fn text_range_joins_soft_wraps_only() {
+        let t = term(4, 4, "abcdef\r\nxy  ");
+        let s = t.screen();
+        assert_eq!(s.text_range((0, 0), (2, 3)), "abcdef\nxy");
+        assert_eq!(s.text_range((2, 1), (0, 2)), "cdef\nxy");
+    }
+
+    #[test]
+    fn history_base_counts_dropped_lines() {
+        let mut t = Terminal::with_scrollback(4, 1, 2);
+        t.feed(b"1\r\n2\r\n3\r\n4\r\n5");
+        assert_eq!(t.screen().scrollback_len(), 2);
+        assert_eq!(t.screen().history_base(), 2);
+        t.feed(b"\x1b[3J");
+        assert_eq!(t.screen().history_base(), 4);
     }
 
     #[test]

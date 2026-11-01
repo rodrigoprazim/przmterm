@@ -10,6 +10,7 @@ authors.workspace = true
 
 [dependencies]
 vte.workspace = true
+unicode-width.workspace = true
 
 [lints]
 workspace = true

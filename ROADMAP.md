@@ -49,9 +49,9 @@ Checked on Linux against OpenSSH 9.6 and on macOS against the maintainer's serve
 
 ## 0.3.0 — Daily-driver MVP
 
-- Tabs and split panes
-- Mouse selection, copy and paste; scrollback browsing with the wheel
-- Wide (CJK) characters and the DEC line-drawing charset
+- [x] Tabs and split panes
+- [x] Mouse selection, copy and paste; scrollback browsing with the wheel
+- [x] Wide (CJK) characters and the DEC line-drawing charset
 - Per-session logging with file-name templates
 - Credentials in the OS keychain (`keyring`)
 - Session editor in the GUI (create, edit, duplicate, delete)

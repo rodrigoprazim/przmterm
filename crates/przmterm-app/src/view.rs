@@ -1,19 +1,24 @@
 //! The terminal widget: paints a [`Screen`] and turns keyboard input into bytes.
 //!
-//! 0.1 paints through egui's text layout. A dedicated wgpu grid renderer with
-//! a glyph atlas replaces it before 1.0 (see ROADMAP.md).
+//! Text is painted in runs positioned on the cell grid, so double-width
+//! characters stay aligned. A dedicated wgpu grid renderer with a glyph atlas
+//! replaces this before 1.0 (see ROADMAP.md).
 
 use eframe::egui::{
-    self, Color32, CornerRadius, EventFilter, FontId, Pos2, Rect, Sense, Stroke, Vec2,
+    self, Align2, Color32, CornerRadius, EventFilter, FontId, Key, PointerButton, Pos2, Rect,
+    Sense, Stroke, Vec2,
     text::{LayoutJob, TextFormat},
 };
-use przmterm_term::{Cell, Style, Terminal};
+use przmterm_term::{Cell, Screen, Style, Terminal};
 
 use crate::input::{encode_key, encode_paste};
 
 pub const DEFAULT_FG: [u8; 3] = [216, 222, 233];
 pub const DEFAULT_BG: [u8; 3] = [24, 26, 31];
 const CURSOR: Color32 = Color32::from_rgb(110, 200, 255);
+const SELECTION: Color32 = Color32::from_rgb(58, 92, 140);
+/// Lines scrolled per wheel notch on the alternate screen (sent as arrow keys).
+const ALT_SCROLL_LINES: usize = 3;
 
 /// The 16 ANSI colours, tuned to stay readable on the dark background.
 /// Indices 16–255 keep the standard xterm values.
@@ -70,17 +75,110 @@ fn colors(style: &Style) -> (Color32, Color32) {
     (rgb(fg), rgb(bg))
 }
 
+/// A position that survives history scrolling: a stable line id
+/// (combined index + [`Screen::history_base`]) and a column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct Point {
+    line: u64,
+    col: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectMode {
+    Cell,
+    Word,
+    Line,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Selection {
+    anchor: Point,
+    head: Point,
+    mode: SelectMode,
+}
+
+type Span = ((usize, usize), (usize, usize));
+
+impl Selection {
+    /// Ordered, mode-expanded range in combined `(line, col)` coordinates.
+    fn span(&self, screen: &Screen) -> Option<Span> {
+        let base = screen.history_base();
+        let last = screen.total_lines().checked_sub(1)?;
+        let to_index = |p: Point| -> (usize, usize) {
+            match p.line.checked_sub(base) {
+                Some(i) => ((i as usize).min(last), p.col),
+                None => (0, 0), // scrolled out of history
+            }
+        };
+        let (a, b) = if self.anchor <= self.head {
+            (self.anchor, self.head)
+        } else {
+            (self.head, self.anchor)
+        };
+        let (mut start, mut end) = (to_index(a), to_index(b));
+        match self.mode {
+            SelectMode::Cell => {}
+            SelectMode::Word => {
+                if let Some(line) = screen.line_at(start.0) {
+                    start.1 = word_bounds(line, start.1).0;
+                }
+                if let Some(line) = screen.line_at(end.0) {
+                    end.1 = word_bounds(line, end.1).1;
+                }
+            }
+            SelectMode::Line => {
+                start.1 = 0;
+                end.1 = screen.cols().saturating_sub(1);
+            }
+        }
+        Some((start, end))
+    }
+
+    fn text(&self, screen: &Screen) -> Option<String> {
+        let (a, b) = self.span(screen)?;
+        Some(screen.text_range(a, b)).filter(|t| !t.is_empty())
+    }
+}
+
+/// Characters that end a word on double-click. Dots, dashes, slashes, colons
+/// and `@` stay inside so IP addresses, paths and URLs select whole.
+fn is_word_char(c: char) -> bool {
+    !c.is_whitespace() && !"\"'`()[]{}<>|,;".contains(c)
+}
+
+/// Columns of the word around `col` (inclusive).
+fn word_bounds(line: &[Cell], col: usize) -> (usize, usize) {
+    let col = col.min(line.len().saturating_sub(1));
+    let word = |i: usize| line[i].is_spacer() || is_word_char(line[i].ch);
+    if line.is_empty() || !word(col) {
+        return (col, col);
+    }
+    let mut start = col;
+    while start > 0 && word(start - 1) {
+        start -= 1;
+    }
+    let mut end = col;
+    while end + 1 < line.len() && word(end + 1) {
+        end += 1;
+    }
+    (start, end)
+}
+
 /// Result of drawing the terminal for one frame.
 pub struct ViewOutput {
     /// Bytes typed or pasted by the user, to send to the transport.
     pub input: Vec<u8>,
     /// New size in cells when the widget was resized.
     pub resized: Option<(usize, usize)>,
+    /// The terminal was clicked (focus moves to this pane).
+    pub clicked: bool,
 }
 
 pub struct TerminalView {
     pub font_size: f32,
     focus_requested: bool,
+    selection: Option<Selection>,
+    scroll_accum: f32,
 }
 
 impl Default for TerminalView {
@@ -88,27 +186,38 @@ impl Default for TerminalView {
         Self {
             font_size: 14.0,
             focus_requested: false,
+            selection: None,
+            scroll_accum: 0.0,
         }
     }
 }
 
+fn read_clipboard() -> Option<String> {
+    arboard::Clipboard::new().ok()?.get_text().ok()
+}
+
 impl TerminalView {
-    pub fn show(&mut self, ui: &mut egui::Ui, term: &mut Terminal) -> ViewOutput {
+    /// Asks for keyboard focus on the next frame.
+    pub fn focus(&mut self) {
+        self.focus_requested = false;
+    }
+
+    pub fn show(&mut self, ui: &mut egui::Ui, term: &mut Terminal, active: bool) -> ViewOutput {
         let font_id = FontId::monospace(self.font_size);
         let (cell_w, cell_h) = ui
             .ctx()
             .fonts_mut(|f| (f.glyph_width(&font_id, 'M'), f.row_height(&font_id)));
 
-        let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click());
-        if response.clicked() || !self.focus_requested {
+        let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+        let clicked = response.clicked() || response.drag_started();
+        if clicked || (active && !self.focus_requested) {
             response.request_focus();
             self.focus_requested = true;
         }
         let focused = response.has_focus();
 
         // Fit the grid to the widget.
-        let pad = 6.0;
-        let inner = rect.shrink(pad);
+        let inner = rect.shrink(6.0);
         let cols = ((inner.width() / cell_w).floor() as usize).max(1);
         let rows = ((inner.height() / cell_h).floor() as usize).max(1);
         let mut resized = None;
@@ -117,22 +226,39 @@ impl TerminalView {
             resized = Some((cols, rows));
         }
 
-        let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, CornerRadius::ZERO, rgb(DEFAULT_BG));
+        let mut input = Vec::new();
+        self.handle_mouse(ui, &response, inner, (cell_w, cell_h), term, &mut input);
 
         let screen = term.screen();
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, CornerRadius::ZERO, rgb(DEFAULT_BG));
+        let span = self.selection.and_then(|s| s.span(screen));
         for row in 0..screen.rows() {
-            let job = row_job(screen.line(row), &font_id);
-            let galley = painter.layout_job(job);
-            let pos = Pos2::new(inner.left(), inner.top() + row as f32 * cell_h);
-            painter.galley(pos, galley, rgb(DEFAULT_FG));
+            let index = screen.view_row_index(row);
+            let selected = span.and_then(|((sl, sc), (el, ec))| {
+                (index >= sl && index <= el).then(|| {
+                    let from = if index == sl { sc } else { 0 };
+                    let to = if index == el { ec } else { usize::MAX };
+                    (from, to)
+                })
+            });
+            let origin = Pos2::new(inner.left(), inner.top() + row as f32 * cell_h);
+            paint_row(
+                &painter,
+                screen.view_line(row),
+                origin,
+                (cell_w, cell_h),
+                &font_id,
+                selected,
+            );
         }
 
-        if screen.cursor_visible() {
-            let c = screen.cursor();
+        let offset = screen.display_offset();
+        let cursor = screen.cursor();
+        if screen.cursor_visible() && cursor.row + offset < screen.rows() {
             let min = Pos2::new(
-                inner.left() + c.col as f32 * cell_w,
-                inner.top() + c.row as f32 * cell_h,
+                inner.left() + cursor.col as f32 * cell_w,
+                inner.top() + (cursor.row + offset) as f32 * cell_h,
             );
             let cell = Rect::from_min_size(min, Vec2::new(cell_w, cell_h));
             if focused {
@@ -146,94 +272,302 @@ impl TerminalView {
                 );
             }
         }
+        if offset > 0 {
+            painter.text(
+                rect.right_top() + Vec2::new(-10.0, 8.0),
+                Align2::RIGHT_TOP,
+                format!("↑ {offset} lines · Shift+End to return"),
+                FontId::proportional(12.0),
+                CURSOR,
+            );
+        }
 
-        let mut input = Vec::new();
         if focused {
-            ui.memory_mut(|m| {
-                m.set_focus_lock_filter(
-                    response.id,
-                    EventFilter {
-                        tab: true,
-                        horizontal_arrows: true,
-                        vertical_arrows: true,
-                        escape: true,
-                    },
-                )
-            });
-            let app_cursor = screen.app_cursor_keys();
-            let bracketed = screen.bracketed_paste();
-            let events = ui.input(|i| i.events.clone());
-            for event in events {
-                match event {
-                    egui::Event::Text(text) => input.extend_from_slice(text.as_bytes()),
-                    egui::Event::Paste(text) => input.extend(encode_paste(&text, bracketed)),
-                    // Without a selection yet, the platform copy/cut shortcut on
-                    // Linux and Windows (Ctrl+C / Ctrl+X) must reach the remote side.
-                    #[cfg(not(target_os = "macos"))]
-                    egui::Event::Copy => input.push(0x03),
-                    #[cfg(not(target_os = "macos"))]
-                    egui::Event::Cut => input.push(0x18),
-                    egui::Event::Key {
-                        key,
-                        pressed: true,
-                        modifiers,
-                        ..
-                    } => {
-                        if let Some(bytes) = encode_key(key, modifiers, app_cursor) {
-                            input.extend(bytes);
-                        }
-                    }
-                    _ => {}
+            self.handle_keys(ui, response.id, term, &mut input);
+        }
+        self.context_menu(&response, term, &mut input);
+
+        if !input.is_empty() {
+            term.screen_mut().reset_display();
+            self.selection = None;
+        }
+        ViewOutput {
+            input,
+            resized,
+            clicked,
+        }
+    }
+
+    fn handle_mouse(
+        &mut self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        inner: Rect,
+        (cell_w, cell_h): (f32, f32),
+        term: &mut Terminal,
+        input: &mut Vec<u8>,
+    ) {
+        let point_at = |screen: &Screen, pos: Pos2| -> Point {
+            let col = ((pos.x - inner.left()) / cell_w).floor().max(0.0) as usize;
+            let row = ((pos.y - inner.top()) / cell_h).floor().max(0.0) as usize;
+            let row = row.min(screen.rows() - 1);
+            Point {
+                line: screen.history_base() + screen.view_row_index(row) as u64,
+                col: col.min(screen.cols() - 1),
+            }
+        };
+
+        if let Some(pos) = response.interact_pointer_pos() {
+            let screen = term.screen();
+            let here = point_at(screen, pos);
+            if response.triple_clicked() {
+                self.selection = Some(Selection {
+                    anchor: here,
+                    head: here,
+                    mode: SelectMode::Line,
+                });
+            } else if response.double_clicked() {
+                self.selection = Some(Selection {
+                    anchor: here,
+                    head: here,
+                    mode: SelectMode::Word,
+                });
+            } else if response.drag_started_by(PointerButton::Primary) {
+                let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
+                let start = point_at(screen, origin);
+                self.selection = Some(Selection {
+                    anchor: start,
+                    head: start,
+                    mode: SelectMode::Cell,
+                });
+            } else if response.dragged_by(PointerButton::Primary) {
+                // Drag past the edges to scroll through history.
+                if pos.y < inner.top() {
+                    term.screen_mut().scroll_display(1);
+                } else if pos.y > inner.bottom() {
+                    term.screen_mut().scroll_display(-1);
                 }
+                let here = point_at(term.screen(), pos);
+                if let Some(sel) = &mut self.selection {
+                    sel.head = here;
+                }
+            } else if response.clicked_by(PointerButton::Primary) {
+                self.selection = None;
             }
         }
 
-        ViewOutput { input, resized }
+        if response.hovered() {
+            let dy = ui.input(|i| i.smooth_scroll_delta.y);
+            self.scroll_accum += dy;
+            let lines = (self.scroll_accum / cell_h).trunc();
+            self.scroll_accum -= lines * cell_h;
+            let lines = lines as isize;
+            if lines != 0 {
+                let screen = term.screen();
+                if screen.in_alt_screen() {
+                    // Full-screen programs (less, vim, htop) scroll with arrow keys.
+                    let key = if lines > 0 {
+                        Key::ArrowUp
+                    } else {
+                        Key::ArrowDown
+                    };
+                    let app_cursor = screen.app_cursor_keys();
+                    for _ in 0..lines.unsigned_abs() * ALT_SCROLL_LINES {
+                        input.extend(
+                            encode_key(key, egui::Modifiers::NONE, app_cursor).unwrap_or_default(),
+                        );
+                    }
+                } else {
+                    term.screen_mut().scroll_display(lines);
+                }
+            }
+        }
+    }
+
+    fn handle_keys(
+        &mut self,
+        ui: &egui::Ui,
+        id: egui::Id,
+        term: &mut Terminal,
+        input: &mut Vec<u8>,
+    ) {
+        ui.memory_mut(|m| {
+            m.set_focus_lock_filter(
+                id,
+                EventFilter {
+                    tab: true,
+                    horizontal_arrows: true,
+                    vertical_arrows: true,
+                    escape: true,
+                },
+            )
+        });
+        let screen = term.screen();
+        let app_cursor = screen.app_cursor_keys();
+        let bracketed = screen.bracketed_paste();
+        let page = screen.rows() as isize;
+        let events = ui.input(|i| i.events.clone());
+        for event in events {
+            match event {
+                egui::Event::Text(text) => input.extend_from_slice(text.as_bytes()),
+                egui::Event::Paste(text) => input.extend(encode_paste(&text, bracketed)),
+                egui::Event::Copy => {
+                    if let Some(text) = self.selection.and_then(|s| s.text(term.screen())) {
+                        ui.ctx().copy_text(text);
+                        self.selection = None;
+                    } else if !cfg!(target_os = "macos") {
+                        // Ctrl+C with nothing selected interrupts, as in Windows Terminal.
+                        input.push(0x03);
+                    }
+                }
+                egui::Event::Cut => {
+                    if !cfg!(target_os = "macos") {
+                        input.push(0x18);
+                    }
+                }
+                egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } => {
+                    let ctrl_shift = modifiers.ctrl && modifiers.shift && !modifiers.alt;
+                    match key {
+                        Key::C if ctrl_shift => {
+                            if let Some(text) = self.selection.and_then(|s| s.text(term.screen())) {
+                                ui.ctx().copy_text(text);
+                            }
+                        }
+                        Key::V if ctrl_shift => {
+                            if let Some(text) = read_clipboard() {
+                                input.extend(encode_paste(&text, bracketed));
+                            }
+                        }
+                        Key::PageUp if modifiers.shift => term.screen_mut().scroll_display(page),
+                        Key::PageDown if modifiers.shift => term.screen_mut().scroll_display(-page),
+                        Key::Home if modifiers.shift => {
+                            term.screen_mut().scroll_display(isize::MAX / 2)
+                        }
+                        Key::End if modifiers.shift => term.screen_mut().reset_display(),
+                        _ => {
+                            if let Some(bytes) = encode_key(key, modifiers, app_cursor) {
+                                input.extend(bytes);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn context_menu(
+        &mut self,
+        response: &egui::Response,
+        term: &mut Terminal,
+        input: &mut Vec<u8>,
+    ) {
+        let text = self.selection.and_then(|s| s.text(term.screen()));
+        let bracketed = term.screen().bracketed_paste();
+        response.context_menu(|ui| {
+            if ui
+                .add_enabled(text.is_some(), egui::Button::new("Copy"))
+                .clicked()
+            {
+                if let Some(t) = &text {
+                    ui.ctx().copy_text(t.clone());
+                }
+                ui.close();
+            }
+            if ui.button("Paste").clicked() {
+                if let Some(t) = read_clipboard() {
+                    input.extend(encode_paste(&t, bracketed));
+                }
+                ui.close();
+            }
+            ui.separator();
+            if ui.button("Select all").clicked() {
+                let screen = term.screen();
+                let base = screen.history_base();
+                self.selection = Some(Selection {
+                    anchor: Point { line: base, col: 0 },
+                    head: Point {
+                        line: base + screen.total_lines() as u64 - 1,
+                        col: screen.cols() - 1,
+                    },
+                    mode: SelectMode::Cell,
+                });
+                ui.close();
+            }
+        });
     }
 }
 
-/// One row as a layout job, grouping runs of cells that share a style.
-fn row_job(cells: &[Cell], font_id: &FontId) -> LayoutJob {
-    let mut job = LayoutJob::default();
-    let mut run = String::new();
-    let mut run_style: Option<Style> = None;
-    let flush = |job: &mut LayoutJob, run: &mut String, style: &Style| {
-        if run.is_empty() {
-            return;
+/// Paints one row: backgrounds as rectangles, text in style runs placed on
+/// the grid. `selected` is the inclusive column range highlighted in this row.
+fn paint_row(
+    painter: &egui::Painter,
+    cells: &[Cell],
+    origin: Pos2,
+    (cell_w, cell_h): (f32, f32),
+    font_id: &FontId,
+    selected: Option<(usize, usize)>,
+) {
+    let is_selected = |col: usize| selected.is_some_and(|(a, b)| col >= a && col <= b);
+    let mut col = 0;
+    while col < cells.len() {
+        let cell = cells[col];
+        if cell.is_spacer() {
+            col += 1;
+            continue;
         }
-        let (fg, bg) = colors(style);
+        let sel = is_selected(col);
+        let start = col;
+        let mut text = String::new();
+        if cell.is_wide() {
+            text.push(cell.ch);
+            col += 2;
+        } else {
+            while col < cells.len() {
+                let c = cells[col];
+                if c.is_wide() || c.is_spacer() || c.style != cell.style || is_selected(col) != sel
+                {
+                    break;
+                }
+                text.push(c.ch);
+                col += 1;
+            }
+        }
+        let width = (col.min(cells.len()) - start) as f32 * cell_w;
+        let (fg, mut bg) = colors(&cell.style);
+        if sel {
+            bg = SELECTION;
+        }
+        let x = origin.x + start as f32 * cell_w;
+        if bg != rgb(DEFAULT_BG) {
+            painter.rect_filled(
+                Rect::from_min_size(Pos2::new(x, origin.y), Vec2::new(width, cell_h)),
+                CornerRadius::ZERO,
+                bg,
+            );
+        }
+        if text.trim().is_empty() && !cell.style.underline {
+            continue;
+        }
         let format = TextFormat {
             font_id: font_id.clone(),
             color: fg,
-            background: if bg == rgb(DEFAULT_BG) {
-                Color32::TRANSPARENT
-            } else {
-                bg
-            },
-            italics: style.italic,
-            underline: if style.underline {
+            italics: cell.style.italic,
+            underline: if cell.style.underline {
                 Stroke::new(1.0, fg)
             } else {
                 Stroke::NONE
             },
             ..TextFormat::default()
         };
-        job.append(run, 0.0, format);
-        run.clear();
-    };
-    for cell in cells {
-        if run_style != Some(cell.style) {
-            if let Some(style) = run_style {
-                flush(&mut job, &mut run, &style);
-            }
-            run_style = Some(cell.style);
-        }
-        run.push(cell.ch);
+        let galley = painter.layout_job(LayoutJob::single_section(text, format));
+        painter.galley(Pos2::new(x, origin.y), galley, fg);
     }
-    if let Some(style) = run_style {
-        flush(&mut job, &mut run, &style);
-    }
-    job
 }
 
 #[cfg(test)]
@@ -257,12 +591,64 @@ mod tests {
         assert_eq!(colors(&rev), (rgb(DEFAULT_BG), rgb(DEFAULT_FG)));
     }
 
+    fn select(
+        t: &Terminal,
+        a: (usize, usize),
+        b: (usize, usize),
+        mode: SelectMode,
+    ) -> Option<String> {
+        let base = t.screen().history_base();
+        let p = |(line, col): (usize, usize)| Point {
+            line: base + line as u64,
+            col,
+        };
+        Selection {
+            anchor: p(a),
+            head: p(b),
+            mode,
+        }
+        .text(t.screen())
+    }
+
     #[test]
-    fn rows_group_runs_by_style() {
-        let mut t = Terminal::new(6, 1);
-        t.feed(b"ab\x1b[31mcd");
-        let job = row_job(t.screen().line(0), &FontId::monospace(12.0));
-        assert_eq!(job.text, "abcd  ");
-        assert_eq!(job.sections.len(), 3);
+    fn word_selection_keeps_addresses_whole() {
+        let mut t = Terminal::new(40, 2);
+        t.feed(b"ping 10.0.0.1 (/etc/hosts)");
+        assert_eq!(
+            select(&t, (0, 7), (0, 7), SelectMode::Word).as_deref(),
+            Some("10.0.0.1")
+        );
+        assert_eq!(
+            select(&t, (0, 17), (0, 17), SelectMode::Word).as_deref(),
+            Some("/etc/hosts")
+        );
+        assert_eq!(select(&t, (0, 4), (0, 4), SelectMode::Word), None);
+    }
+
+    #[test]
+    fn line_and_reversed_cell_selection() {
+        let mut t = Terminal::new(10, 3);
+        t.feed(b"first\r\nsecond");
+        assert_eq!(
+            select(&t, (1, 2), (1, 2), SelectMode::Line).as_deref(),
+            Some("second")
+        );
+        assert_eq!(
+            select(&t, (1, 2), (0, 3), SelectMode::Cell).as_deref(),
+            Some("st\nsec")
+        );
+    }
+
+    #[test]
+    fn selection_follows_lines_into_history() {
+        let mut t = Terminal::with_scrollback(10, 2, 100);
+        t.feed(b"keep me\r\nb");
+        let sel = Selection {
+            anchor: Point { line: 0, col: 0 },
+            head: Point { line: 0, col: 6 },
+            mode: SelectMode::Cell,
+        };
+        t.feed(b"\r\nc\r\nd");
+        assert_eq!(sel.text(t.screen()).as_deref(), Some("keep me"));
     }
 }
