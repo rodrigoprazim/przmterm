@@ -55,11 +55,17 @@ pub enum SessionError {
     Invalid { path: PathBuf, reason: String },
 }
 
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
+}
+
 /// Terminal options of a settings layer. `None` = inherit.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TerminalSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub term_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scrollback: Option<usize>,
 }
 
@@ -67,8 +73,10 @@ pub struct TerminalSettings {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LogSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
     /// File name template, e.g. `~/logs/%S-%Y%M%D.log`. See [`expand_log_template`].
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
 }
 
@@ -76,21 +84,38 @@ pub struct LogSettings {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SessionSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub protocol: Option<Protocol>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
     /// SSH private key tried before the agent's and the default ones.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub identity_file: Option<String>,
+    /// Save passwords in the OS keychain: unset asks, `true` always, `false` never.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub save_password: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub serial_port: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub baud_rate: Option<u32>,
+    #[serde(skip_serializing_if = "is_default")]
     pub terminal: TerminalSettings,
+    #[serde(skip_serializing_if = "is_default")]
     pub log: LogSettings,
 }
 
 impl SessionSettings {
     pub fn from_toml(text: &str) -> Result<Self, toml::de::Error> {
         toml::from_str(text)
+    }
+
+    /// TOML with only the keys that are set.
+    pub fn to_toml(&self) -> String {
+        toml::to_string(self).unwrap_or_default()
     }
 
     /// Returns these settings with every value set in `over` replacing ours.
@@ -104,6 +129,7 @@ impl SessionSettings {
             port: pick(&self.port, &over.port),
             username: pick(&self.username, &over.username),
             identity_file: pick(&self.identity_file, &over.identity_file),
+            save_password: pick(&self.save_password, &over.save_password),
             serial_port: pick(&self.serial_port, &over.serial_port),
             baud_rate: pick(&self.baud_rate, &over.baud_rate),
             terminal: TerminalSettings {
@@ -144,6 +170,8 @@ pub struct Session {
     pub target: Target,
     /// SSH private key, with `~` expanded.
     pub identity_file: Option<PathBuf>,
+    /// See [`SessionSettings::save_password`].
+    pub save_password: Option<bool>,
     pub term_type: String,
     pub scrollback: usize,
     pub log_enabled: bool,
@@ -196,6 +224,7 @@ impl Session {
             protocol,
             target,
             identity_file: settings.identity_file.as_deref().map(expand_tilde),
+            save_password: settings.save_password,
             term_type: settings
                 .terminal
                 .term_type
@@ -259,6 +288,18 @@ impl Session {
         Session::resolve(target, Vec::new(), PathBuf::new(), &settings).map_err(|e| e.to_string())
     }
 
+    /// Keychain account for saved passwords (`user@host:port`), when the user is known.
+    pub fn password_account(&self) -> Option<String> {
+        match &self.target {
+            Target::Network {
+                host,
+                port,
+                username: Some(user),
+            } => Some(format!("{user}@{host}:{port}")),
+            _ => None,
+        }
+    }
+
     /// Host name, serial port or `local`, as used in log file names.
     pub fn host_label(&self) -> &str {
         match &self.target {
@@ -312,6 +353,24 @@ pub struct Folder {
 }
 
 impl Folder {
+    /// Paths of this folder and every folder below it, e.g. `["", "Cisco", "Cisco/Core"]`.
+    pub fn folder_paths(&self) -> Vec<String> {
+        fn walk(folder: &Folder, prefix: &str, out: &mut Vec<String>) {
+            for f in &folder.folders {
+                let path = if prefix.is_empty() {
+                    f.name.clone()
+                } else {
+                    format!("{prefix}/{}", f.name)
+                };
+                out.push(path.clone());
+                walk(f, &path, out);
+            }
+        }
+        let mut out = vec![String::new()];
+        walk(self, "", &mut out);
+        out
+    }
+
     /// Every session in this folder and below, depth first.
     pub fn all_sessions(&self) -> Vec<&Session> {
         let mut out: Vec<&Session> = self.sessions.iter().collect();
@@ -355,6 +414,63 @@ impl SessionTree {
         }
         tree
     }
+}
+
+/// Reads the settings written in one file, without inheritance.
+pub fn read_session_settings(path: &Path) -> Result<SessionSettings, SessionError> {
+    Ok(read_settings(path)?.unwrap_or_default())
+}
+
+/// Checks a session or folder name for use as a file name.
+pub fn validate_name(name: &str) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("the name is empty".into());
+    }
+    if name.starts_with('.')
+        || name
+            .chars()
+            .any(|c| c.is_control() || "/\\:*?\"<>|".contains(c))
+    {
+        return Err(format!("`{name}` cannot be used as a file name"));
+    }
+    if format!("{name}.toml") == FOLDER_FILE {
+        return Err("`folder` is reserved for folder settings".into());
+    }
+    Ok(())
+}
+
+/// Writes a session file `<config>/sessions/<folder>/<name>.toml` and returns
+/// its path. `folder` uses `/` between levels; `""` is the top level.
+pub fn write_session(
+    config_dir: &Path,
+    folder: &str,
+    name: &str,
+    settings: &SessionSettings,
+) -> Result<PathBuf, SessionError> {
+    let name = name.trim();
+    let mut dir = config_dir.join(SESSIONS_DIR);
+    for part in folder.split('/').map(str::trim).filter(|p| !p.is_empty()) {
+        validate_name(part).map_err(|reason| SessionError::Invalid {
+            path: dir.join(part),
+            reason,
+        })?;
+        dir.push(part);
+    }
+    let path = dir.join(format!("{name}.toml"));
+    validate_name(name).map_err(|reason| SessionError::Invalid {
+        path: path.clone(),
+        reason,
+    })?;
+    fs::create_dir_all(&dir).map_err(|source| SessionError::Io {
+        path: dir.clone(),
+        source,
+    })?;
+    fs::write(&path, settings.to_toml()).map_err(|source| SessionError::Io {
+        path: path.clone(),
+        source,
+    })?;
+    Ok(path)
 }
 
 /// Default configuration directory: `$PRZMTERM_HOME`, else the OS config dir.
@@ -594,6 +710,34 @@ mod tests {
             file,
             PathBuf::from("/cfg/logs/admin@rtr-20260307-090502.log")
         );
+    }
+
+    #[test]
+    fn writes_only_the_keys_that_are_set() {
+        let tmp = tempfile::tempdir().unwrap();
+        let settings = SessionSettings {
+            host: Some("10.0.0.9".into()),
+            save_password: Some(false),
+            log: LogSettings {
+                enabled: Some(true),
+                path: None,
+            },
+            ..SessionSettings::default()
+        };
+        let path = write_session(tmp.path(), "Lab/Core", "sw9", &settings).unwrap();
+        assert_eq!(path, tmp.path().join("sessions/Lab/Core/sw9.toml"));
+        let text = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            text,
+            "host = \"10.0.0.9\"\nsave_password = false\n\n[log]\nenabled = true\n"
+        );
+        assert_eq!(read_session_settings(&path).unwrap(), settings);
+
+        let tree = SessionTree::load(tmp.path());
+        assert_eq!(tree.root.folder_paths(), vec!["", "Lab", "Lab/Core"]);
+        assert!(write_session(tmp.path(), "", "a/b", &settings).is_err());
+        assert!(write_session(tmp.path(), "", "folder", &settings).is_err());
+        assert!(write_session(tmp.path(), "../x", "ok", &settings).is_err());
     }
 
     #[test]

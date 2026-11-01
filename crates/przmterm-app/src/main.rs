@@ -1,7 +1,9 @@
 //! PrzmTerm desktop application.
 
 mod demo;
+mod editor;
 mod input;
+mod keychain;
 mod pane;
 mod view;
 
@@ -10,8 +12,11 @@ use std::sync::Arc;
 
 use eframe::egui::{self, Key, Modifiers};
 use przmterm_session::{Folder, Session, SessionTree};
+use przmterm_transport::ssh::PasswordStore;
 use przmterm_transport::{TransportError, Waker};
 
+use crate::editor::{Editor, EditorResult};
+use crate::keychain::Keychain;
 use crate::pane::{Env, Pane};
 
 fn main() -> eframe::Result {
@@ -100,6 +105,18 @@ struct PrzmApp {
     title: String,
     quick_connect: String,
     quick_error: Option<String>,
+    editor: Option<Editor>,
+    confirm_delete: Option<Session>,
+    notice: Option<String>,
+}
+
+/// What the user picked in the session tree.
+enum TreeAction {
+    Connect(Session),
+    Edit(Session),
+    Duplicate(Session),
+    Delete(Session),
+    ForgetPassword(Session),
 }
 
 impl PrzmApp {
@@ -120,6 +137,9 @@ impl PrzmApp {
             title: String::new(),
             quick_connect: String::new(),
             quick_error: None,
+            editor: None,
+            confirm_delete: None,
+            notice: None,
         }
     }
 
@@ -250,29 +270,101 @@ impl PrzmApp {
     }
 }
 
-/// Draws the session tree; returns the session the user double-clicked.
-fn folder_ui<'a>(ui: &mut egui::Ui, folder: &'a Folder) -> Option<&'a Session> {
-    let mut chosen = None;
+impl PrzmApp {
+    /// The session editor and the delete confirmation.
+    fn dialogs(&mut self, ctx: &egui::Context) {
+        if let (Some(editor), Some(dir)) = (&mut self.editor, self.config_dir.clone()) {
+            let folders = self.sessions.root.folder_paths();
+            match editor.show(ctx, &dir, &folders) {
+                EditorResult::Open => {}
+                EditorResult::Cancel => self.editor = None,
+                EditorResult::Saved(path) => {
+                    self.editor = None;
+                    self.notice = Some(format!(
+                        "Saved {}.",
+                        path.file_stem().unwrap_or_default().to_string_lossy()
+                    ));
+                    self.reload_sessions();
+                }
+            }
+        }
+        if let Some(session) = self.confirm_delete.clone() {
+            let mut keep_open = true;
+            egui::Window::new("Delete session")
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label(format!(
+                        "Delete “{}”?\n{}",
+                        session.name,
+                        session.path.display()
+                    ));
+                    ui.horizontal(|ui| {
+                        if ui.button("Delete").clicked() {
+                            match std::fs::remove_file(&session.path) {
+                                Ok(()) => {
+                                    if let Some(account) = session.password_account() {
+                                        Keychain.delete(&account);
+                                    }
+                                    self.notice = Some(format!("Deleted {}.", session.name));
+                                }
+                                Err(e) => self.notice = Some(format!("Cannot delete: {e}")),
+                            }
+                            keep_open = false;
+                            self.reload_sessions();
+                        }
+                        if ui.button("Cancel").clicked() {
+                            keep_open = false;
+                        }
+                    });
+                });
+            if !keep_open {
+                self.confirm_delete = None;
+            }
+        }
+    }
+}
+
+/// Draws the session tree, collecting what the user picked.
+fn folder_ui(ui: &mut egui::Ui, folder: &Folder, picked: &mut Vec<TreeAction>) {
     for f in &folder.folders {
         egui::CollapsingHeader::new(&f.name)
             .default_open(true)
-            .show(ui, |ui| {
-                if let Some(s) = folder_ui(ui, f) {
-                    chosen = Some(s);
-                }
-            });
+            .show(ui, |ui| folder_ui(ui, f, picked));
     }
     for s in &folder.sessions {
         let response = ui.selectable_label(false, &s.name).on_hover_text(format!(
-            "[{}] {}\nDouble-click to connect",
+            "[{}] {}\nDouble-click to connect, right-click for more",
             s.protocol,
             s.display_target()
         ));
         if response.double_clicked() {
-            chosen = Some(s);
+            picked.push(TreeAction::Connect(s.clone()));
         }
+        response.context_menu(|ui| {
+            if ui.button("Connect").clicked() {
+                picked.push(TreeAction::Connect(s.clone()));
+                ui.close();
+            }
+            if ui.button("Edit…").clicked() {
+                picked.push(TreeAction::Edit(s.clone()));
+                ui.close();
+            }
+            if ui.button("Duplicate…").clicked() {
+                picked.push(TreeAction::Duplicate(s.clone()));
+                ui.close();
+            }
+            if s.password_account().is_some() && ui.button("Forget saved password").clicked() {
+                picked.push(TreeAction::ForgetPassword(s.clone()));
+                ui.close();
+            }
+            ui.separator();
+            if ui.button("Delete…").clicked() {
+                picked.push(TreeAction::Delete(s.clone()));
+                ui.close();
+            }
+        });
     }
-    chosen
 }
 
 impl eframe::App for PrzmApp {
@@ -426,7 +518,15 @@ impl eframe::App for PrzmApp {
                     if ui.small_button("⟳").on_hover_text("Reload").clicked() {
                         self.reload_sessions();
                     }
+                    if self.config_dir.is_some()
+                        && ui.small_button("+").on_hover_text("New session").clicked()
+                    {
+                        self.editor = Some(Editor::new_session(""));
+                    }
                 });
+                if let Some(notice) = &self.notice {
+                    ui.weak(notice);
+                }
                 ui.separator();
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     if self.sessions.root.all_sessions().is_empty() {
@@ -438,8 +538,26 @@ impl eframe::App for PrzmApp {
                             None => "No configuration directory.".to_string(),
                         };
                         ui.weak(hint);
-                    } else if let Some(s) = folder_ui(ui, &self.sessions.root) {
-                        actions.push(Action::Open(Box::new(s.clone())));
+                    } else {
+                        let mut picked = Vec::new();
+                        folder_ui(ui, &self.sessions.root, &mut picked);
+                        for p in picked {
+                            match p {
+                                TreeAction::Connect(s) => actions.push(Action::Open(Box::new(s))),
+                                TreeAction::Edit(s) => self.editor = Some(Editor::edit(&s)),
+                                TreeAction::Duplicate(s) => {
+                                    self.editor = Some(Editor::duplicate(&s))
+                                }
+                                TreeAction::Delete(s) => self.confirm_delete = Some(s),
+                                TreeAction::ForgetPassword(s) => {
+                                    if let Some(account) = s.password_account() {
+                                        Keychain.delete(&account);
+                                        self.notice =
+                                            Some(format!("Forgot the password for {account}."));
+                                    }
+                                }
+                            }
+                        }
                     }
                     if !self.sessions.errors.is_empty() {
                         ui.separator();
@@ -516,6 +634,8 @@ impl eframe::App for PrzmApp {
                 }
             }
         });
+
+        self.dialogs(&ctx);
 
         for action in actions {
             self.apply(action, &ctx);

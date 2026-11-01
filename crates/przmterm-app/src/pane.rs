@@ -4,15 +4,17 @@ use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use przmterm_core::Protocol;
 use przmterm_session::{Session, Target};
 use przmterm_term::Terminal;
 use przmterm_term::log::TextLog;
-use przmterm_transport::ssh::{SshConfig, SshTransport};
+use przmterm_transport::ssh::{SavePassword, SshConfig, SshTransport, Store};
 use przmterm_transport::{Size, Transport, TransportError, Waker};
 
 use crate::demo::DemoShell;
+use crate::keychain::Keychain;
 use crate::view::TerminalView;
 
 /// Paths a pane needs from the application.
@@ -108,6 +110,12 @@ impl Pane {
                 config.username = username.clone();
                 config.term_type = session.term_type.clone();
                 config.identity_files = session.identity_file.iter().cloned().collect();
+                config.password_store = Some(Store(Arc::new(Keychain)));
+                config.save_password = match session.save_password {
+                    None => SavePassword::Ask,
+                    Some(true) => SavePassword::Always,
+                    Some(false) => SavePassword::Never,
+                };
                 Box::new(SshTransport::connect(config, size, waker))
             }
             (protocol, _) => {

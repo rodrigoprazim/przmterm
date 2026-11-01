@@ -28,6 +28,34 @@ use crate::{Protocol, Size, Transport, TransportError, Waker};
 const DEFAULT_IDENTITIES: [&str; 3] = ["id_ed25519", "id_ecdsa", "id_rsa"];
 const PASSWORD_ATTEMPTS: usize = 3;
 
+/// Saved-password storage, such as the OS keychain. Accounts are
+/// `user@host:port`. Calls may block; they run off the network threads.
+pub trait PasswordStore: Send + Sync {
+    fn get(&self, account: &str) -> Option<String>;
+    fn set(&self, account: &str, password: &str) -> Result<(), String>;
+    fn delete(&self, account: &str);
+}
+
+/// A shared [`PasswordStore`].
+#[derive(Clone)]
+pub struct Store(pub Arc<dyn PasswordStore>);
+
+impl std::fmt::Debug for Store {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Store")
+    }
+}
+
+/// Whether a password that worked is saved in the [`PasswordStore`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SavePassword {
+    /// Ask in the terminal after a successful login.
+    #[default]
+    Ask,
+    Always,
+    Never,
+}
+
 /// How to reach and authenticate to an SSH server.
 #[derive(Debug, Clone)]
 pub struct SshConfig {
@@ -48,6 +76,9 @@ pub struct SshConfig {
     pub extra_known_hosts: Vec<PathBuf>,
     pub connect_timeout: Duration,
     pub keepalive: Option<Duration>,
+    /// Where saved passwords live; `None` disables saving.
+    pub password_store: Option<Store>,
+    pub save_password: SavePassword,
 }
 
 impl SshConfig {
@@ -68,6 +99,8 @@ impl SshConfig {
             extra_known_hosts: openssh_known_hosts,
             connect_timeout: Duration::from_secs(15),
             keepalive: Some(Duration::from_secs(30)),
+            password_store: None,
+            save_password: SavePassword::Ask,
         }
     }
 }
@@ -666,8 +699,11 @@ async fn authenticate(
         }
     }
 
+    let account = format!("{user}@{}:{}", config.host, config.port);
+    let mut saved = SavedPassword::load(config, &account).await;
+
     if methods.contains(&MethodKind::KeyboardInteractive) {
-        match keyboard_interactive_auth(handle, user, input, out).await? {
+        match keyboard_interactive_auth(handle, user, &mut saved, input, out).await? {
             Step::Done => return Ok(()),
             Step::Next(m) => methods = m,
         }
@@ -675,24 +711,38 @@ async fn authenticate(
 
     if methods.contains(&MethodKind::Password) {
         for attempt in 0..PASSWORD_ATTEMPTS {
-            let password = {
-                let mut input = input.lock().await;
-                out.text(&format!("{user}@{}'s password: ", config.host));
-                input.read_line(out, false).await?
+            let (password, from_store) = match saved.take() {
+                Some(p) => {
+                    out.notice("Using the password saved in the keychain.");
+                    (p, true)
+                }
+                None => {
+                    let mut input = input.lock().await;
+                    out.text(&format!("{user}@{}'s password: ", config.host));
+                    (input.read_line(out, false).await?, false)
+                }
             };
             match handle
-                .authenticate_password(user, password)
+                .authenticate_password(user, password.clone())
                 .await
                 .map_err(failed("Authentication failed"))?
                 .into()
             {
-                Step::Done => return Ok(()),
+                Step::Done => {
+                    if !from_store {
+                        saved.offer_save(&password, input, out).await;
+                    }
+                    return Ok(());
+                }
                 Step::Next(m) => {
                     methods = m;
+                    if from_store {
+                        saved.reject(out).await;
+                    }
                     if !methods.contains(&MethodKind::Password) {
                         break;
                     }
-                    if attempt + 1 < PASSWORD_ATTEMPTS {
+                    if attempt + 1 < PASSWORD_ATTEMPTS && !from_store {
                         out.text("Permission denied, please try again.\r\n");
                     }
                 }
@@ -852,9 +902,93 @@ async fn ask_passphrase(
     Ok(None)
 }
 
+/// The saved password for one login attempt, and saving a new one.
+struct SavedPassword {
+    store: Option<Store>,
+    account: String,
+    password: Option<String>,
+    mode: SavePassword,
+}
+
+impl SavedPassword {
+    async fn load(config: &SshConfig, account: &str) -> Self {
+        let store = config.password_store.clone();
+        let password = match &store {
+            Some(store) => {
+                let (store, account) = (store.clone(), account.to_string());
+                tokio::task::spawn_blocking(move || store.0.get(&account))
+                    .await
+                    .ok()
+                    .flatten()
+            }
+            None => None,
+        };
+        Self {
+            store,
+            account: account.to_string(),
+            password,
+            mode: config.save_password,
+        }
+    }
+
+    /// The saved password, at most once per connection.
+    fn take(&mut self) -> Option<String> {
+        self.password.take()
+    }
+
+    /// The server refused the saved password: forget it.
+    async fn reject(&self, out: &Output) {
+        out.text("The saved password was rejected.\r\n");
+        if let Some(store) = self.store.clone() {
+            let account = self.account.clone();
+            let _ = tokio::task::spawn_blocking(move || store.0.delete(&account)).await;
+        }
+    }
+
+    /// After a typed password worked: save it, asking first if configured so.
+    async fn offer_save(&self, password: &str, input: &Arc<Mutex<Input>>, out: &Output) {
+        let Some(store) = self.store.clone() else {
+            return;
+        };
+        let save = match self.mode {
+            SavePassword::Never => false,
+            SavePassword::Always => true,
+            SavePassword::Ask => {
+                let mut input = input.lock().await;
+                out.text("Save this password in the system keychain? (yes/no) ");
+                loop {
+                    match input.read_line(out, true).await {
+                        Ok(a) => match a.trim().to_ascii_lowercase().as_str() {
+                            "yes" | "y" => break true,
+                            "no" | "n" | "" => break false,
+                            _ => out.text("Please type 'yes' or 'no': "),
+                        },
+                        Err(Cancelled) => break false,
+                    }
+                }
+            }
+        };
+        if !save {
+            return;
+        }
+        let (account, password) = (self.account.clone(), password.to_string());
+        match tokio::task::spawn_blocking(move || store.0.set(&account, &password)).await {
+            Ok(Ok(())) => out.notice("Password saved in the system keychain."),
+            Ok(Err(e)) => out.error(&format!("Could not save the password: {e}")),
+            Err(e) => out.error(&format!("Could not save the password: {e}")),
+        }
+    }
+}
+
+/// True for a lone hidden "Password:" prompt, where a saved password applies.
+fn is_password_prompt(prompts: &[client::Prompt]) -> bool {
+    matches!(prompts, [p] if !p.echo && p.prompt.to_ascii_lowercase().contains("password"))
+}
+
 async fn keyboard_interactive_auth(
     handle: &mut Handle,
     user: &str,
+    saved: &mut SavedPassword,
     input: &Arc<Mutex<Input>>,
     out: &Output,
 ) -> Result<Step, End> {
@@ -862,19 +996,40 @@ async fn keyboard_interactive_auth(
         .authenticate_keyboard_interactive_start(user, None)
         .await
         .map_err(failed("Authentication failed"))?;
+    // The password typed or taken from the store in the last round.
+    let mut last_password: Option<(String, bool)> = None;
     loop {
         match response {
-            KeyboardInteractiveAuthResponse::Success => return Ok(Step::Done),
+            KeyboardInteractiveAuthResponse::Success => {
+                if let Some((password, false)) = &last_password {
+                    saved.offer_save(password, input, out).await;
+                }
+                return Ok(Step::Done);
+            }
             KeyboardInteractiveAuthResponse::Failure {
                 remaining_methods, ..
-            } => return Ok(Step::Next(remaining_methods)),
+            } => {
+                if let Some((_, true)) = last_password {
+                    saved.reject(out).await;
+                }
+                return Ok(Step::Next(remaining_methods));
+            }
             KeyboardInteractiveAuthResponse::InfoRequest {
                 name,
                 instructions,
                 prompts,
             } => {
+                // Asked again after we sent the saved password: it was wrong.
+                if let Some((_, true)) = last_password.take() {
+                    saved.reject(out).await;
+                }
                 let mut answers = Vec::with_capacity(prompts.len());
-                {
+                let password_prompt = is_password_prompt(&prompts);
+                if password_prompt && let Some(p) = saved.take() {
+                    out.notice("Using the password saved in the keychain.");
+                    answers.push(p.clone());
+                    last_password = Some((p, true));
+                } else {
                     let mut input = input.lock().await;
                     for text in [name, instructions] {
                         if !text.is_empty() {
@@ -886,6 +1041,7 @@ async fn keyboard_interactive_auth(
                         out.lines(&prompt.prompt);
                         answers.push(input.read_line(out, prompt.echo).await?);
                     }
+                    last_password = password_prompt.then(|| (answers[0].clone(), false));
                 }
                 response = handle
                     .authenticate_keyboard_interactive_respond(answers)

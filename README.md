@@ -38,6 +38,10 @@ order: ssh-agent (Pageant or the OpenSSH agent on Windows), the session's
 `identity_file`, `~/.ssh/id_ed25519`, `id_ecdsa`, `id_rsa`, keyboard-interactive
 and password.
 
+Passwords are never written to session files. After a typed password works,
+PrzmTerm offers to save it in the OS keychain (Keychain on macOS, Credential
+Manager on Windows, Secret Service on Linux); right-click a session to forget it.
+
 Accepted host keys go to `known_hosts` in the configuration directory (OpenSSH
 format). `~/.ssh/known_hosts` is also consulted, read-only. If a host's key
 changes, PrzmTerm refuses to connect and shows the old and new fingerprints.
@@ -86,6 +90,7 @@ host = "10.0.0.1"
 port = 22
 username = "admin"
 identity_file = "~/.ssh/id_lab"
+save_password = true       # keychain: unset asks, true always, false never
 serial_port = "/dev/ttyUSB0"
 baud_rate = 9600
 
@@ -97,6 +102,9 @@ scrollback = 10000
 enabled = true
 path = "~/logs/%S-%Y%M%D.log"   # %S session, %H host, %Y%M%D date, %h%m%s time
 ```
+
+Sessions can also be created and edited from the app: **+** next to
+*Sessions*, or right-click a session for Edit, Duplicate and Delete.
 
 A sample tree is in [examples/config](examples/config). Try it with
 `PRZMTERM_HOME=examples/config cargo run`.

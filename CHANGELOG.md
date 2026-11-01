@@ -23,6 +23,13 @@ All notable changes to PrzmTerm are recorded here. The format follows
   collapsed. File names take `%S` (session), `%H` (host), `%Y %M %D`,
   `%h %m %s`; relative paths go under `<config>/logs`. The status bar toggles
   logging for the active pane.
+- Saved passwords in the OS keychain (Keychain on macOS, Credential Manager on
+  Windows, Secret Service on Linux). After a typed password works, PrzmTerm
+  asks whether to save it; a saved password that stops working is forgotten.
+  The `save_password` setting makes this always or never.
+- Session editor: create, edit, duplicate and delete sessions from the tree
+  (right-click, or + for a new one). Only values set in the file are written;
+  empty fields inherit.
 
 ## [0.2.0] - 2026-11-01
 

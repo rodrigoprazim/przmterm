@@ -4,7 +4,10 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use przmterm_transport::ssh::{SshConfig, SshTransport};
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+use przmterm_transport::ssh::{PasswordStore, SavePassword, SshConfig, SshTransport, Store};
 use przmterm_transport::{Size, Transport, noop_waker};
 use russh::keys::{Algorithm, PrivateKey};
 use russh::server::{self, Auth, Msg, Session};
@@ -437,6 +440,96 @@ fn logs_in_with_an_identity_file() {
     s.send("yes\r");
     s.wait_for("welcome");
     assert!(!s.text.contains("password"), "{}", s.text);
+    s.transport.close().unwrap();
+    s.wait_closed();
+}
+
+#[derive(Default)]
+struct MemoryStore(Mutex<HashMap<String, String>>);
+
+impl PasswordStore for MemoryStore {
+    fn get(&self, account: &str) -> Option<String> {
+        self.0.lock().unwrap().get(account).cloned()
+    }
+    fn set(&self, account: &str, password: &str) -> Result<(), String> {
+        self.0
+            .lock()
+            .unwrap()
+            .insert(account.into(), password.into());
+        Ok(())
+    }
+    fn delete(&self, account: &str) {
+        self.0.lock().unwrap().remove(account);
+    }
+}
+
+#[test]
+fn saved_password_is_offered_used_and_dropped_when_wrong() {
+    let dir = tempfile::tempdir().unwrap();
+    let known_hosts = dir.path().join("known_hosts");
+    let port = start_server(host_key(), 3);
+    let store = Arc::new(MemoryStore::default());
+    let account = format!("alice@127.0.0.1:{port}");
+    let with_store = |mode| {
+        let mut c = config(port, &known_hosts);
+        c.password_store = Some(Store(store.clone()));
+        c.save_password = mode;
+        c
+    };
+
+    // 1. Typed password works; asked to save; say yes.
+    let mut s = Screen::connect(with_store(SavePassword::Ask));
+    s.wait_for("(yes/no)? ");
+    s.send("yes\r");
+    s.wait_for("password: ");
+    s.send("secret\r");
+    s.wait_for("Save this password in the system keychain? (yes/no) ");
+    s.send("yes\r");
+    s.wait_for("welcome");
+    assert_eq!(store.get(&account).as_deref(), Some("secret"));
+    s.transport.close().unwrap();
+    s.wait_closed();
+
+    // 2. Saved password logs in without a prompt.
+    let mut s = Screen::connect(with_store(SavePassword::Ask));
+    s.wait_for("welcome");
+    assert!(s.text.contains("Using the password saved in the keychain."));
+    assert!(!s.text.contains("password: "));
+    s.transport.close().unwrap();
+    s.wait_closed();
+
+    // 3. A stale saved password is rejected, forgotten, and the user is asked.
+    store.set(&account, "old").unwrap();
+    let mut s = Screen::connect(with_store(SavePassword::Never));
+    s.wait_for("The saved password was rejected.");
+    s.wait_for("password: ");
+    assert_eq!(store.get(&account), None);
+    s.send("secret\r");
+    s.wait_for("welcome");
+    assert!(!s.text.contains("Save this password"));
+    assert_eq!(store.get(&account), None);
+    s.transport.close().unwrap();
+    s.wait_closed();
+}
+
+#[test]
+fn keyboard_interactive_password_prompt_uses_the_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let port = start_server_with(host_key(), 1, &[MethodKind::KeyboardInteractive], None);
+    let store = Arc::new(MemoryStore::default());
+    store
+        .set(&format!("alice@127.0.0.1:{port}"), "123456")
+        .unwrap();
+    let mut c = config(port, &dir.path().join("known_hosts"));
+    c.password_store = Some(Store(store.clone()));
+    let mut s = Screen::connect(c);
+    s.wait_for("(yes/no)? ");
+    s.send("yes\r");
+    // The test server's prompt is "Verification code:", not a password: no store use.
+    s.wait_for("Verification code: ");
+    assert!(!s.text.contains("saved in the keychain"));
+    s.send("123456\r");
+    s.wait_for("welcome");
     s.transport.close().unwrap();
     s.wait_closed();
 }

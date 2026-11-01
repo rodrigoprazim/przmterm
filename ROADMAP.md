@@ -53,8 +53,8 @@ Checked on Linux against OpenSSH 9.6 and on macOS against the maintainer's serve
 - [x] Mouse selection, copy and paste; scrollback browsing with the wheel
 - [x] Wide (CJK) characters and the DEC line-drawing charset
 - [x] Per-session logging with file-name templates
-- Credentials in the OS keychain (`keyring`)
-- Session editor in the GUI (create, edit, duplicate, delete)
+- [x] Credentials in the OS keychain (`keyring`)
+- [x] Session editor in the GUI (create, edit, duplicate, delete)
 
 **Gate:** used every day instead of SecureCRT for SSH sessions.
 
