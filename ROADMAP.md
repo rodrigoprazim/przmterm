@@ -9,7 +9,7 @@ date. Version numbering and the release procedure are in
 | --- | --- | --- |
 | 0.1.0 | Foundation | Released |
 | 0.2.0 | SSH | Released |
-| 0.3.0 | Daily-driver MVP | Planned |
+| 0.3.0 | Daily-driver MVP | In progress |
 | 0.4.0 | Telnet and serial | Planned |
 | 0.5.0 | Network gear | Planned |
 | 0.6.0 | Productivity | Planned |
