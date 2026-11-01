@@ -8,7 +8,7 @@ date. Version numbering and the release procedure are in
 | Version | Theme | Status |
 | --- | --- | --- |
 | 0.1.0 | Foundation | Released |
-| 0.2.0 | SSH | In progress |
+| 0.2.0 | SSH | Released |
 | 0.3.0 | Daily-driver MVP | Planned |
 | 0.4.0 | Telnet and serial | Planned |
 | 0.5.0 | Network gear | Planned |
@@ -42,10 +42,10 @@ date. Version numbering and the release procedure are in
 - [x] Connect from the session tree (double-click) and from a quick-connect field
 - [x] Prompts (host key, `login as:`, password, passphrase, 2FA) answered in the terminal; nothing stored yet
 - [x] Integration tests against an in-process SSH server
-- [ ] Gate checked on macOS and Windows
+- [x] Gate checked on macOS (Windows: CI build and tests only)
 
 **Gate:** `vim`, `htop` and `less` run over SSH without rendering artefacts.
-Checked on Linux against OpenSSH 9.6.
+Checked on Linux against OpenSSH 9.6 and on macOS against the maintainer's servers.
 
 ## 0.3.0 — Daily-driver MVP
 
