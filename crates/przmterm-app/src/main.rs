@@ -12,7 +12,7 @@ use eframe::egui::{self, Key, Modifiers};
 use przmterm_session::{Folder, Session, SessionTree};
 use przmterm_transport::{TransportError, Waker};
 
-use crate::pane::Pane;
+use crate::pane::{Env, Pane};
 
 fn main() -> eframe::Result {
     tracing_subscriber::fmt()
@@ -89,6 +89,7 @@ enum Action {
     ClosePane,
     FocusPane(usize),
     Reconnect,
+    ToggleLog,
 }
 
 struct PrzmApp {
@@ -128,11 +129,15 @@ impl PrzmApp {
         }
     }
 
-    fn known_hosts(&self) -> PathBuf {
-        self.config_dir
-            .clone()
-            .unwrap_or_else(std::env::temp_dir)
-            .join(przmterm_session::KNOWN_HOSTS_FILE)
+    fn env(&self) -> Env {
+        Env {
+            known_hosts: self
+                .config_dir
+                .clone()
+                .unwrap_or_else(std::env::temp_dir)
+                .join(przmterm_session::KNOWN_HOSTS_FILE),
+            config_dir: self.config_dir.clone(),
+        }
     }
 
     fn tab(&self) -> &Tab {
@@ -146,11 +151,11 @@ impl PrzmApp {
     fn apply(&mut self, action: Action, ctx: &egui::Context) {
         let ctx2 = ctx.clone();
         let waker: Waker = Arc::new(move || ctx2.request_repaint());
-        let known_hosts = self.known_hosts();
+        let env = self.env();
         match action {
             Action::Open(session) => {
                 let size = self.tab().pane().size();
-                let pane = Pane::open(&session, &known_hosts, size, waker);
+                let pane = Pane::open(&session, &env, size, waker);
                 // The first demo shell is just a placeholder: replace it.
                 let tab = self.tab_mut();
                 if tab.panes.len() == 1 && tab.pane().origin.is_none() {
@@ -161,7 +166,7 @@ impl PrzmApp {
                 }
             }
             Action::NewTab => {
-                let pane = self.tab().pane().clone_session(&known_hosts, waker);
+                let pane = self.tab().pane().clone_session(&env, waker);
                 self.tabs.push(Tab::new(pane));
                 self.active_tab = self.tabs.len() - 1;
             }
@@ -180,7 +185,7 @@ impl PrzmApp {
             }
             Action::SelectTab(index) => self.active_tab = index,
             Action::Split(layout) => {
-                let pane = self.tab().pane().clone_session(&known_hosts, waker);
+                let pane = self.tab().pane().clone_session(&env, waker);
                 let tab = self.tab_mut();
                 tab.layout = layout;
                 tab.panes.insert(tab.active + 1, pane);
@@ -198,12 +203,20 @@ impl PrzmApp {
                 tab.active = tab.active.min(tab.panes.len() - 1);
             }
             Action::FocusPane(index) => self.tab_mut().active = index,
+            Action::ToggleLog => {
+                let pane = self.tab_mut().pane_mut();
+                if pane.log.is_some() {
+                    pane.stop_log();
+                } else {
+                    pane.start_log(&env);
+                }
+            }
             Action::Reconnect => {
                 let tab = self.tab_mut();
                 let old = tab.pane();
                 if let Some(session) = old.origin.clone() {
                     let size = old.size();
-                    tab.panes[tab.active] = Pane::open(&session, &known_hosts, size, waker);
+                    tab.panes[tab.active] = Pane::open(&session, &env, size, waker);
                 }
             }
         }
@@ -385,6 +398,22 @@ impl eframe::App for PrzmApp {
                 if pane.transport.is_closed() {
                     ui.weak("(closed)");
                 }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let (text, hover) = match &pane.log {
+                        Some(log) => (
+                            egui::RichText::new("● Log")
+                                .color(egui::Color32::from_rgb(230, 90, 90)),
+                            format!("Logging to {}\nClick to stop", log.path.display()),
+                        ),
+                        None => (
+                            egui::RichText::new("○ Log"),
+                            "Start logging this pane".into(),
+                        ),
+                    };
+                    if ui.small_button(text).on_hover_text(hover).clicked() {
+                        actions.push(Action::ToggleLog);
+                    }
+                });
             });
         });
 

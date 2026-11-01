@@ -1,16 +1,71 @@
 //! A pane: one terminal and the connection behind it.
 
 use std::collections::VecDeque;
-use std::path::Path;
+use std::fs::{File, OpenOptions};
+use std::io::{BufWriter, Write};
+use std::path::{Path, PathBuf};
 
 use przmterm_core::Protocol;
 use przmterm_session::{Session, Target};
 use przmterm_term::Terminal;
+use przmterm_term::log::TextLog;
 use przmterm_transport::ssh::{SshConfig, SshTransport};
 use przmterm_transport::{Size, Transport, TransportError, Waker};
 
 use crate::demo::DemoShell;
 use crate::view::TerminalView;
+
+/// Paths a pane needs from the application.
+pub struct Env {
+    pub known_hosts: PathBuf,
+    pub config_dir: Option<PathBuf>,
+}
+
+/// A plain-text log of everything a pane receives.
+pub struct SessionLog {
+    file: BufWriter<File>,
+    text: TextLog,
+    pub path: PathBuf,
+}
+
+impl SessionLog {
+    fn start(path: PathBuf, title: &str) -> std::io::Result<Self> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let file = OpenOptions::new().create(true).append(true).open(&path)?;
+        let mut log = Self {
+            file: BufWriter::new(file),
+            text: TextLog::new(),
+            path,
+        };
+        let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+        writeln!(
+            log.file,
+            "===== PrzmTerm log: {title} — started {now} ====="
+        )?;
+        log.file.flush()?;
+        Ok(log)
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        let text = self.text.feed(bytes);
+        if !text.is_empty() {
+            let _ = self.file.write_all(text.as_bytes());
+            let _ = self.file.flush();
+        }
+    }
+}
+
+impl Drop for SessionLog {
+    fn drop(&mut self) {
+        let rest = self.text.finish();
+        let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+        let _ = self.file.write_all(rest.as_bytes());
+        let _ = writeln!(self.file, "===== log closed {now} =====");
+        let _ = self.file.flush();
+    }
+}
 
 /// One terminal and the connection behind it.
 pub struct Pane {
@@ -21,6 +76,7 @@ pub struct Pane {
     pub label: String,
     /// The session to reconnect to, if any.
     pub origin: Option<Session>,
+    pub log: Option<SessionLog>,
     closed_announced: bool,
 }
 
@@ -32,11 +88,13 @@ impl Pane {
             view: TerminalView::default(),
             label: "demo shell".into(),
             origin: None,
+            log: None,
             closed_announced: false,
         }
     }
 
-    pub fn open(session: &Session, known_hosts: &Path, size: Size, waker: Waker) -> Self {
+    pub fn open(session: &Session, env: &Env, size: Size, waker: Waker) -> Self {
+        let known_hosts: &Path = &env.known_hosts;
         let transport: Box<dyn Transport> = match (&session.protocol, &session.target) {
             (
                 Protocol::Ssh,
@@ -62,7 +120,7 @@ impl Pane {
                 ))
             }
         };
-        Self {
+        let mut pane = Self {
             term: Terminal::with_scrollback(
                 usize::from(size.cols),
                 usize::from(size.rows),
@@ -72,7 +130,39 @@ impl Pane {
             view: TerminalView::default(),
             label: format!("{} {}", session.protocol, session.display_target()),
             origin: Some(session.clone()),
+            log: None,
             closed_announced: false,
+        };
+        if session.log_enabled {
+            pane.start_log(env);
+        }
+        pane
+    }
+
+    /// Starts logging to the session's log file (or the default one).
+    pub fn start_log(&mut self, env: &Env) {
+        let session = self
+            .origin
+            .clone()
+            .unwrap_or_else(|| Session::quick_connect("demo").expect("valid quick-connect"));
+        let path = session.log_file(env.config_dir.as_deref(), &chrono::Local::now());
+        match SessionLog::start(path.clone(), &session.name) {
+            Ok(log) => {
+                self.term
+                    .feed(format!("\x1b[2m[Logging to {}]\x1b[0m\r\n", path.display()).as_bytes());
+                self.log = Some(log);
+            }
+            Err(e) => self.term.feed(
+                format!("\x1b[31m[Cannot log to {}: {e}]\x1b[0m\r\n", path.display()).as_bytes(),
+            ),
+        }
+    }
+
+    pub fn stop_log(&mut self) {
+        if let Some(log) = self.log.take() {
+            self.term.feed(
+                format!("\x1b[2m[Log saved to {}]\x1b[0m\r\n", log.path.display()).as_bytes(),
+            );
         }
     }
 
@@ -94,6 +184,9 @@ impl Pane {
                 Ok(0) => break,
                 Ok(n) => {
                     self.term.feed(&buf[..n]);
+                    if let Some(log) = &mut self.log {
+                        log.write(&buf[..n]);
+                    }
                     got = true;
                 }
                 Err(e) => {
@@ -171,9 +264,9 @@ impl Pane {
     }
 
     /// A new pane connected to the same session (or a fresh demo shell).
-    pub fn clone_session(&self, known_hosts: &Path, waker: Waker) -> Self {
+    pub fn clone_session(&self, env: &Env, waker: Waker) -> Self {
         match &self.origin {
-            Some(session) => Pane::open(session, known_hosts, self.size(), waker),
+            Some(session) => Pane::open(session, env, self.size(), waker),
             None => Pane::demo(),
         }
     }

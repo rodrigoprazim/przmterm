@@ -15,6 +15,8 @@
 //! scrollback [display offset](Screen::display_offset)) and combined indices
 //! (`0..total_lines()`: scrollback first, then the screen) for selections.
 
+pub mod log;
+
 use std::collections::VecDeque;
 
 use unicode_width::UnicodeWidthChar;

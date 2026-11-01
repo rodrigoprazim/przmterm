@@ -20,6 +20,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use chrono::{Datelike, Timelike};
 use przmterm_core::Protocol;
 use serde::{Deserialize, Serialize};
 
@@ -32,6 +33,9 @@ pub const KNOWN_HOSTS_FILE: &str = "known_hosts";
 pub const DEFAULT_TERM_TYPE: &str = "xterm-256color";
 pub const DEFAULT_SCROLLBACK: usize = 10_000;
 pub const DEFAULT_BAUD_RATE: u32 = 9600;
+/// Log file name used when logging is on and no `path` is set, relative to `<config>/logs`.
+pub const DEFAULT_LOG_TEMPLATE: &str = "%S-%Y%M%D-%h%m%s.log";
+pub const LOGS_DIR: &str = "logs";
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
@@ -64,7 +68,7 @@ pub struct TerminalSettings {
 #[serde(default, deny_unknown_fields)]
 pub struct LogSettings {
     pub enabled: Option<bool>,
-    /// File name template, e.g. `~/logs/%S-%Y%M%D.log` (expansion comes in 0.3).
+    /// File name template, e.g. `~/logs/%S-%Y%M%D.log`. See [`expand_log_template`].
     pub path: Option<String>,
 }
 
@@ -255,6 +259,30 @@ impl Session {
         Session::resolve(target, Vec::new(), PathBuf::new(), &settings).map_err(|e| e.to_string())
     }
 
+    /// Host name, serial port or `local`, as used in log file names.
+    pub fn host_label(&self) -> &str {
+        match &self.target {
+            Target::Network { host, .. } => host,
+            Target::Serial { port, .. } => port,
+            Target::Local => "local",
+        }
+    }
+
+    /// Log file for a connection starting at `now`. Relative templates are
+    /// placed under `<config>/logs`.
+    pub fn log_file(&self, config_dir: Option<&Path>, now: &(impl Datelike + Timelike)) -> PathBuf {
+        let template = self.log_path.as_deref().unwrap_or(DEFAULT_LOG_TEMPLATE);
+        let path = expand_log_template(template, &self.name, self.host_label(), now);
+        if path.is_absolute() {
+            path
+        } else {
+            config_dir
+                .map(|d| d.join(LOGS_DIR))
+                .unwrap_or_default()
+                .join(path)
+        }
+    }
+
     /// Short description such as `admin@10.0.0.1:22` or `/dev/ttyUSB0 @ 9600`.
     pub fn display_target(&self) -> String {
         match &self.target {
@@ -335,6 +363,62 @@ pub fn default_config_dir() -> Option<PathBuf> {
         return Some(PathBuf::from(home));
     }
     dirs::config_dir().map(|d| d.join("przmterm"))
+}
+
+/// Expands a log file name template:
+///
+/// | Code | Meaning |
+/// | --- | --- |
+/// | `%S` | session name |
+/// | `%H` | host (or serial port) |
+/// | `%Y` `%M` `%D` | year, month, day |
+/// | `%h` `%m` `%s` | hour, minute, second |
+/// | `%%` | a literal `%` |
+///
+/// Characters that are not valid in file names are replaced with `_` in the
+/// session name and host. A leading `~` is expanded.
+pub fn expand_log_template(
+    template: &str,
+    session: &str,
+    host: &str,
+    now: &(impl Datelike + Timelike),
+) -> PathBuf {
+    let safe = |s: &str| -> String {
+        s.chars()
+            .map(|c| {
+                if c.is_control() || "/\\:*?\"<>|".contains(c) {
+                    '_'
+                } else {
+                    c
+                }
+            })
+            .collect()
+    };
+    let mut out = String::new();
+    let mut chars = template.chars();
+    while let Some(c) = chars.next() {
+        if c != '%' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('S') => out.push_str(&safe(session)),
+            Some('H') => out.push_str(&safe(host)),
+            Some('Y') => out.push_str(&format!("{:04}", now.year())),
+            Some('M') => out.push_str(&format!("{:02}", now.month())),
+            Some('D') => out.push_str(&format!("{:02}", now.day())),
+            Some('h') => out.push_str(&format!("{:02}", now.hour())),
+            Some('m') => out.push_str(&format!("{:02}", now.minute())),
+            Some('s') => out.push_str(&format!("{:02}", now.second())),
+            Some('%') => out.push('%'),
+            Some(other) => {
+                out.push('%');
+                out.push(other);
+            }
+            None => out.push('%'),
+        }
+    }
+    expand_tilde(&out)
 }
 
 /// Expands a leading `~` or `~/` to the home directory.
@@ -482,6 +566,34 @@ mod tests {
         assert_eq!(session.identity_file, Some(expected));
         assert_eq!(expand_tilde("/abs"), PathBuf::from("/abs"));
         assert_eq!(expand_tilde("~user/x"), PathBuf::from("~user/x"));
+    }
+
+    #[test]
+    fn log_templates() {
+        let now = chrono::NaiveDate::from_ymd_opt(2026, 3, 7)
+            .unwrap()
+            .and_hms_opt(9, 5, 2)
+            .unwrap();
+        assert_eq!(
+            expand_log_template(
+                "/var/log/%S_%H_%Y%M%D-%h%m%s.log",
+                "core/sw:1",
+                "10.0.0.1",
+                &now
+            ),
+            PathBuf::from("/var/log/core_sw_1_10.0.0.1_20260307-090502.log")
+        );
+        assert_eq!(
+            expand_log_template("100%%-%x", "s", "h", &now),
+            PathBuf::from("100%-%x")
+        );
+
+        let s = Session::quick_connect("admin@rtr").unwrap();
+        let file = s.log_file(Some(Path::new("/cfg")), &now);
+        assert_eq!(
+            file,
+            PathBuf::from("/cfg/logs/admin@rtr-20260307-090502.log")
+        );
     }
 
     #[test]

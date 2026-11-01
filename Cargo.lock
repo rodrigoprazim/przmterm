@@ -3628,6 +3628,7 @@ name = "przmterm-app"
 version = "0.3.0-dev"
 dependencies = [
  "arboard",
+ "chrono",
  "eframe",
  "przmterm-core",
  "przmterm-session",
@@ -3660,6 +3661,7 @@ dependencies = [
 name = "przmterm-session"
 version = "0.3.0-dev"
 dependencies = [
+ "chrono",
  "dirs",
  "przmterm-core",
  "serde",

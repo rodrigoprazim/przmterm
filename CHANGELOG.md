@@ -19,6 +19,10 @@ All notable changes to PrzmTerm are recorded here. The format follows
   On full-screen programs (less, vim) the wheel sends arrow keys.
 - Wide characters (CJK, emoji) take two cells.
 - DEC Special Graphics line-drawing charset.
+- Per-session plain-text logs: escape sequences removed, `\r` progress lines
+  collapsed. File names take `%S` (session), `%H` (host), `%Y %M %D`,
+  `%h %m %s`; relative paths go under `<config>/logs`. The status bar toggles
+  logging for the active pane.
 
 ## [0.2.0] - 2026-11-01
 

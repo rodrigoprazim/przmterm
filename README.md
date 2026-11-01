@@ -95,7 +95,7 @@ scrollback = 10000
 
 [log]
 enabled = true
-path = "~/logs/%S.log"
+path = "~/logs/%S-%Y%M%D.log"   # %S session, %H host, %Y%M%D date, %h%m%s time
 ```
 
 A sample tree is in [examples/config](examples/config). Try it with
