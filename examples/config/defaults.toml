@@ -1,0 +1,5 @@
+# Global defaults, inherited by every session.
+username = "admin"
+
+[terminal]
+scrollback = 20000

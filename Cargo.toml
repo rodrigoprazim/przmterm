@@ -1,0 +1,43 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+default-members = ["crates/przmterm-app", "crates/przmterm-cli"]
+
+[workspace.package]
+# Development versions carry a `-dev` suffix; see docs/VERSIONING.md.
+version = "0.1.0-dev"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rodrigoprazim/przmterm"
+homepage = "https://github.com/rodrigoprazim/przmterm"
+authors = ["PrzmTerm contributors"]
+
+[workspace.dependencies]
+przmterm-core = { path = "crates/przmterm-core" }
+przmterm-transport = { path = "crates/przmterm-transport" }
+przmterm-term = { path = "crates/przmterm-term" }
+przmterm-session = { path = "crates/przmterm-session" }
+
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+vte = "0.15"
+clap = { version = "4.6", features = ["derive"] }
+dirs = "6"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+eframe = "0.37"
+tempfile = "3"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

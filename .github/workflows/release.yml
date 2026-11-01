@@ -1,0 +1,131 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    name: Verify tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          manifest=$(grep -m1 '^version = ' Cargo.toml | cut -d '"' -f2)
+          if [ "$tag" != "$manifest" ]; then
+            echo "::error::Tag v$tag does not match Cargo.toml version $manifest"
+            exit 1
+          fi
+          case "$tag" in
+            0.*|*-*) pre=true ;;
+            *) pre=false ;;
+          esac
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$pre" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.name }})
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - name: macos-universal
+            os: macos-latest
+            target: aarch64-apple-darwin
+            extra_target: x86_64-apple-darwin
+          - name: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}${{ matrix.extra_target && format(',{0}', matrix.extra_target) || '' }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+
+      - name: Build
+        shell: bash
+        run: |
+          cargo build --release --locked --target ${{ matrix.target }} -p przmterm-app -p przmterm-cli
+          if [ -n "${{ matrix.extra_target }}" ]; then
+            cargo build --release --locked --target ${{ matrix.extra_target }} -p przmterm-app -p przmterm-cli
+          fi
+
+      - name: Package
+        shell: bash
+        run: |
+          version="${{ needs.verify.outputs.version }}"
+          dir="przmterm-$version-${{ matrix.name }}"
+          mkdir -p "$dir"
+          cp README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE "$dir/"
+          case "${{ matrix.name }}" in
+            windows-*)
+              cp target/${{ matrix.target }}/release/przmterm.exe target/${{ matrix.target }}/release/przm.exe "$dir/"
+              7z a "$dir.zip" "$dir" > /dev/null
+              echo "ASSET=$dir.zip" >> "$GITHUB_ENV"
+              ;;
+            macos-*)
+              for bin in przmterm przm; do
+                lipo -create -output "$dir/$bin" \
+                  target/${{ matrix.target }}/release/$bin \
+                  target/${{ matrix.extra_target }}/release/$bin
+              done
+              tar czf "$dir.tar.gz" "$dir"
+              echo "ASSET=$dir.tar.gz" >> "$GITHUB_ENV"
+              ;;
+            *)
+              cp target/${{ matrix.target }}/release/przmterm target/${{ matrix.target }}/release/przm "$dir/"
+              tar czf "$dir.tar.gz" "$dir"
+              echo "ASSET=$dir.tar.gz" >> "$GITHUB_ENV"
+              ;;
+          esac
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ env.ASSET }}
+
+  publish:
+    name: Publish release
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt
+      - name: Release notes from CHANGELOG
+        run: |
+          version="${{ needs.verify.outputs.version }}"
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: PrzmTerm ${{ needs.verify.outputs.version }}
+          body_path: notes.md
+          prerelease: ${{ needs.verify.outputs.prerelease }}
+          files: dist/*

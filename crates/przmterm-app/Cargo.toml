@@ -1,0 +1,25 @@
+[package]
+name = "przmterm-app"
+description = "PrzmTerm desktop application"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "przmterm"
+path = "src/main.rs"
+
+[dependencies]
+przmterm-core.workspace = true
+przmterm-transport.workspace = true
+przmterm-term.workspace = true
+przmterm-session.workspace = true
+eframe.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

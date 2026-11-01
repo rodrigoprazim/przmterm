@@ -1,0 +1,5 @@
+# Everything under Cisco/ uses Telnet and logs to disk.
+protocol = "telnet"
+
+[log]
+enabled = true
