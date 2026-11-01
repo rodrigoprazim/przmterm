@@ -30,7 +30,7 @@ date. Version numbering and the release procedure are in
 - [x] `przm` CLI: `sessions`, `render`
 - [x] Desktop app: session tree, terminal widget, demo shell behind `Transport`
 - [x] CI on Linux, macOS and Windows; release workflow on version tags
-- [ ] CI green on all three platforms
+- [x] CI green on all three platforms
 
 **Gate:** CI green on all three platforms and the demo shell runs on each.
 
