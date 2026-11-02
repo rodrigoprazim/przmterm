@@ -329,6 +329,7 @@ dependencies = [
  "blake2",
  "cpufeatures 0.3.1",
  "password-hash",
+ "zeroize",
 ]
 
 [[package]]
@@ -587,6 +588,12 @@ name = "base16ct"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd307490d624467aa6f74b0eabb77633d1f758a7b25f12bceb0b22e08d9726f6"
+
+[[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "base64ct"
@@ -889,6 +896,19 @@ dependencies = [
  "cipher 0.5.2",
  "cpufeatures 0.3.1",
  "rand_core 0.10.1",
+ "zeroize",
+]
+
+[[package]]
+name = "chacha20poly1305"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b89e1c441e926b9c82a8d023f6e1b7ae0adcfaa7d621814e4d60789bac751cb"
+dependencies = [
+ "aead",
+ "chacha20",
+ "cipher 0.5.2",
+ "poly1305",
  "zeroize",
 ]
 
@@ -4012,6 +4032,7 @@ dependencies = [
  "tempfile",
  "tracing",
  "tracing-subscriber",
+ "zeroize",
 ]
 
 [[package]]
@@ -4038,6 +4059,9 @@ dependencies = [
 name = "przmterm-session"
 version = "0.6.0-dev"
 dependencies = [
+ "argon2",
+ "base64",
+ "chacha20poly1305",
  "chrono",
  "dirs",
  "przmterm-core",
@@ -4046,6 +4070,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "toml",
+ "zeroize",
 ]
 
 [[package]]

@@ -7,6 +7,7 @@ mod input;
 mod keychain;
 mod keywords;
 mod pane;
+mod vault;
 mod view;
 
 use std::path::PathBuf;
@@ -152,6 +153,10 @@ struct PrzmApp {
     import_result: Option<Vec<String>>,
     /// The keyword set editor, when open.
     keyword_editor: Option<keywords::KeywordEditor>,
+    /// The password vault and its windows.
+    vault: vault::VaultUi,
+    /// What to do once the vault is unlocked (opening a session that uses it).
+    after_unlock: Option<Action>,
     /// Macro buttons above the status bar.
     buttons: buttonbar::ButtonBarUi,
     /// What is typed goes to every connected pane of the current tab.
@@ -257,6 +262,8 @@ impl PrzmApp {
             status: None,
             import_result: None,
             keyword_editor: None,
+            vault: vault::VaultUi::new(),
+            after_unlock: None,
             buttons,
             broadcast: false,
             confirm_broadcast: false,
@@ -290,7 +297,43 @@ impl PrzmApp {
                 .into_iter()
                 .cloned()
                 .collect(),
+            credentials: self.vault.credentials(),
         }
+    }
+
+    /// Why the vault must be unlocked before `action`, if it must: a session
+    /// it connects logs in with a vault entry.
+    fn needs_unlock(&self, action: &Action, env: &Env) -> Option<String> {
+        if self.vault.is_unlocked() {
+            return None;
+        }
+        let dir = self.config_dir.as_deref()?;
+        if !przmterm_session::vault::vault_path(dir).is_file() {
+            return None;
+        }
+        let closed_origins = |panes: &[Pane]| -> Vec<Session> {
+            panes
+                .iter()
+                .filter(|p| p.transport.is_closed())
+                .filter_map(|p| p.origin.clone())
+                .collect()
+        };
+        let sessions = match action {
+            Action::Open(session) => vec![(**session).clone()],
+            Action::Reconnect => closed_origins(std::slice::from_ref(self.tab().pane())),
+            Action::ReconnectTab(t) => closed_origins(&self.tabs[*t].panes),
+            _ => return None,
+        };
+        sessions.iter().find_map(|s| {
+            let names = pane::vault_entries_used(s, env);
+            (!names.is_empty()).then(|| {
+                format!(
+                    "{} logs in with the vault entry {}.",
+                    s.name,
+                    names.join(" and ")
+                )
+            })
+        })
     }
 
     fn tab(&self) -> &Tab {
@@ -305,6 +348,11 @@ impl PrzmApp {
         let ctx2 = ctx.clone();
         let waker: Waker = Arc::new(move || ctx2.request_repaint());
         let env = self.env();
+        if let Some(why) = self.needs_unlock(&action, &env) {
+            self.vault.ask_unlock(why);
+            self.after_unlock = Some(action);
+            return;
+        }
         match action {
             Action::Open(session) => {
                 // Already connected to this session? Open another channel on
@@ -547,6 +595,7 @@ impl PrzmApp {
             || self.tab_rename.is_some()
             || self.font_dialog.is_some()
             || self.bundle_dialog.is_some()
+            || self.vault.modal()
     }
 
     /// Panes with a live connection to a session.
@@ -784,8 +833,15 @@ impl PrzmApp {
                     summary.sessions,
                     if bundle.kind == Kind::Backup {
                         format!(
-                            ", {} folder setting(s), {} keyword set(s) and {} other file(s)",
-                            summary.folders, summary.keyword_sets, summary.other
+                            ", {} folder setting(s), {} keyword set(s), {} other file(s){}",
+                            summary.folders,
+                            summary.keyword_sets,
+                            summary.other,
+                            if summary.vault {
+                                " and the password vault"
+                            } else {
+                                ""
+                            }
                         )
                     } else {
                         String::new()
@@ -841,6 +897,8 @@ impl PrzmApp {
                     self.notice = Some(result.unwrap_or_else(|e| format!("Failed: {e}")));
                     self.reload_sessions();
                     self.buttons = buttonbar::ButtonBarUi::load(Some(&dir));
+                    // The vault file may have been replaced.
+                    self.vault.lock();
                 }
             }
         }
@@ -957,6 +1015,12 @@ impl PrzmApp {
                 {
                     pane.reload_keywords(&env);
                 }
+            }
+        }
+        if let Some(editor) = &mut self.editor {
+            editor.vault_names = self.vault.names();
+            if editor.take_vault_request() {
+                self.vault.open_window();
             }
         }
         if let Some(editor) = &mut self.editor
@@ -1661,6 +1725,17 @@ impl eframe::App for PrzmApp {
                                 }
                                 ui.close();
                             }
+                            if ui
+                                .button("Password vault…")
+                                .on_hover_text(
+                                    "User names, passwords and key passphrases in one \
+                                     encrypted file",
+                                )
+                                .clicked()
+                            {
+                                self.vault.open_window();
+                                ui.close();
+                            }
                             ui.separator();
                             if ui
                                 .button("Import from SecureCRT…")
@@ -1986,6 +2061,16 @@ impl eframe::App for PrzmApp {
 
         self.dialogs(&ctx);
         self.buttons.dialogs(&ctx, self.config_dir.as_deref());
+        if let Some(dir) = self.config_dir.clone() {
+            match self.vault.show(&ctx, &dir) {
+                vault::VaultEvent::Unlocked => actions.extend(self.after_unlock.take()),
+                vault::VaultEvent::Cancelled => self.after_unlock = None,
+                vault::VaultEvent::None => {}
+            }
+        }
+        if let Some(notice) = self.vault.notice.take() {
+            self.notice = Some(notice);
+        }
         // Give the keyboard back to the terminal when the last dialog closes.
         if modal && !self.modal_open() {
             self.tab_mut().pane_mut().view.focus();

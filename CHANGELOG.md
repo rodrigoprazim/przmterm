@@ -55,6 +55,16 @@ All notable changes to PrzmTerm are recorded here. The format follows
   session…* (right-click in the session list) save a part to share with
   someone; importing it adds a new folder and never replaces anything.
   Passwords are never included: they stay in the system keychain.
+- Password vault (**+** › *Password vault…*): user names, passwords and key
+  passphrases in one encrypted file, `<config>/vault.toml` (Argon2id key
+  from a master password, XChaCha20-Poly1305; user names and entry names are
+  encrypted too). A session, folder or the global settings choose an entry
+  under *Vault entry*, so one change updates every device using it. Opening
+  such a session asks for the master password once; *Lock* forgets the
+  entries again. Renaming an entry updates the sessions that use it. A stale
+  vault password falls back to asking in the terminal. Backups carry the
+  vault still encrypted; exports never do. The OS keychain stays available
+  for sessions without an entry.
 
 ## [0.5.0] - 2026-11-02
 

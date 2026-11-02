@@ -42,12 +42,24 @@ serialport = { version = "4.10", default-features = false }
 roxmltree = "0.21"
 # Lookaround in keyword patterns (e.g. IPv6 addresses) needs a backtracking engine.
 fancy-regex = "0.20"
+# Password vault: Argon2id key derivation, XChaCha20-Poly1305 encryption.
+argon2 = { version = "0.6", default-features = false, features = ["alloc", "zeroize"] }
+chacha20poly1305 = { version = "0.11", features = ["zeroize"] }
+base64 = "0.23"
+zeroize = "1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+
+# Argon2 is far too slow unoptimised; the vault would take seconds to open
+# in debug builds.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
 
 [profile.release]
 lto = "thin"

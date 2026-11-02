@@ -73,13 +73,29 @@ Passwords are not imported: SecureCRT keeps them encrypted, and PrzmTerm asks
 at the first login and can save them in the system keychain. Logon scripts,
 port forwards and RDP or local-shell sessions are listed in the summary.
 
+### Password vault
+
+**+** next to *Sessions* › *Password vault…* creates an encrypted vault of
+user names, passwords and key passphrases, opened with a master password
+(it cannot be recovered, so keep it safe). Give a session or a whole folder
+an entry under *Vault entry* in its settings: its user name replaces the
+session's, its password is used before the keychain's, and its passphrase
+opens encrypted key files. When the password of many devices changes, edit
+one entry.
+
+The vault is `<config>/vault.toml`. It can be copied to another machine and
+opened there with the same master password; backups include it, still
+encrypted. Opening a session that uses the vault asks for the master
+password once per run; *Lock* in the vault window asks again next time.
+Sessions without an entry keep using the system keychain.
+
 ### Backup and sharing sessions
 
 **+** next to *Sessions* › *Back up settings…* writes one `.przm` file with
-everything: global settings, folders, sessions, keyword sets, buttons and
-known hosts. *Restore or import…* takes it back, on this or another machine;
-files with the same name are replaced, and the settings in use are first
-saved in `<config>/backups/`.
+everything: global settings, folders, sessions, keyword sets, buttons, known
+hosts and the password vault (still encrypted). *Restore or import…* takes it
+back, on this or another machine; files with the same name are replaced, and
+the settings in use are first saved in `<config>/backups/`.
 
 To share sessions, right-click a folder or session › *Export folder…* or
 *Export session…*. Whoever gets the file picks *Restore or import…* and the

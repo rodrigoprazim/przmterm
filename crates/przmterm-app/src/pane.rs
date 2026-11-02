@@ -8,11 +8,12 @@ use std::sync::Arc;
 
 use przmterm_core::Protocol;
 use przmterm_session::buttons::Chunk;
+use przmterm_session::vault::VaultEntry;
 use przmterm_session::{Session, Target};
 use przmterm_term::Terminal;
 use przmterm_term::log::TextLog;
 use przmterm_transport::serial::SerialTransport;
-use przmterm_transport::ssh::{SavePassword, SshConfig, SshTransport, Store};
+use przmterm_transport::ssh::{Credential, SavePassword, SshConfig, SshTransport, Store};
 use przmterm_transport::telnet::{TelnetConfig, TelnetTransport};
 use przmterm_transport::x11::X11Display;
 use przmterm_transport::{Ending, Size, Transport, TransportError, Waker};
@@ -27,6 +28,27 @@ pub struct Env {
     pub config_dir: Option<PathBuf>,
     /// Every saved session, for jump hosts named by session.
     pub sessions: Vec<Session>,
+    /// The password vault's entries, while it is unlocked.
+    pub credentials: Option<Arc<Vec<VaultEntry>>>,
+}
+
+/// The vault entries `session` and its jump hosts log in with.
+pub fn vault_entries_used(session: &Session, env: &Env) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut current = Some(session.clone());
+    for _ in 0..=MAX_JUMPS {
+        let Some(s) = current.take() else { break };
+        if s.protocol != Protocol::Ssh {
+            break;
+        }
+        if let Some(name) = &s.credential
+            && !names.contains(name)
+        {
+            names.push(name.clone());
+        }
+        current = s.jump_host.as_deref().and_then(|j| find_jump(j, env).ok());
+    }
+    names
 }
 
 /// Jump hosts deeper than this are taken as a loop.
@@ -44,6 +66,24 @@ fn ssh_config(session: &Session, env: &Env, depth: usize) -> Result<SshConfig, S
     };
     let mut config = SshConfig::new(host.clone(), *port, &env.known_hosts);
     config.username = username.clone();
+    // A locked vault logs in as if there were no entry: everything is asked.
+    if let Some(name) = &session.credential
+        && let Some(entries) = &env.credentials
+    {
+        let entry = entries
+            .iter()
+            .find(|e| &e.name == name)
+            .ok_or_else(|| format!("{}: the vault has no entry named {name}", session.name))?;
+        if !entry.username.is_empty() {
+            config.username = Some(entry.username.clone());
+        }
+        let some = |s: &String| (!s.is_empty()).then(|| s.clone());
+        config.credential = Some(Credential {
+            name: name.clone(),
+            password: some(&entry.password),
+            passphrase: some(&entry.passphrase),
+        });
+    }
     config.term_type = session.term_type.clone();
     config.identity_files = session.identity_file.iter().cloned().collect();
     config.debug = session.debug;
@@ -647,12 +687,67 @@ mod tests {
     }
 
     #[test]
+    fn vault_entries_fill_in_the_login_of_sessions_and_jump_hosts() {
+        let bastion = session("host = 'bastion.example'\ncredential = 'Ops'", "Bastion");
+        let db = session(
+            "host = '10.0.0.5'\nusername = 'local'\njump_host = 'bastion'\ncredential = 'DB'",
+            "db",
+        );
+        let entry = |name: &str, user: &str, password: &str| VaultEntry {
+            name: name.into(),
+            username: user.into(),
+            password: password.into(),
+            passphrase: String::new(),
+        };
+        let mut env = Env {
+            known_hosts: PathBuf::from("/tmp/kh"),
+            config_dir: None,
+            sessions: vec![bastion, db.clone()],
+            credentials: None,
+        };
+        assert_eq!(vault_entries_used(&db, &env), ["DB", "Ops"]);
+
+        // Locked: the session's own user name, everything else asked.
+        let config = ssh_config(&db, &env, 0).unwrap();
+        assert_eq!(config.username.as_deref(), Some("local"));
+        assert!(config.credential.is_none());
+
+        env.credentials = Some(Arc::new(vec![
+            entry("DB", "dba", "pw1"),
+            entry("Ops", "", "pw2"),
+        ]));
+        let config = ssh_config(&db, &env, 0).unwrap();
+        assert_eq!(
+            config.username.as_deref(),
+            Some("dba"),
+            "the entry's user wins"
+        );
+        let c = config.credential.unwrap();
+        assert_eq!(
+            (c.name.as_str(), c.password.as_deref()),
+            ("DB", Some("pw1"))
+        );
+        assert!(c.passphrase.is_none());
+        let jump = config.jump.unwrap();
+        assert_eq!(
+            jump.username, None,
+            "an entry without a user name asks for it"
+        );
+        assert_eq!(jump.credential.unwrap().password.as_deref(), Some("pw2"));
+
+        env.credentials = Some(Arc::new(vec![entry("Ops", "", "pw2")]));
+        let err = ssh_config(&db, &env, 0).unwrap_err();
+        assert!(err.contains("no entry named DB"), "{err}");
+    }
+
+    #[test]
     fn jump_hosts_resolve_by_name_or_address_and_loops_stop() {
         let bastion = session("host = 'bastion.example'\nusername = 'ops'", "Bastion");
         let db = session("host = '10.0.0.5'\njump_host = 'bastion'", "db");
         let env = Env {
             known_hosts: PathBuf::from("/tmp/kh"),
             config_dir: None,
+            credentials: None,
             sessions: vec![bastion, db.clone()],
         };
         let config = ssh_config(&db, &env, 0).unwrap();

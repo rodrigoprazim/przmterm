@@ -13,6 +13,7 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::vault::VAULT_FILE;
 use crate::{DEFAULTS_FILE, KEYWORDS_DIR, KNOWN_HOSTS_FILE, SESSIONS_DIR, buttons::BUTTONS_FILE};
 
 pub const EXTENSION: &str = "przm";
@@ -51,6 +52,8 @@ pub struct Summary {
     pub sessions: usize,
     pub folders: usize,
     pub keyword_sets: usize,
+    /// The password vault is in it (still encrypted).
+    pub vault: bool,
     pub other: usize,
 }
 
@@ -73,6 +76,10 @@ impl Bundle {
                     Some(rest) => rest,
                     None if f.path.starts_with(&format!("{KEYWORDS_DIR}/")) => {
                         s.keyword_sets += 1;
+                        continue;
+                    }
+                    None if f.path == VAULT_FILE => {
+                        s.vault = true;
                         continue;
                     }
                     None => {
@@ -145,10 +152,11 @@ fn toml_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Packs the whole configuration.
+/// Packs the whole configuration. The password vault goes in as it is on
+/// disk: encrypted, and opened with the same master password.
 pub fn backup(config_dir: &Path) -> Result<Bundle, String> {
     let mut bundle = Bundle::new(Kind::Backup);
-    for name in [DEFAULTS_FILE, BUTTONS_FILE, KNOWN_HOSTS_FILE] {
+    for name in [DEFAULTS_FILE, BUTTONS_FILE, KNOWN_HOSTS_FILE, VAULT_FILE] {
         let path = config_dir.join(name);
         if path.is_file() {
             add_file(&mut bundle, config_dir, &path)?;
@@ -288,6 +296,7 @@ mod tests {
                 sessions: 2,
                 folders: 1,
                 keyword_sets: 1,
+                vault: false,
                 other: 3
             }
         );
@@ -312,6 +321,41 @@ mod tests {
         let tree = crate::SessionTree::load(there.path());
         assert!(tree.errors.is_empty());
         assert_eq!(tree.root.all_sessions().len(), 2);
+    }
+
+    #[test]
+    fn the_vault_travels_encrypted_in_backups_only() {
+        use crate::vault::{KdfCost, Vault, VaultEntry, vault_path};
+        let here = tempfile::tempdir().unwrap();
+        sample(here.path());
+        let mut vault = Vault::create(
+            &vault_path(here.path()),
+            "correct horse",
+            KdfCost::for_tests(),
+        )
+        .unwrap();
+        vault
+            .put(
+                None,
+                VaultEntry {
+                    name: "NOC".into(),
+                    username: "noc".into(),
+                    password: "s3cret!".into(),
+                    passphrase: String::new(),
+                },
+            )
+            .unwrap();
+        let bundle = backup(here.path()).unwrap();
+        assert!(bundle.summary().vault);
+        assert!(!bundle.to_text().contains("s3cret"));
+        let there = tempfile::tempdir().unwrap();
+        restore(there.path(), &bundle).unwrap();
+        let vault = Vault::open(&vault_path(there.path()), "correct horse").unwrap();
+        assert_eq!(vault.get("NOC").unwrap().password, "s3cret!");
+
+        let sessions = here.path().join("sessions");
+        let shared = export(std::slice::from_ref(&sessions)).unwrap();
+        assert!(!shared.to_text().contains(VAULT_FILE));
     }
 
     #[test]

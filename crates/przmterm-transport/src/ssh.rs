@@ -58,6 +58,25 @@ pub enum SavePassword {
     Never,
 }
 
+/// Login details from the password vault. The user name goes in
+/// [`SshConfig::username`]; the password is tried before the keychain's, and
+/// the passphrase opens encrypted key files before asking.
+#[derive(Clone, Default)]
+pub struct Credential {
+    /// The vault entry's name, for messages.
+    pub name: String,
+    pub password: Option<String>,
+    pub passphrase: Option<String>,
+}
+
+impl std::fmt::Debug for Credential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Credential")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
+}
+
 /// How to reach and authenticate to an SSH server.
 #[derive(Debug, Clone)]
 pub struct SshConfig {
@@ -81,6 +100,8 @@ pub struct SshConfig {
     /// Where saved passwords live; `None` disables saving.
     pub password_store: Option<Store>,
     pub save_password: SavePassword,
+    /// From the password vault.
+    pub credential: Option<Credential>,
     /// Show every step of the connection and login in the terminal, like
     /// `ssh -v`, to find out why a login fails.
     pub debug: bool,
@@ -213,6 +234,7 @@ impl SshConfig {
             keepalive: Some(Duration::from_secs(30)),
             password_store: None,
             save_password: SavePassword::Ask,
+            credential: None,
             debug: false,
             jump: None,
             forwards: Vec::new(),
@@ -1325,7 +1347,7 @@ async fn authenticate(
         for attempt in 0..PASSWORD_ATTEMPTS {
             let (password, from_store) = match saved.take() {
                 Some(p) => {
-                    out.notice("Using the password saved in the keychain.");
+                    out.notice(&format!("Using the password {}.", saved.source()));
                     (p, true)
                 }
                 None => {
@@ -1335,13 +1357,13 @@ async fn authenticate(
                 }
             };
             let what = if from_store {
-                "Password (saved in the keychain)"
+                format!("Password ({})", saved.source())
             } else {
-                "Password (typed)"
+                "Password (typed)".to_string()
             };
             match step(
                 out,
-                what,
+                &what,
                 handle
                     .authenticate_password(user, password.clone())
                     .await
@@ -1548,12 +1570,36 @@ async fn key_file_auth(
         let key = match keys::load_secret_key(&path, None) {
             Ok(key) => key,
             Err(keys::Error::KeyIsEncrypted) => {
-                out.debug("The key is encrypted; asking for its passphrase");
-                match ask_passphrase(&path, input, out).await? {
-                    Some(key) => key,
-                    None => {
-                        out.debug("No passphrase given; skipping the key");
-                        continue;
+                let from_vault = config.credential.as_ref().and_then(|c| {
+                    let passphrase = c.passphrase.as_deref()?;
+                    match keys::load_secret_key(&path, Some(passphrase)) {
+                        Ok(key) => {
+                            out.debug(&format!(
+                                "The key is encrypted; opened with the passphrase from the vault entry {}",
+                                c.name
+                            ));
+                            Some(key)
+                        }
+                        Err(_) => {
+                            out.text(&format!(
+                                "The passphrase from the vault entry {} does not open {}.\r\n",
+                                c.name,
+                                path.display()
+                            ));
+                            None
+                        }
+                    }
+                });
+                if let Some(key) = from_vault {
+                    key
+                } else {
+                    out.debug("The key is encrypted; asking for its passphrase");
+                    match ask_passphrase(&path, input, out).await? {
+                        Some(key) => key,
+                        None => {
+                            out.debug("No passphrase given; skipping the key");
+                            continue;
+                        }
                     }
                 }
             }
@@ -1614,10 +1660,23 @@ struct SavedPassword {
     account: String,
     password: Option<String>,
     mode: SavePassword,
+    /// The password came from this vault entry, not the keychain.
+    vault: Option<String>,
 }
 
 impl SavedPassword {
     async fn load(config: &SshConfig, account: &str) -> Self {
+        if let Some(c) = &config.credential
+            && let Some(password) = c.password.clone()
+        {
+            return Self {
+                store: None,
+                account: account.to_string(),
+                password: Some(password),
+                mode: SavePassword::Never,
+                vault: Some(c.name.clone()),
+            };
+        }
         let store = config.password_store.clone();
         let password = match &store {
             Some(store) => {
@@ -1634,6 +1693,15 @@ impl SavedPassword {
             account: account.to_string(),
             password,
             mode: config.save_password,
+            vault: None,
+        }
+    }
+
+    /// Where the saved password comes from, for messages.
+    fn source(&self) -> String {
+        match &self.vault {
+            Some(name) => format!("from the vault entry {name}"),
+            None => "saved in the keychain".to_string(),
         }
     }
 
@@ -1644,6 +1712,12 @@ impl SavedPassword {
 
     /// The server refused the saved password: forget it.
     async fn reject(&self, out: &Output) {
+        if let Some(name) = &self.vault {
+            out.text(&format!(
+                "The password from the vault entry {name} was rejected.\r\n"
+            ));
+            return;
+        }
         out.text("The saved password was rejected.\r\n");
         if let Some(store) = self.store.clone() {
             let account = self.account.clone();
@@ -1653,6 +1727,12 @@ impl SavedPassword {
 
     /// After a typed password worked: save it, asking first if configured so.
     async fn offer_save(&self, password: &str, input: &Arc<Mutex<Input>>, out: &Output) {
+        if let Some(name) = &self.vault {
+            out.notice(&format!(
+                "The password typed worked: update the vault entry {name} with it."
+            ));
+            return;
+        }
         let Some(store) = self.store.clone() else {
             return;
         };
@@ -1767,7 +1847,7 @@ async fn keyboard_interactive_auth(
                     if Some(i) == password_at
                         && let Some(p) = saved.take()
                     {
-                        out.notice("Using the password saved in the keychain.");
+                        out.notice(&format!("Using the password {}.", saved.source()));
                         answers.push(p);
                         sent_saved = true;
                         continue;

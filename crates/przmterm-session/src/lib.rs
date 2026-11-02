@@ -20,6 +20,7 @@
 pub mod bundle;
 pub mod buttons;
 pub mod securecrt;
+pub mod vault;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -109,6 +110,10 @@ pub struct SessionSettings {
     pub port: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
+    /// SSH: name of a password vault entry; its user name, password and key
+    /// passphrase are used to log in. `""` turns an inherited one off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
     /// SSH private key tried before the agent's and the default ones.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identity_file: Option<String>,
@@ -172,11 +177,12 @@ pub struct SessionSettings {
 }
 
 /// Keys of the individual settings, used to compare and copy them.
-pub const FIELDS: [&str; 26] = [
+pub const FIELDS: [&str; 27] = [
     "protocol",
     "host",
     "port",
     "username",
+    "credential",
     "identity_file",
     "save_password",
     "debug",
@@ -209,6 +215,7 @@ impl SessionSettings {
             "host" => self.host = from.host.clone(),
             "port" => self.port = from.port,
             "username" => self.username = from.username.clone(),
+            "credential" => self.credential = from.credential.clone(),
             "identity_file" => self.identity_file = from.identity_file.clone(),
             "save_password" => self.save_password = from.save_password,
             "debug" => self.debug = from.debug,
@@ -243,6 +250,7 @@ impl SessionSettings {
             "host" => self.host.clone(),
             "port" => self.port.map(|v| v.to_string()),
             "username" => self.username.clone(),
+            "credential" => self.credential.clone(),
             "identity_file" => self.identity_file.clone(),
             "save_password" => self.save_password.map(yes_no),
             "debug" => self.debug.map(yes_no),
@@ -306,6 +314,7 @@ impl SessionSettings {
             host: pick(&self.host, &over.host),
             port: pick(&self.port, &over.port),
             username: pick(&self.username, &over.username),
+            credential: pick(&self.credential, &over.credential),
             identity_file: pick(&self.identity_file, &over.identity_file),
             save_password: pick(&self.save_password, &over.save_password),
             debug: pick(&self.debug, &over.debug),
@@ -393,6 +402,8 @@ pub struct Session {
     pub path: PathBuf,
     pub protocol: Protocol,
     pub target: Target,
+    /// See [`SessionSettings::credential`].
+    pub credential: Option<String>,
     /// SSH private key, with `~` expanded.
     pub identity_file: Option<PathBuf>,
     /// See [`SessionSettings::save_password`].
@@ -483,6 +494,7 @@ impl Session {
             folder,
             protocol,
             target,
+            credential: settings.credential.clone().filter(|c| !c.trim().is_empty()),
             identity_file: settings.identity_file.as_deref().map(expand_tilde),
             save_password: settings.save_password,
             debug: settings.debug.unwrap_or(false),

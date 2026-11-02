@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use przmterm_transport::ssh::{
-    Forward, ForwardKind, PasswordStore, SavePassword, SshConfig, SshTransport, Store,
+    Credential, Forward, ForwardKind, PasswordStore, SavePassword, SshConfig, SshTransport, Store,
 };
 use przmterm_transport::{Size, Transport, noop_waker};
 use russh::keys::{Algorithm, PrivateKey};
@@ -1202,4 +1202,75 @@ fn refused_second_channel_falls_back_to_a_new_login() {
     second.transport.close().unwrap();
     first.wait_closed();
     second.wait_closed();
+}
+
+#[test]
+fn vault_credentials_log_in_without_asking() {
+    let dir = tempfile::tempdir().unwrap();
+    let known_hosts = dir.path().join("known_hosts");
+    let port = start_server(host_key(), 2);
+    let mut c = config(port, &known_hosts);
+    c.credential = Some(Credential {
+        name: "NOC".into(),
+        password: Some("secret".into()),
+        passphrase: None,
+    });
+    let mut s = Screen::connect(c.clone());
+    s.wait_for("(yes/no)? ");
+    s.send("yes\r");
+    s.wait_for("welcome");
+    assert!(
+        s.text
+            .contains("Using the password from the vault entry NOC.")
+    );
+    assert!(!s.text.contains("password: "), "{}", s.text);
+    s.transport.close().unwrap();
+    s.wait_closed();
+
+    // A stale vault password: asked in the terminal, then told to update it.
+    c.credential.as_mut().unwrap().password = Some("old".into());
+    let mut s = Screen::connect(c);
+    s.wait_for("The password from the vault entry NOC was rejected.");
+    s.wait_for("password: ");
+    s.send("secret\r");
+    s.wait_for("update the vault entry NOC");
+    s.wait_for("welcome");
+    s.transport.close().unwrap();
+    s.wait_closed();
+}
+
+#[test]
+fn the_vault_passphrase_opens_an_encrypted_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let client_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+    let key_path = dir.path().join("id_test");
+    let locked = client_key.encrypt(&mut rand::rng(), "open sesame").unwrap();
+    std::fs::write(
+        &key_path,
+        locked
+            .to_openssh(russh::keys::ssh_key::LineEnding::LF)
+            .unwrap()
+            .as_bytes(),
+    )
+    .unwrap();
+    let port = start_server_with(
+        host_key(),
+        1,
+        &[MethodKind::PublicKey],
+        Some(client_key.public_key().clone()),
+    );
+    let mut c = config(port, &dir.path().join("known_hosts"));
+    c.identity_files = vec![key_path];
+    c.credential = Some(Credential {
+        name: "keys".into(),
+        password: None,
+        passphrase: Some("open sesame".into()),
+    });
+    let mut s = Screen::connect(c);
+    s.wait_for("(yes/no)? ");
+    s.send("yes\r");
+    s.wait_for("welcome");
+    assert!(!s.text.contains("passphrase for key"), "{}", s.text);
+    s.transport.close().unwrap();
+    s.wait_closed();
 }

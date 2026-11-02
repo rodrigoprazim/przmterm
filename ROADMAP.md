@@ -108,7 +108,7 @@ maintainer's servers; legacy algorithms only against a test server.
   and remove rules with colour pickers and a live preview
 - [x] Triggers: text or regular expressions in the output answered
   automatically (`--More--` → space, `[confirm]` → Enter), once or every time
-- Password vault: an encrypted file (master password, Argon2id +
+- [x] Password vault: an encrypted file (master password, Argon2id +
   XChaCha20-Poly1305) holding user names, passwords and key passphrases.
   Sessions and folders refer to a vault entry instead of storing a user name,
   so one credential change updates every device that uses it. Works where no

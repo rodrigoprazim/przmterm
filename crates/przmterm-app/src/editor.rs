@@ -72,6 +72,12 @@ pub struct Editor {
     host: String,
     port: String,
     username: String,
+    /// Vault entry name; `Some("")` turns an inherited one off.
+    credential: Option<String>,
+    /// Names in the vault, while it is unlocked (set by the app each frame).
+    pub vault_names: Option<Vec<String>>,
+    /// The vault window was asked for.
+    vault_request: bool,
     identity_file: String,
     serial_port: String,
     baud_rate: String,
@@ -136,6 +142,7 @@ fn field_label(key: &str) -> &'static str {
         "protocol" => "protocol",
         "port" => "port",
         "username" => "user name",
+        "credential" => "vault entry",
         "identity_file" => "key file",
         "save_password" => "save password",
         "debug" => "debug login",
@@ -182,6 +189,7 @@ impl Context<'_> {
             "protocol" => "ssh".into(),
             "port" => self.protocol.default_port().unwrap_or(22).to_string(),
             "username" => "asked at login".into(),
+            "credential" => "none".into(),
             "identity_file" => "agent and ~/.ssh keys".into(),
             "save_password" => "ask".into(),
             "debug" => "no".into(),
@@ -327,6 +335,9 @@ impl Editor {
             host: text(&s.host),
             port: text(&s.port),
             username: text(&s.username),
+            credential: s.credential.clone(),
+            vault_names: None,
+            vault_request: false,
             identity_file: text(&s.identity_file),
             serial_port: text(&s.serial_port),
             baud_rate: text(&s.baud_rate),
@@ -357,6 +368,11 @@ impl Editor {
         }
     }
 
+    /// The vault window was asked for (once).
+    pub fn take_vault_request(&mut self) -> bool {
+        std::mem::take(&mut self.vault_request)
+    }
+
     /// The set to open the keyword editor on, once, when asked for.
     pub fn take_keyword_request(&mut self) -> Option<Option<String>> {
         self.keyword_request.take()
@@ -382,6 +398,7 @@ impl Editor {
             host: if session { opt(&self.host) } else { None },
             port: number("Port", &self.port)?,
             username: opt(&self.username),
+            credential: self.credential.clone(),
             identity_file: opt(&self.identity_file),
             save_password: self.save_password,
             debug: self.debug,
@@ -739,6 +756,7 @@ impl Editor {
         if self.target != Target::Global {
             field(ui, "User name", &mut self.username, &cx.hint("username"));
         }
+        self.credential_field(ui, cx);
         ui.label("Key file");
         ui.horizontal(|ui| {
             ui.add(
@@ -1077,6 +1095,54 @@ impl Editor {
             &FlowControl::ALL.map(|f| (f, f.label())),
             &cx.hint("flow_control"),
         );
+        ui.end_row();
+    }
+
+    /// The vault entry picker.
+    fn credential_field(&mut self, ui: &mut egui::Ui, cx: &Context) {
+        ui.label("Vault entry").on_hover_text(
+            "Log in with a user name, password and key passphrase from the \
+             password vault (its user name replaces the one above)",
+        );
+        ui.horizontal(|ui| {
+            let shown_name = self.credential.as_ref().map(|c| {
+                if c.is_empty() {
+                    "none".to_string()
+                } else {
+                    c.clone()
+                }
+            });
+            egui::ComboBox::from_id_salt("credential")
+                .width(200.0)
+                .selected_text(shown(shown_name, cx.hint("credential")))
+                .show_ui(ui, |ui| {
+                    // "" turns off an entry inherited from above.
+                    ui.selectable_value(&mut self.credential, Some(String::new()), "none");
+                    match &self.vault_names {
+                        Some(names) => {
+                            for name in names {
+                                ui.selectable_value(&mut self.credential, Some(name.clone()), name);
+                            }
+                        }
+                        None => {
+                            ui.weak("Unlock the vault to list its entries");
+                        }
+                    }
+                });
+            reset(ui, &mut self.credential, &cx.hint("credential"));
+            let label = if self.vault_names.is_some() {
+                "Vault…"
+            } else {
+                "Unlock…"
+            };
+            if ui
+                .small_button(label)
+                .on_hover_text("Open the password vault")
+                .clicked()
+            {
+                self.vault_request = true;
+            }
+        });
         ui.end_row();
     }
 
