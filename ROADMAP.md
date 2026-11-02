@@ -118,6 +118,13 @@ maintainer's servers; legacy algorithms only against a test server.
   folders, sessions and known hosts, restorable on this or another machine.
   Export: a chosen set of folders or sessions to share with someone else,
   without passwords or vault entries, imported into their tree as a new folder.
+- [x] Split joins sessions open in other tabs (grid of two per row, side by
+  side, stacked); panes can be rearranged or separated into tabs again
+- [x] Gate checked on macOS by the maintainer: buttons, keyword sets,
+      triggers, tab menu, split and the vault in daily use
+
+**Gate:** the maintainer's daily SecureCRT conveniences (buttons, keyword
+highlighting, triggers, saved credentials) work in PrzmTerm.
 
 ## 0.7.0 — Scripting
 
