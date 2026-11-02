@@ -123,10 +123,13 @@ send = 'copy run start\r\p\r'   # single quotes keep the backslashes
 description = "Saves the running configuration"
 ```
 
-**◫ Split** / **⊟ Split** at the top right ask what to show next to the
-current session: the session itself again (a new pane, on the same
-connection when it is live) and any session open in another tab, which moves
-into this one. Several can be picked at once.
+**◫ Split ▾** at the top right joins sessions open in other tabs to the
+current one: *Grid (two per row)*, *Side by side* or *Stacked*, then tick the
+sessions (several at once); they move into this tab. To see one session
+twice, clone it first (*Clone Session* in the tab menu). In a split tab the
+same menu rearranges the panes, moves the active pane to a tab of its own or
+separates them all into tabs again. Each pane shows its session's name, and
+connected sessions have a green dot in the session list.
 
 In a split tab, **⇶ Send to all** in the status bar sends what you type to
 every pane of the tab (after a warning) until you turn it off.
@@ -252,7 +255,7 @@ changes, PrzmTerm refuses to connect and shows the old and new fingerprints.
 | Action | Linux / Windows | macOS |
 | --- | --- | --- |
 | New tab (same session, no new login) | Ctrl+Shift+T | ⌘⇧T |
-| Split side by side / stacked | Ctrl+Shift+D / Ctrl+Shift+E | ⌘⇧D / ⌘⇧E |
+| Split: grid / side by side / stacked | Ctrl+Shift+G / D / E | ⌘⇧G / D / E |
 | Close pane | Ctrl+Shift+W | ⌘⇧W |
 | Next / previous tab | Ctrl+Tab / Ctrl+Shift+Tab | same |
 | Copy | Ctrl+Shift+C, or Ctrl+C with a selection | ⌘C |

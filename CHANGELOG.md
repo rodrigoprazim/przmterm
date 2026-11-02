@@ -68,9 +68,17 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Changed
 
-- *Split* (side by side or stacked) asks what goes next to the current
-  session: a new pane on the session itself and/or sessions open in other
-  tabs, which move into this tab (several at once). A tab left empty closes.
+- *Split* is one menu (**◫ Split ▾**): *Grid (two per row)* (new, first,
+  Ctrl+Shift+G / ⌘⇧G), *Side by side* and *Stacked* each ask which sessions
+  open in other tabs join the current one (several at once); they move into
+  this tab, and a tab left empty closes. To split a session with itself,
+  clone it first (*Clone Session*). In a split tab the same menu changes the
+  arrangement, moves the active pane to a tab of its own or separates all
+  panes into tabs (also *Separate Panes into Tabs* in the tab menu), so
+  nothing has to be closed.
+- Each pane of a split tab has a caption with its session's name, the tab's
+  tooltip lists them, and the session list marks connected sessions with a
+  green dot.
 - The password vault window: entry rows use the whole width; *Lock* is on
   the left, *Change master password…* and *New entry…* on the right.
 - Messages no longer say where files are kept (log files, backups, the

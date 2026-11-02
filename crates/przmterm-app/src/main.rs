@@ -47,6 +47,8 @@ fn main() -> eframe::Result {
 /// How the panes of a tab are arranged.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Layout {
+    /// Two per row, as many rows as needed.
+    Grid,
     /// Side by side.
     Columns,
     /// Stacked.
@@ -56,11 +58,15 @@ enum Layout {
 /// The "Split" dialog: what goes next to the current session.
 struct SplitDialog {
     layout: Layout,
-    /// A new pane on the current session.
-    this: bool,
     /// Panes of other tabs (tab, pane) and whether they are picked.
     others: Vec<(usize, usize, bool)>,
 }
+
+/// Height of the caption above each pane of a split tab.
+const PANE_CAPTION: f32 = 18.0;
+
+const NO_OTHER_SESSION: &str =
+    "No other session is open. Open one first, or use Clone Session in the tab menu.";
 
 /// The session's name, with the title the remote side set when it differs.
 fn pane_name(pane: &Pane) -> String {
@@ -117,6 +123,26 @@ fn merge_panes(tabs: &mut Vec<Tab>, into: usize, picks: &[(usize, usize)]) -> us
     into
 }
 
+/// Moves the panes of tab `t` into tabs of their own, right after it: all
+/// but the first, or only pane `only`. Returns the tab to show.
+fn separate_panes(tabs: &mut Vec<Tab>, t: usize, only: Option<usize>) -> usize {
+    let tab = &mut tabs[t];
+    if tab.panes.len() < 2 {
+        return t;
+    }
+    let moved: Vec<Pane> = match only {
+        Some(p) if p < tab.panes.len() => vec![tab.panes.remove(p)],
+        Some(_) => return t,
+        None => tab.panes.drain(1..).collect(),
+    };
+    tab.active = tab.active.min(tab.panes.len() - 1);
+    for (k, pane) in moved.into_iter().enumerate() {
+        tabs.insert(t + 1 + k, Tab::new(pane));
+    }
+    // A pane moved out alone is the one being looked at.
+    if only.is_some() { t + 1 } else { t }
+}
+
 /// A tab: one or more panes, one of them active.
 struct Tab {
     panes: Vec<Pane>,
@@ -127,12 +153,49 @@ struct Tab {
     name: Option<String>,
 }
 
+impl Layout {
+    const ALL: [Layout; 3] = [Layout::Grid, Layout::Columns, Layout::Rows];
+
+    fn label(self) -> &'static str {
+        match self {
+            Layout::Grid => "Grid (two per row)",
+            Layout::Columns => "Side by side",
+            Layout::Rows => "Stacked",
+        }
+    }
+
+    /// Where pane `i` of `n` goes in `area`.
+    fn rect(self, area: egui::Rect, i: usize, n: usize, gap: f32) -> egui::Rect {
+        let cell = |col: usize, cols: usize, row: usize, rows: usize| {
+            let w = (area.width() - gap * (cols - 1) as f32) / cols as f32;
+            let h = (area.height() - gap * (rows - 1) as f32) / rows as f32;
+            egui::Rect::from_min_size(
+                area.min + egui::vec2(col as f32 * (w + gap), row as f32 * (h + gap)),
+                egui::vec2(w, h),
+            )
+        };
+        match self {
+            Layout::Columns => cell(i, n, 0, 1),
+            Layout::Rows => cell(0, 1, i, n),
+            Layout::Grid => {
+                let rows = n.div_ceil(2);
+                // A pane alone on the last row takes the whole width.
+                if n % 2 == 1 && i == n - 1 {
+                    cell(0, 1, i / 2, rows)
+                } else {
+                    cell(i % 2, 2.min(n), i / 2, rows)
+                }
+            }
+        }
+    }
+}
+
 impl Tab {
     fn new(pane: Pane) -> Self {
         Self {
             panes: vec![pane],
             active: 0,
-            layout: Layout::Columns,
+            layout: Layout::Grid,
             name: None,
         }
     }
@@ -171,13 +234,18 @@ enum Action {
     SelectTab(usize),
     /// Asks what to put next to the current session.
     Split(Layout),
-    /// Splits the current tab: a new pane on its session (`this`) and the
-    /// panes `others` (tab, pane) moved in from other tabs.
+    /// Splits the current tab: the panes `others` (tab, pane) move in from
+    /// other tabs.
     SplitWith {
         layout: Layout,
-        this: bool,
         others: Vec<(usize, usize)>,
     },
+    /// Changes how the current tab's panes are arranged.
+    Arrange(Layout),
+    /// Moves the current tab's active pane into a tab of its own.
+    SeparatePane,
+    /// Gives every pane of this tab a tab of its own.
+    SeparateAll(usize),
     ClosePane,
     FocusPane(usize),
     Reconnect,
@@ -490,26 +558,25 @@ impl PrzmApp {
                             .map(move |(p, _)| (t, p, false))
                     })
                     .collect();
-                self.split_dialog = Some(SplitDialog {
-                    layout,
-                    // Alone, the current session is the obvious choice.
-                    this: others.is_empty(),
-                    others,
-                });
-            }
-            Action::SplitWith {
-                layout,
-                this,
-                others,
-            } => {
-                if this {
-                    let pane = self.tab().pane().clone_session(&env, waker);
-                    let tab = self.tab_mut();
-                    tab.panes.insert(tab.active + 1, pane);
-                    tab.active += 1;
+                if others.is_empty() {
+                    self.notice = Some(NO_OTHER_SESSION.into());
+                } else {
+                    self.split_dialog = Some(SplitDialog { layout, others });
                 }
+            }
+            Action::SplitWith { layout, others } => {
                 self.active_tab = merge_panes(&mut self.tabs, self.active_tab, &others);
                 self.tab_mut().layout = layout;
+            }
+            Action::Arrange(layout) => self.tab_mut().layout = layout,
+            Action::SeparatePane => {
+                let active = self.tab().active;
+                self.active_tab = separate_panes(&mut self.tabs, self.active_tab, Some(active));
+                self.broadcast = false;
+            }
+            Action::SeparateAll(t) => {
+                self.active_tab = separate_panes(&mut self.tabs, t, None);
+                self.broadcast = false;
             }
             Action::ClosePane => {
                 let tab = self.tab_mut();
@@ -664,6 +731,8 @@ impl PrzmApp {
                 Some(Action::NewTab)
             } else if i.consume_key(cmd_shift, Key::W) {
                 Some(Action::RequestClosePane)
+            } else if i.consume_key(cmd_shift, Key::G) {
+                Some(Action::Split(Layout::Grid))
             } else if i.consume_key(cmd_shift, Key::D) {
                 Some(Action::Split(Layout::Columns))
             } else if i.consume_key(cmd_shift, Key::E) {
@@ -1008,67 +1077,56 @@ impl PrzmApp {
                 .others
                 .retain(|&(t, p, _)| t < tabs.len() && p < tabs[t].panes.len());
             let mut answer = None; // Some(true) split, Some(false) cancel
-            let current = pane_name(self.tabs[self.active_tab].pane());
-            egui::Window::new(match dialog.layout {
-                Layout::Columns => "Split side by side",
-                Layout::Rows => "Split one above the other",
-            })
-            .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(center)
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.label("Show next to this session:");
-                ui.add_space(4.0);
-                ui.checkbox(
-                    &mut dialog.this,
-                    format!("{current} (itself, in a new pane)"),
-                );
-                if !dialog.others.is_empty() {
+            egui::Window::new(format!("Split: {}", dialog.layout.label().to_lowercase()))
+                .pivot(egui::Align2::CENTER_CENTER)
+                .default_pos(center)
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label("Sessions open in other tabs to show next to this one:");
                     ui.add_space(4.0);
-                    ui.weak("Open in other tabs (moved here):");
-                    egui::ScrollArea::vertical()
-                        .max_height(300.0)
-                        .show(ui, |ui| {
-                            for (t, p, picked) in &mut dialog.others {
-                                let pane = &self.tabs[*t].panes[*p];
-                                let state = if pane.transport.is_closed() {
-                                    " (disconnected)"
-                                } else {
-                                    ""
-                                };
-                                ui.checkbox(
-                                    picked,
-                                    format!("Tab {}: {}{state}", *t + 1, pane_name(pane)),
-                                );
+                    {
+                        egui::ScrollArea::vertical()
+                            .max_height(300.0)
+                            .show(ui, |ui| {
+                                for (t, p, picked) in &mut dialog.others {
+                                    let pane = &self.tabs[*t].panes[*p];
+                                    let state = if pane.transport.is_closed() {
+                                        " (disconnected)"
+                                    } else {
+                                        ""
+                                    };
+                                    ui.checkbox(
+                                        picked,
+                                        format!("Tab {}: {}{state}", *t + 1, pane_name(pane)),
+                                    );
+                                }
+                            });
+                    }
+                    ui.add_space(6.0);
+                    let any = dialog.others.iter().any(|o| o.2);
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Cancel").clicked() || escape {
+                                answer = Some(false);
+                            }
+                            if ui
+                                .add_enabled(any, egui::Button::new("Split"))
+                                .on_disabled_hover_text("Choose at least one session")
+                                .clicked()
+                                || (enter && any)
+                            {
+                                answer = Some(true);
                             }
                         });
-                }
-                ui.add_space(6.0);
-                let any = dialog.this || dialog.others.iter().any(|o| o.2);
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Cancel").clicked() || escape {
-                            answer = Some(false);
-                        }
-                        if ui
-                            .add_enabled(any, egui::Button::new("Split"))
-                            .on_disabled_hover_text("Choose at least one session")
-                            .clicked()
-                            || (enter && any)
-                        {
-                            answer = Some(true);
-                        }
                     });
                 });
-            });
             if let Some(go) = answer {
                 let dialog = self.split_dialog.take().expect("dialog open");
                 if go {
                     self.apply(
                         Action::SplitWith {
                             layout: dialog.layout,
-                            this: dialog.this,
                             others: dialog
                                 .others
                                 .iter()
@@ -1423,6 +1481,12 @@ fn tab_menu(
     );
     ui.separator();
     item(ui, has_session, "Clone Session", Action::CloneTab(i));
+    item(
+        ui,
+        tab.panes.len() > 1,
+        "Separate Panes into Tabs",
+        Action::SeparateAll(i),
+    );
     ui.separator();
     let quick = tab
         .pane()
@@ -1474,6 +1538,7 @@ fn folder_ui(
     picked: &mut Vec<TreeAction>,
     drag: bool,
     filter: &str,
+    open: &std::collections::HashSet<PathBuf>,
 ) {
     for f in &folder.folders {
         if !filter.is_empty() && !f.all_sessions().iter().any(|s| session_matches(s, filter)) {
@@ -1485,7 +1550,7 @@ fn folder_ui(
         if !filter.is_empty() {
             header = header.open(Some(true)); // show every match while searching
         }
-        let header = header.show(ui, |ui| folder_ui(ui, f, picked, drag, filter));
+        let header = header.show(ui, |ui| folder_ui(ui, f, picked, drag, filter, open));
         if drag {
             let r = &header.header_response;
             if r.dnd_hover_payload::<DragSession>().is_some() {
@@ -1558,10 +1623,30 @@ fn folder_ui(
             .on_hover_text("Drag onto a folder to move it");
             continue;
         }
-        let response = ui.selectable_label(false, &s.name).on_hover_text(format!(
-            "[{}] {}\nDouble-click to connect, right-click for more",
+        // Sessions connected in a tab get a green dot.
+        let is_open = open.contains(&s.path);
+        let text: egui::WidgetText = if is_open {
+            let mut job = egui::text::LayoutJob::default();
+            let font = egui::TextStyle::Body.resolve(ui.style());
+            job.append(
+                "● ",
+                0.0,
+                egui::TextFormat::simple(font.clone(), egui::Color32::from_rgb(70, 190, 100)),
+            );
+            job.append(
+                &s.name,
+                0.0,
+                egui::TextFormat::simple(font, ui.visuals().text_color()),
+            );
+            job.into()
+        } else {
+            s.name.clone().into()
+        };
+        let response = ui.selectable_label(false, text).on_hover_text(format!(
+            "[{}] {}{}\nDouble-click to connect, right-click for more",
             s.protocol,
-            s.display_target()
+            s.display_target(),
+            if is_open { "\nOpen in a tab" } else { "" }
         ));
         if response.double_clicked() {
             picked.push(TreeAction::Connect(s.clone()));
@@ -1684,20 +1769,67 @@ impl eframe::App for PrzmApp {
                     {
                         actions.push(Action::RequestClosePane);
                     }
-                    if ui
-                        .button("⬓ Split")
-                        .on_hover_text(format!("Split stacked ({})", shortcut("E")))
-                        .clicked()
-                    {
-                        actions.push(Action::Split(Layout::Rows));
-                    }
-                    if ui
-                        .button("◫ Split")
-                        .on_hover_text(format!("Split side by side ({})", shortcut("D")))
-                        .clicked()
-                    {
-                        actions.push(Action::Split(Layout::Columns));
-                    }
+                    let tab = &self.tabs[self.active_tab];
+                    let split = tab.panes.len() > 1;
+                    let elsewhere = self.tabs.iter().enumerate().any(|(t, other)| {
+                        t != self.active_tab && other.panes.iter().any(|p| p.origin.is_some())
+                    });
+                    ui.menu_button("◫ Split ▾", |ui| {
+                        ui.weak("Join sessions open in other tabs");
+                        for (layout, key) in [
+                            (Layout::Grid, "G"),
+                            (Layout::Columns, "D"),
+                            (Layout::Rows, "E"),
+                        ] {
+                            if ui
+                                .add_enabled(
+                                    elsewhere,
+                                    egui::Button::new(format!("{}…", layout.label()))
+                                        .shortcut_text(shortcut(key)),
+                                )
+                                .on_disabled_hover_text(NO_OTHER_SESSION)
+                                .clicked()
+                            {
+                                actions.push(Action::Split(layout));
+                                ui.close();
+                            }
+                        }
+                        if split {
+                            ui.separator();
+                            ui.weak("Arrange this tab");
+                            for layout in Layout::ALL {
+                                if ui
+                                    .add(egui::Button::selectable(
+                                        tab.layout == layout,
+                                        layout.label(),
+                                    ))
+                                    .clicked()
+                                {
+                                    actions.push(Action::Arrange(layout));
+                                    ui.close();
+                                }
+                            }
+                            ui.separator();
+                            if ui
+                                .button("Move This Pane to a New Tab")
+                                .on_hover_text("The active pane gets a tab of its own")
+                                .clicked()
+                            {
+                                actions.push(Action::SeparatePane);
+                                ui.close();
+                            }
+                            if ui
+                                .button("Separate All Panes")
+                                .on_hover_text(
+                                    "Every pane gets a tab of its own; nothing is closed",
+                                )
+                                .clicked()
+                            {
+                                actions.push(Action::SeparateAll(self.active_tab));
+                                ui.close();
+                            }
+                        }
+                    });
                 });
             });
         });
@@ -2010,7 +2142,15 @@ impl eframe::App for PrzmApp {
                         {
                             picked.push(TreeAction::Connect(first.clone()));
                         }
-                        folder_ui(ui, &self.sessions.root, &mut picked, drag, &filter);
+                        let open: std::collections::HashSet<PathBuf> = self
+                            .tabs
+                            .iter()
+                            .flat_map(|t| &t.panes)
+                            .filter(|p| !p.transport.is_closed())
+                            .filter_map(|p| p.origin.as_ref().map(|o| o.path.clone()))
+                            .filter(|p| !p.as_os_str().is_empty())
+                            .collect();
+                        folder_ui(ui, &self.sessions.root, &mut picked, drag, &filter, &open);
                         for p in picked {
                             match p {
                                 TreeAction::Connect(s) => actions.push(Action::Open(Box::new(s))),
@@ -2111,9 +2251,20 @@ impl eframe::App for PrzmApp {
                     } else if !tab.pane().transport.weak_algorithms().is_empty() {
                         title = format!("⚠ {title}");
                     }
+                    // A split tab lists its sessions.
+                    let hover = if tab.panes.len() > 1 {
+                        let names: Vec<String> = tab
+                            .panes
+                            .iter()
+                            .map(|p| format!("• {}", pane_name(p)))
+                            .collect();
+                        format!("{}\nRight-click for more", names.join("\n"))
+                    } else {
+                        "Right-click for more".to_string()
+                    };
                     let tab_button = ui
                         .selectable_label(i == self.active_tab, title)
-                        .on_hover_text("Right-click for more");
+                        .on_hover_text(hover);
                     if tab_button.clicked() {
                         actions.push(Action::SelectTab(i));
                     }
@@ -2157,23 +2308,47 @@ impl eframe::App for PrzmApp {
             let n = tab.panes.len();
             let gap = 4.0;
             for (i, pane) in tab.panes.iter_mut().enumerate() {
-                let rect = match tab.layout {
-                    Layout::Columns => {
-                        let w = (area.width() - gap * (n - 1) as f32) / n as f32;
-                        egui::Rect::from_min_size(
-                            area.min + egui::vec2(i as f32 * (w + gap), 0.0),
-                            egui::vec2(w, area.height()),
-                        )
-                    }
-                    Layout::Rows => {
-                        let h = (area.height() - gap * (n - 1) as f32) / n as f32;
-                        egui::Rect::from_min_size(
-                            area.min + egui::vec2(0.0, i as f32 * (h + gap)),
-                            egui::vec2(area.width(), h),
-                        )
-                    }
-                };
+                let mut rect = tab.layout.rect(area, i, n, gap);
                 let active = i == tab.active;
+                // In a split tab each pane is captioned with its session.
+                if n > 1 {
+                    let caption =
+                        egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), PANE_CAPTION));
+                    let visuals = ui.visuals();
+                    let (fill, text) = if active {
+                        (
+                            egui::Color32::from_rgb(30, 70, 100),
+                            egui::Color32::from_rgb(220, 240, 255),
+                        )
+                    } else {
+                        (visuals.faint_bg_color, visuals.weak_text_color())
+                    };
+                    ui.painter().rect_filled(caption, 0.0, fill);
+                    let dot = if pane.origin.is_some() && pane.transport.is_closed() {
+                        "○ "
+                    } else {
+                        ""
+                    };
+                    ui.painter().with_clip_rect(caption).text(
+                        caption.left_center() + egui::vec2(6.0, 0.0),
+                        egui::Align2::LEFT_CENTER,
+                        format!("{dot}{}", pane_name(pane)),
+                        egui::FontId::proportional(12.0),
+                        text,
+                    );
+                    if ui
+                        .interact(
+                            caption,
+                            ui.make_persistent_id(("pane-caption", i)),
+                            egui::Sense::click(),
+                        )
+                        .clicked()
+                        && !active
+                    {
+                        actions.push(Action::FocusPane(i));
+                    }
+                    rect.min.y += PANE_CAPTION;
+                }
                 let out = ui
                     .scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                         pane.view.show(ui, &mut pane.term, active && !modal)
@@ -2278,6 +2453,51 @@ mod tests {
         tabs.iter()
             .map(|t| t.panes.iter().map(|p| p.label.clone()).collect())
             .collect()
+    }
+
+    #[test]
+    fn separating_gives_panes_their_own_tabs_and_closes_nothing() {
+        let mut tabs = vec![tab(&["x"]), tab(&["a", "b", "c"]), tab(&["y"])];
+        tabs[1].active = 1;
+        let shown = separate_panes(&mut tabs, 1, Some(1));
+        assert_eq!(
+            labels(&tabs),
+            [vec!["x"], vec!["a", "c"], vec!["b"], vec!["y"]]
+        );
+        assert_eq!(shown, 2, "the moved pane is shown");
+        assert_eq!(tabs[1].active, 1);
+        let shown = separate_panes(&mut tabs, 1, None);
+        assert_eq!(
+            labels(&tabs),
+            [vec!["x"], vec!["a"], vec!["c"], vec!["b"], vec!["y"]]
+        );
+        assert_eq!(shown, 1);
+        assert_eq!(separate_panes(&mut tabs, 0, None), 0, "a single pane stays");
+        assert_eq!(tabs.len(), 5);
+    }
+
+    #[test]
+    fn the_grid_puts_two_per_row_and_a_last_odd_pane_across() {
+        let area = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(100.0, 90.0));
+        let r = |i, n| Layout::Grid.rect(area, i, n, 0.0);
+        assert_eq!(
+            r(0, 2),
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(50.0, 90.0))
+        );
+        assert_eq!(
+            r(1, 3),
+            egui::Rect::from_min_max(egui::pos2(50.0, 0.0), egui::pos2(100.0, 45.0))
+        );
+        assert_eq!(
+            r(2, 3),
+            egui::Rect::from_min_max(egui::pos2(0.0, 45.0), egui::pos2(100.0, 90.0))
+        );
+        assert_eq!(
+            r(3, 4),
+            egui::Rect::from_min_max(egui::pos2(50.0, 45.0), egui::pos2(100.0, 90.0))
+        );
+        assert_eq!(r(4, 5).min, egui::pos2(0.0, 60.0));
+        assert_eq!(r(4, 5).width(), 100.0);
     }
 
     #[test]
