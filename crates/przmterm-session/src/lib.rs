@@ -17,6 +17,7 @@
 //! from the root down, then the session file. Passwords never live here; they
 //! go to the OS keychain.
 
+pub mod bundle;
 pub mod buttons;
 pub mod securecrt;
 

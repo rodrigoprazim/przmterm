@@ -166,6 +166,9 @@ struct PrzmApp {
     tab_rename: Option<(usize, String)>,
     /// The "Font…" dialog, for this tab.
     font_dialog: Option<usize>,
+    /// A backup or export being restored or imported, and the folder name
+    /// for an import.
+    bundle_dialog: Option<(przmterm_session::bundle::Bundle, String)>,
     /// The quit was confirmed: let the window close.
     quitting: bool,
 }
@@ -190,6 +193,8 @@ enum TreeAction {
     DeleteFolder(PathBuf, String, usize),
     /// Move a session file into a folder.
     Move(PathBuf, PathBuf),
+    /// Export a session file or folder to a `.przm` file (path, name).
+    Export(PathBuf, String),
 }
 
 /// Drag-and-drop payload: the session file being moved.
@@ -259,6 +264,7 @@ impl PrzmApp {
             confirm_close: None,
             tab_rename: None,
             font_dialog: None,
+            bundle_dialog: None,
             quitting: false,
         }
     }
@@ -540,6 +546,7 @@ impl PrzmApp {
             || self.confirm_close.is_some()
             || self.tab_rename.is_some()
             || self.font_dialog.is_some()
+            || self.bundle_dialog.is_some()
     }
 
     /// Panes with a live connection to a session.
@@ -549,6 +556,82 @@ impl PrzmApp {
             .flat_map(|t| &t.panes)
             .filter(|p| p.origin.is_some() && !p.transport.is_closed())
             .count()
+    }
+
+    /// Writes a backup of the whole configuration where the user chooses.
+    fn back_up(&mut self) {
+        let Some(dir) = self.config_dir.clone() else {
+            return;
+        };
+        let name = format!(
+            "przmterm-backup-{}.{}",
+            chrono::Local::now().format("%Y%m%d"),
+            przmterm_session::bundle::EXTENSION
+        );
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Back up PrzmTerm settings")
+            .set_file_name(&name)
+            .add_filter("PrzmTerm", &[przmterm_session::bundle::EXTENSION])
+            .save_file()
+        else {
+            return;
+        };
+        self.notice = Some(
+            match przmterm_session::bundle::backup(&dir)
+                .and_then(|b| przmterm_session::bundle::write_bundle(&path, &b).map(|()| b))
+            {
+                Ok(b) => format!("Backed up {} file(s) to {}.", b.files.len(), path.display()),
+                Err(e) => format!("Backup failed: {e}"),
+            },
+        );
+    }
+
+    /// Exports a session or folder to a file to share.
+    fn export(&mut self, path: &std::path::Path, name: &str) {
+        let file_name = format!("{name}.{}", przmterm_session::bundle::EXTENSION);
+        let Some(target) = rfd::FileDialog::new()
+            .set_title("Export to a file")
+            .set_file_name(&file_name)
+            .add_filter("PrzmTerm", &[przmterm_session::bundle::EXTENSION])
+            .save_file()
+        else {
+            return;
+        };
+        self.notice = Some(
+            match przmterm_session::bundle::export(&[path.to_path_buf()])
+                .and_then(|b| przmterm_session::bundle::write_bundle(&target, &b).map(|()| b))
+            {
+                Ok(b) => format!(
+                    "Exported {} file(s) to {}. Passwords are not included.",
+                    b.files.len(),
+                    target.display()
+                ),
+                Err(e) => format!("Export failed: {e}"),
+            },
+        );
+    }
+
+    /// Picks a backup or export and asks what to do with it.
+    fn open_bundle(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("PrzmTerm backup or export")
+            .add_filter("PrzmTerm", &[przmterm_session::bundle::EXTENSION])
+            .pick_file()
+        else {
+            return;
+        };
+        match przmterm_session::bundle::read_bundle(&path) {
+            Ok(bundle) => {
+                let folder = path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "Imported".into());
+                let mut folder = format!("Imported {folder}");
+                przmterm_session::strip_forbidden(&mut folder);
+                self.bundle_dialog = Some((bundle, folder));
+            }
+            Err(e) => self.notice = Some(format!("Cannot open {}: {e}", path.display())),
+        }
     }
 
     /// Imports SecureCRT sessions into the `SecureCRT` folder and shows what
@@ -679,6 +762,86 @@ impl PrzmApp {
                     tab.name = (!name.is_empty()).then_some(name);
                 }
                 self.tab_rename = None;
+            }
+        }
+        if let Some((bundle, folder)) = &mut self.bundle_dialog {
+            use przmterm_session::bundle::Kind;
+            let summary = bundle.summary();
+            let mut answer = None; // Some(true) go, Some(false) cancel
+            egui::Window::new(match bundle.kind {
+                Kind::Backup => "Restore backup",
+                Kind::Export => "Import sessions",
+            })
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(center)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label(format!(
+                    "Made {} with PrzmTerm {}: {} session(s){}.",
+                    bundle.created,
+                    bundle.version,
+                    summary.sessions,
+                    if bundle.kind == Kind::Backup {
+                        format!(
+                            ", {} folder setting(s), {} keyword set(s) and {} other file(s)",
+                            summary.folders, summary.keyword_sets, summary.other
+                        )
+                    } else {
+                        String::new()
+                    }
+                ));
+                match bundle.kind {
+                    Kind::Backup => {
+                        ui.colored_label(
+                            ui.visuals().warn_fg_color,
+                            "Files with the same name are replaced. Your current settings \
+                             are saved first in the backups folder of the configuration.",
+                        );
+                    }
+                    Kind::Export => {
+                        ui.horizontal(|ui| {
+                            ui.label("Into the folder");
+                            editor::name_field(ui, folder, "Imported");
+                        });
+                        ui.weak("Nothing is replaced: a folder that exists gets a new (2).");
+                    }
+                }
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    let go = match bundle.kind {
+                        Kind::Backup => "Restore",
+                        Kind::Export => "Import",
+                    };
+                    if ui.button(go).clicked() {
+                        answer = Some(true);
+                    }
+                    if ui.button("Cancel").clicked() || escape {
+                        answer = Some(false);
+                    }
+                });
+            });
+            if let Some(go) = answer {
+                let (bundle, folder) = self.bundle_dialog.take().expect("dialog open");
+                if go && let Some(dir) = self.config_dir.clone() {
+                    let result = match bundle.kind {
+                        Kind::Backup => {
+                            przmterm_session::bundle::restore(&dir, &bundle).map(|(n, safety)| {
+                                format!(
+                                    "Restored {n} file(s). The previous settings are in {}.",
+                                    safety.display()
+                                )
+                            })
+                        }
+                        Kind::Export => przmterm_session::bundle::import(&dir, &bundle, &folder)
+                            .map(|(n, used)| {
+                                format!("Imported {n} file(s) into the folder {used}.")
+                            }),
+                    };
+                    self.notice = Some(result.unwrap_or_else(|e| format!("Failed: {e}")));
+                    self.reload_sessions();
+                    self.buttons = buttonbar::ButtonBarUi::load(Some(&dir));
+                }
             }
         }
         if let Some(t) = self.font_dialog {
@@ -1122,6 +1285,14 @@ fn folder_ui(
                     picked.push(TreeAction::FolderSettings(f.trail.clone()));
                     ui.close();
                 }
+                if ui
+                    .button("Export folder…")
+                    .on_hover_text("Save this folder and its sessions to a file to share")
+                    .clicked()
+                {
+                    picked.push(TreeAction::Export(f.dir.clone(), f.name.clone()));
+                    ui.close();
+                }
                 ui.separator();
                 if ui.button("Delete…").clicked() {
                     picked.push(TreeAction::DeleteFolder(
@@ -1170,6 +1341,14 @@ fn folder_ui(
             }
             if s.password_account().is_some() && ui.button("Forget saved password").clicked() {
                 picked.push(TreeAction::ForgetPassword(s.clone()));
+                ui.close();
+            }
+            if ui
+                .button("Export session…")
+                .on_hover_text("Save this session to a file to share")
+                .clicked()
+            {
+                picked.push(TreeAction::Export(s.path.clone(), s.name.clone()));
                 ui.close();
             }
             ui.separator();
@@ -1370,8 +1549,14 @@ impl eframe::App for PrzmApp {
                     }
                     if let Some((text, _)) = &self.status {
                         ui.separator();
-                        ui.label(
-                            egui::RichText::new(text).color(egui::Color32::from_rgb(140, 200, 255)),
+                        // Long messages (paths) are cut; the whole text shows
+                        // on hover.
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(text)
+                                    .color(egui::Color32::from_rgb(140, 200, 255)),
+                            )
+                            .truncate(),
                         );
                     }
                 });
@@ -1448,6 +1633,27 @@ impl eframe::App for PrzmApp {
                                 });
                                 ui.close();
                             }
+                            ui.separator();
+                            if ui
+                                .button("Back up settings…")
+                                .on_hover_text(
+                                    "Everything (sessions, folders, keywords, buttons, \
+                                     known hosts) in one file; passwords stay in the keychain",
+                                )
+                                .clicked()
+                            {
+                                ui.close();
+                                self.back_up();
+                            }
+                            if ui
+                                .button("Restore or import…")
+                                .on_hover_text("A backup, or sessions someone exported")
+                                .clicked()
+                            {
+                                ui.close();
+                                self.open_bundle();
+                            }
+                            ui.separator();
                             if ui.button("Keyword sets…").clicked() {
                                 if let Some(dir) = &self.config_dir {
                                     self.keyword_editor =
@@ -1614,6 +1820,7 @@ impl eframe::App for PrzmApp {
                                         sessions,
                                     })
                                 }
+                                TreeAction::Export(path, name) => self.export(&path, &name),
                                 TreeAction::ForgetPassword(s) => {
                                     if let Some(account) = s.password_account() {
                                         Keychain.delete(&account);

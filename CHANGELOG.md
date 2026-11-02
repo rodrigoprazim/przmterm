@@ -47,6 +47,14 @@ All notable changes to PrzmTerm are recorded here. The format follows
   set update at once.
 - SecureCRT keyword lists (`Config/Keywords/*.ini`) import with the other
   SecureCRT files, and imported sessions keep their keyword set.
+- Settings backup, export and import, in `.przm` files (plain TOML text).
+  **+** › *Back up settings…* saves everything (global settings, folders,
+  sessions, keyword sets, buttons, known hosts; not logs) and *Restore or
+  import…* puts a backup back, on this or another machine, after saving the
+  current settings in `<config>/backups/`. *Export folder…* and *Export
+  session…* (right-click in the session list) save a part to share with
+  someone; importing it adds a new folder and never replaces anything.
+  Passwords are never included: they stay in the system keychain.
 
 ## [0.5.0] - 2026-11-02
 

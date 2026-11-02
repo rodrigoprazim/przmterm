@@ -73,6 +73,21 @@ Passwords are not imported: SecureCRT keeps them encrypted, and PrzmTerm asks
 at the first login and can save them in the system keychain. Logon scripts,
 port forwards and RDP or local-shell sessions are listed in the summary.
 
+### Backup and sharing sessions
+
+**+** next to *Sessions* › *Back up settings…* writes one `.przm` file with
+everything: global settings, folders, sessions, keyword sets, buttons and
+known hosts. *Restore or import…* takes it back, on this or another machine;
+files with the same name are replaced, and the settings in use are first
+saved in `<config>/backups/`.
+
+To share sessions, right-click a folder or session › *Export folder…* or
+*Export session…*. Whoever gets the file picks *Restore or import…* and the
+sessions arrive in a new folder; nothing of theirs is replaced. Passwords are
+never in these files (they stay in the system keychain), but triggers are
+copied as typed, so check them before sharing if they answer password
+prompts.
+
 ### Buttons and sending to several sessions
 
 **▤ Buttons** in the status bar shows the button bar: tabs of buttons (one per
