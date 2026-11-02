@@ -40,10 +40,13 @@ All notable changes to PrzmTerm are recorded here. The format follows
   If the server refuses a second session on one connection, the new pane
   logs in on its own and says why. Opening a session that is already
   connected also reuses its connection.
-- Global settings (⚙ next to *Sessions*, saved in `defaults.toml`). Global and
-  folder settings can **force** a field: it then overrides folders and sessions
-  below (`force = ["username", "port"]`). Forced fields show locked, with who
-  forced them, in the editors below.
+- Global settings (⚙ next to *Sessions*, saved in `defaults.toml`). Saving a
+  change asks for confirmation and whether existing sessions that use the
+  default should follow it; if not, they keep their current value.
+- Log folder setting (`[log] dir`) with a folder picker, and a `?` next to the
+  log file name listing the variables, examples and the next file name.
+- Drag sessions onto folders (or the top level) to move them, after unlocking
+  the padlock next to *Sessions*.
 - Enter saves and Esc cancels in the editor and the folder dialogs.
 
 ### Fixed
@@ -51,6 +54,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
 - A password followed by a two-factor prompt (keyboard-interactive in two
   rounds) was never saved, and a saved password was wrongly dropped when the
   token prompt came. The password is now saved and reused; the token is always asked.
+- macOS: saving a password failed with "already exists" when an earlier build
+  had saved it; the old item is now replaced.
 
 ## [0.2.0] - 2026-11-01
 

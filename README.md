@@ -41,6 +41,9 @@ and password.
 Passwords are never written to session files. After a typed password works,
 PrzmTerm offers to save it in the OS keychain (Keychain on macOS, Credential
 Manager on Windows, Secret Service on Linux); right-click a session to forget it.
+On macOS, unsigned development builds make the system ask for your login
+keychain password (your Mac account password) after each rebuild; choose
+*Always Allow*.
 
 Accepted host keys go to `known_hosts` in the configuration directory (OpenSSH
 format). `~/.ssh/known_hosts` is also consulted, read-only. If a host's key
@@ -100,7 +103,8 @@ scrollback = 10000
 
 [log]
 enabled = true
-path = "~/logs/%S-%Y%M%D.log"   # %S session, %H host, %Y%M%D date, %h%m%s time
+dir = "~/logs"                 # folder for relative file names (default <config>/logs)
+path = "%S-%Y%M%D.log"         # %S session, %H host, %Y%M%D date, %h%m%s time
 ```
 
 Sessions can also be created and edited from the app: **+** next to
@@ -109,14 +113,10 @@ a folder to add a session or subfolder there, rename it, or edit the settings
 its sessions inherit.
 
 Global defaults live in `defaults.toml` (⚙ next to *Sessions* in the app).
-Global and folder settings can force fields onto everything below them,
-overriding folder and session values:
+Changing them asks whether existing sessions that use the defaults should
+follow; if not, PrzmTerm writes the old value into those sessions.
 
-```toml
-# defaults.toml
-username = "netops"
-force = ["username"]      # every session logs in as netops
-```
+Unlock the padlock next to *Sessions* to drag sessions between folders.
 
 A sample tree is in [examples/config](examples/config). Try it with
 `PRZMTERM_HOME=examples/config cargo run`.

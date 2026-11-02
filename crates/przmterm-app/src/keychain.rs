@@ -1,5 +1,9 @@
 //! Saved passwords in the OS keychain: Keychain on macOS, Credential Manager
 //! on Windows, the Secret Service (GNOME Keyring, KWallet) on Linux.
+//!
+//! On macOS, builds that are not signed count as a new app each time they
+//! change, so the system asks for the login keychain password (the Mac
+//! account password) and "Always Allow" again after every rebuild.
 
 use przmterm_transport::ssh::PasswordStore;
 
@@ -16,9 +20,17 @@ impl PasswordStore for Keychain {
     }
 
     fn set(&self, account: &str, password: &str) -> Result<(), String> {
-        keyring::Entry::new(SERVICE, account)
-            .and_then(|e| e.set_password(password))
-            .map_err(|e| e.to_string())
+        let entry = keyring::Entry::new(SERVICE, account).map_err(|e| e.to_string())?;
+        match entry.set_password(password) {
+            Ok(()) => Ok(()),
+            // macOS: an item saved by an earlier (differently signed) build
+            // cannot be updated in place. Replace it.
+            Err(e) if e.to_string().contains("already exists") => {
+                let _ = entry.delete_credential();
+                entry.set_password(password).map_err(|e| e.to_string())
+            }
+            Err(e) => Err(e.to_string()),
+        }
     }
 
     fn delete(&self, account: &str) {

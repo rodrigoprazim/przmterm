@@ -75,9 +75,12 @@ pub struct TerminalSettings {
 pub struct LogSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
-    /// File name template, e.g. `~/logs/%S-%Y%M%D.log`. See [`expand_log_template`].
+    /// File name template, e.g. `%S-%Y%M%D.log`. See [`expand_log_template`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// Folder for log files whose name is relative (default `<config>/logs`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dir: Option<String>,
 }
 
 /// One settings layer: defaults, a folder or a session. `None` = inherit.
@@ -106,15 +109,14 @@ pub struct SessionSettings {
     pub terminal: TerminalSettings,
     #[serde(skip_serializing_if = "is_default")]
     pub log: LogSettings,
-    /// Fields this layer imposes on everything below it, overriding folder and
-    /// session values (only meaningful in `defaults.toml` and `folder.toml`).
-    /// Keys are those in [`FIELDS`].
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub force: Vec<String>,
+    /// Accepted and ignored: written by a development build of 0.3.
+    #[doc(hidden)]
+    #[serde(rename = "force", skip_serializing)]
+    pub legacy_force: Vec<String>,
 }
 
-/// Keys of the settings that can be forced, as used in `force = [...]`.
-pub const FIELDS: [&str; 12] = [
+/// Keys of the individual settings, used to compare and copy them.
+pub const FIELDS: [&str; 13] = [
     "protocol",
     "host",
     "port",
@@ -127,14 +129,8 @@ pub const FIELDS: [&str; 12] = [
     "terminal.scrollback",
     "log.enabled",
     "log.path",
+    "log.dir",
 ];
-
-/// A field forced from above, and by whom (`global` or a folder name).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Forced {
-    pub key: String,
-    pub source: String,
-}
 
 impl SessionSettings {
     /// Copies the field `key` (see [`FIELDS`]) from `from`, set or not.
@@ -152,6 +148,7 @@ impl SessionSettings {
             "terminal.scrollback" => self.terminal.scrollback = from.terminal.scrollback,
             "log.enabled" => self.log.enabled = from.log.enabled,
             "log.path" => self.log.path = from.log.path.clone(),
+            "log.dir" => self.log.dir = from.log.dir.clone(),
             _ => {}
         }
     }
@@ -172,6 +169,7 @@ impl SessionSettings {
             "terminal.scrollback" => self.terminal.scrollback.map(|v| v.to_string()),
             "log.enabled" => self.log.enabled.map(yes_no),
             "log.path" => self.log.path.clone(),
+            "log.dir" => self.log.dir.clone(),
             _ => None,
         }
     }
@@ -206,45 +204,37 @@ impl SessionSettings {
             log: LogSettings {
                 enabled: pick(&self.log.enabled, &over.log.enabled),
                 path: pick(&self.log.path, &over.log.path),
+                dir: pick(&self.log.dir, &over.log.dir),
             },
-            // Each layer's own; never inherited as a list.
-            force: Vec::new(),
+            legacy_force: Vec::new(),
         }
     }
-}
 
-/// One layer of the inheritance chain: its own settings and a name for messages.
-#[derive(Debug, Clone)]
-struct Layer {
-    own: SessionSettings,
-    source: String,
-}
-
-/// Applies the forced fields of `chain` (root first) to `settings`. Upper
-/// layers win: they are applied last.
-fn apply_forced(mut settings: SessionSettings, chain: &[Layer]) -> SessionSettings {
-    for layer in chain.iter().rev() {
-        for key in &layer.own.force {
-            settings.copy_field(&layer.own, key);
+    /// The built-in value of `key` as a setting, for the fields that have one
+    /// that can be written down (not e.g. the user name, which is asked).
+    pub fn builtin(key: &str, protocol: Protocol) -> Option<SessionSettings> {
+        let mut s = SessionSettings::default();
+        match key {
+            "protocol" => s.protocol = Some(Protocol::Ssh),
+            "port" => s.port = protocol.default_port(),
+            "baud_rate" => s.baud_rate = Some(DEFAULT_BAUD_RATE),
+            "terminal.term_type" => s.terminal.term_type = Some(DEFAULT_TERM_TYPE.into()),
+            "terminal.scrollback" => s.terminal.scrollback = Some(DEFAULT_SCROLLBACK),
+            "log.enabled" => s.log.enabled = Some(false),
+            "log.path" => s.log.path = Some(DEFAULT_LOG_TEMPLATE.into()),
+            _ => return None,
         }
+        s.field_text(key).is_some().then_some(s)
     }
-    settings
-}
 
-/// Which fields `chain` forces and the topmost layer forcing each.
-fn forced_list(chain: &[Layer]) -> Vec<Forced> {
-    let mut out: Vec<Forced> = Vec::new();
-    for layer in chain {
-        for key in &layer.own.force {
-            if !out.iter().any(|f| f.key == *key) {
-                out.push(Forced {
-                    key: key.clone(),
-                    source: layer.source.clone(),
-                });
-            }
-        }
+    /// Keys whose value differs between `self` and `other`.
+    pub fn changed_fields(&self, other: &SessionSettings) -> Vec<&'static str> {
+        FIELDS
+            .iter()
+            .copied()
+            .filter(|k| self.field_text(k) != other.field_text(k))
+            .collect()
     }
-    out
 }
 
 /// Where a session connects to, after inheritance.
@@ -279,6 +269,8 @@ pub struct Session {
     pub scrollback: usize,
     pub log_enabled: bool,
     pub log_path: Option<String>,
+    /// Folder for relative log file names, with `~` expanded.
+    pub log_dir: Option<PathBuf>,
 }
 
 impl Session {
@@ -336,6 +328,7 @@ impl Session {
             scrollback: settings.terminal.scrollback.unwrap_or(DEFAULT_SCROLLBACK),
             log_enabled: settings.log.enabled.unwrap_or(false),
             log_path: settings.log.path.clone(),
+            log_dir: settings.log.dir.as_deref().map(expand_tilde),
             path,
         })
     }
@@ -412,19 +405,19 @@ impl Session {
         }
     }
 
-    /// Log file for a connection starting at `now`. Relative templates are
-    /// placed under `<config>/logs`.
+    /// Log file for a connection starting at `now`. Relative names go in the
+    /// session's log folder, by default `<config>/logs`.
     pub fn log_file(&self, config_dir: Option<&Path>, now: &(impl Datelike + Timelike)) -> PathBuf {
         let template = self.log_path.as_deref().unwrap_or(DEFAULT_LOG_TEMPLATE);
         let path = expand_log_template(template, &self.name, self.host_label(), now);
         if path.is_absolute() {
-            path
-        } else {
-            config_dir
-                .map(|d| d.join(LOGS_DIR))
-                .unwrap_or_default()
-                .join(path)
+            return path;
         }
+        let dir = match &self.log_dir {
+            Some(dir) => dir.clone(),
+            None => config_dir.map(|d| d.join(LOGS_DIR)).unwrap_or_default(),
+        };
+        dir.join(path)
     }
 
     /// Short description such as `admin@10.0.0.1:22` or `/dev/ttyUSB0 @ 9600`.
@@ -460,11 +453,8 @@ pub struct Folder {
     pub settings: SessionSettings,
     /// Settings this folder receives from above (without its own `folder.toml`).
     pub inherited: SessionSettings,
-    /// Fields forced on the sessions in this folder (by `defaults.toml` or a
-    /// `folder.toml` from the root down to this folder).
-    pub forced: Vec<Forced>,
-    /// Fields forced on this folder from above.
-    pub inherited_forced: Vec<Forced>,
+    /// This folder's own settings (`folder.toml`).
+    pub own: SessionSettings,
     pub folders: Vec<Folder>,
     pub sessions: Vec<Session>,
 }
@@ -537,20 +527,19 @@ impl SessionTree {
             }
         };
         let sessions_dir = config_dir.join(SESSIONS_DIR);
-        let chain = vec![Layer {
-            own: defaults.clone(),
-            source: "global".into(),
-        }];
         if sessions_dir.is_dir() {
-            tree.root = load_folder(&sessions_dir, String::new(), &[], &chain, &mut tree.errors);
+            tree.root = load_folder(
+                &sessions_dir,
+                String::new(),
+                &[],
+                &defaults,
+                &mut tree.errors,
+            );
         } else {
-            let effective = apply_forced(defaults, &chain);
             tree.root = Folder {
                 dir: sessions_dir,
-                settings: effective.clone(),
-                inherited: effective,
-                forced: forced_list(&chain),
-                inherited_forced: forced_list(&chain),
+                settings: defaults.clone(),
+                inherited: defaults,
                 ..Folder::default()
             };
         }
@@ -688,6 +677,97 @@ pub fn write_folder_settings(dir: &Path, settings: &SessionSettings) -> Result<(
     }
 }
 
+/// Before the global defaults change, keeps the old value in the sessions that
+/// take it from the global defaults (neither the session nor a folder above
+/// it sets the field): for each key in `keys`, writes `old_global`'s value (or
+/// the built-in one) into those session files. Returns how many files changed
+/// and how many sessions could not keep a value (fields with no written form,
+/// such as an unset user name, which is asked at login).
+pub fn keep_old_defaults(
+    config_dir: &Path,
+    old_global: &SessionSettings,
+    keys: &[&str],
+) -> Result<(usize, usize), SessionError> {
+    fn walk(
+        folder: &Folder,
+        set_above: &[&str],
+        old_global: &SessionSettings,
+        keys: &[&str],
+        counts: &mut (usize, usize),
+    ) -> Result<(), SessionError> {
+        // Keys a folder on the way down already sets are not global for its sessions.
+        let mut set_here: Vec<&str> = set_above.to_vec();
+        for key in keys {
+            if folder.own.field_text(key).is_some() {
+                set_here.push(key);
+            }
+        }
+        for session in &folder.sessions {
+            let mut own = read_session_settings(&session.path)?;
+            let mut changed = false;
+            for key in keys {
+                if set_here.contains(key) || own.field_text(key).is_some() {
+                    continue;
+                }
+                let value = if old_global.field_text(key).is_some() {
+                    Some(old_global.clone())
+                } else {
+                    SessionSettings::builtin(key, session.protocol)
+                };
+                match value {
+                    Some(v) => {
+                        own.copy_field(&v, key);
+                        changed = true;
+                    }
+                    None => counts.1 += 1,
+                }
+            }
+            if changed {
+                fs::write(&session.path, own.to_toml()).map_err(|source| SessionError::Io {
+                    path: session.path.clone(),
+                    source,
+                })?;
+                counts.0 += 1;
+            }
+        }
+        for f in &folder.folders {
+            walk(f, &set_here, old_global, keys, counts)?;
+        }
+        Ok(())
+    }
+    let tree = SessionTree::load(config_dir);
+    let mut counts = (0, 0);
+    walk(&tree.root, &[], old_global, keys, &mut counts)?;
+    Ok(counts)
+}
+
+/// Moves a session file into `folder_dir` and returns its new path.
+pub fn move_session(path: &Path, folder_dir: &Path) -> Result<PathBuf, SessionError> {
+    let file_name = path.file_name().ok_or_else(|| SessionError::Invalid {
+        path: path.to_path_buf(),
+        reason: "not a session file".into(),
+    })?;
+    let target = folder_dir.join(file_name);
+    if target == path {
+        return Ok(target);
+    }
+    if target.exists() {
+        return Err(SessionError::Invalid {
+            path: target,
+            reason: "a session with this name already exists there".into(),
+        });
+    }
+    fs::create_dir_all(folder_dir).map_err(|source| SessionError::Io {
+        path: folder_dir.to_path_buf(),
+        source,
+    })?;
+    fs::rename(path, &target).map_err(|source| SessionError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Ok(target)
+}
+
 /// Writes the global defaults (`<config>/defaults.toml`).
 pub fn write_defaults(config_dir: &Path, settings: &SessionSettings) -> Result<(), SessionError> {
     let path = config_dir.join(DEFAULTS_FILE);
@@ -791,19 +871,14 @@ fn read_settings(path: &Path) -> Result<Option<SessionSettings>, SessionError> {
         })
 }
 
-/// Loads a folder. `above` is the chain of layers from `defaults.toml` down
-/// to the parent folder.
+/// Loads a folder that inherits `inherited` from above.
 fn load_folder(
     dir: &Path,
     name: String,
     parents: &[String],
-    above: &[Layer],
+    inherited: &SessionSettings,
     errors: &mut Vec<SessionError>,
 ) -> Folder {
-    let merged_above = above
-        .iter()
-        .fold(SessionSettings::default(), |acc, l| acc.overlay(&l.own));
-    let inherited = apply_forced(merged_above, above);
     let own = match read_settings(&dir.join(FOLDER_FILE)) {
         Ok(own) => own.unwrap_or_default(),
         Err(e) => {
@@ -811,16 +886,7 @@ fn load_folder(
             SessionSettings::default()
         }
     };
-    let mut chain = above.to_vec();
-    chain.push(Layer {
-        own: own.clone(),
-        source: if name.is_empty() {
-            "top-level folder".into()
-        } else {
-            format!("folder {name}")
-        },
-    });
-    let settings = apply_forced(inherited.overlay(&own), &chain);
+    let settings = inherited.overlay(&own);
     let mut trail = parents.to_vec();
     if !name.is_empty() {
         trail.push(name.clone());
@@ -844,8 +910,7 @@ fn load_folder(
         trail: trail.clone(),
         settings: settings.clone(),
         inherited: inherited.clone(),
-        forced: forced_list(&chain),
-        inherited_forced: forced_list(above),
+        own,
         ..Folder::default()
     };
     for path in entries {
@@ -861,7 +926,7 @@ fn load_folder(
                 &path,
                 file_name.to_string(),
                 &trail,
-                &chain,
+                &settings,
                 errors,
             ));
         } else if file_name != FOLDER_FILE && path.extension().is_some_and(|e| e == "toml") {
@@ -871,7 +936,7 @@ fn load_folder(
                 .unwrap_or_default()
                 .to_string();
             let result = read_settings(&path).and_then(|own| {
-                let merged = apply_forced(settings.overlay(&own.unwrap_or_default()), &chain);
+                let merged = settings.overlay(&own.unwrap_or_default());
                 Session::resolve(session_name, trail.clone(), &path, &merged)
             });
             match result {
@@ -966,7 +1031,7 @@ mod tests {
             save_password: Some(false),
             log: LogSettings {
                 enabled: Some(true),
-                path: None,
+                ..LogSettings::default()
             },
             ..SessionSettings::default()
         };
@@ -1029,64 +1094,70 @@ mod tests {
     }
 
     #[test]
-    fn forced_values_override_folders_and_sessions() {
+    fn keep_old_defaults_pins_only_sessions_that_inherit_from_global() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
-        write(
-            dir,
-            "defaults.toml",
-            "username = 'ops'\nport = 22\nforce = ['username']\n[log]\nenabled = true",
-        );
-        write(
-            dir,
-            "sessions/Lab/folder.toml",
-            "username = 'lab'\nport = 2222\nforce = ['port', 'username']",
-        );
-        write(
-            dir,
-            "sessions/Lab/sw.toml",
-            "host = 'sw'\nusername = 'me'\nport = 1\n[log]\nenabled = false",
-        );
-        write(
-            dir,
-            "sessions/free.toml",
-            "host = 'free'\nusername = 'me'\nport = 1",
-        );
+        write(dir, "defaults.toml", "port = 2200");
+        write(dir, "sessions/a.toml", "host = 'a'");
+        write(dir, "sessions/b.toml", "host = 'b'\nport = 9");
+        write(dir, "sessions/Lab/folder.toml", "port = 2222");
+        write(dir, "sessions/Lab/c.toml", "host = 'c'");
+
+        let old = read_session_settings(&dir.join(DEFAULTS_FILE)).unwrap();
+        let new = SessionSettings::from_toml("port = 22\nusername = 'ops'").unwrap();
+        let keys = old.changed_fields(&new);
+        assert_eq!(keys, vec!["port", "username"]);
+        let (changed, skipped) = keep_old_defaults(dir, &old, &keys).unwrap();
+        write_defaults(dir, &new).unwrap();
+        assert_eq!(changed, 1, "only a.toml takes the port from global");
+        assert_eq!(skipped, 3, "an unset user name cannot be written down");
 
         let tree = SessionTree::load(dir);
-        assert!(tree.errors.is_empty(), "{:?}", tree.errors);
-        let lab = tree.root.find(&["Lab".into()]).unwrap();
-        let sw = &lab.sessions[0];
-        // Global forces the user even over the folder's own forced value;
-        // the folder forces the port; log is not forced, so the session wins.
-        assert_eq!(sw.display_target(), "ops@sw:2222");
-        assert!(!sw.log_enabled);
+        let target = |n: &str| {
+            tree.root
+                .all_sessions()
+                .into_iter()
+                .find(|s| s.name == n)
+                .unwrap()
+                .display_target()
+        };
         assert_eq!(
-            lab.forced,
-            vec![
-                Forced {
-                    key: "username".into(),
-                    source: "global".into()
-                },
-                Forced {
-                    key: "port".into(),
-                    source: "folder Lab".into()
-                },
-            ]
+            target("a"),
+            "ops@a:2200",
+            "kept the old port, got the new user"
         );
-        assert_eq!(lab.inherited_forced.len(), 1);
+        assert_eq!(target("b"), "ops@b:9");
+        assert_eq!(target("c"), "ops@c:2222");
+    }
 
-        let free = &tree.root.sessions[0];
-        assert_eq!(
-            free.display_target(),
-            "ops@free:1",
-            "only the user is forced at the top"
-        );
+    #[test]
+    fn moves_sessions_and_reads_legacy_force() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write(dir, "sessions/a.toml", "host = 'a'");
+        let lab = create_folder(&dir.join(SESSIONS_DIR), "Lab").unwrap();
+        let moved = move_session(&dir.join("sessions/a.toml"), &lab).unwrap();
+        assert_eq!(moved, lab.join("a.toml"));
+        write(dir, "sessions/a.toml", "host = 'other'");
+        assert!(move_session(&dir.join("sessions/a.toml"), &lab).is_err());
 
-        let text = SessionSettings::from_toml("force = ['log.enabled']")
+        let legacy = SessionSettings::from_toml("port = 1\nforce = ['port']").unwrap();
+        assert_eq!(legacy.to_toml(), "port = 1\n");
+    }
+
+    #[test]
+    fn log_folder_setting() {
+        let now = chrono::NaiveDate::from_ymd_opt(2026, 1, 2)
             .unwrap()
-            .to_toml();
-        assert_eq!(text, "force = [\"log.enabled\"]\n");
+            .and_hms_opt(3, 4, 5)
+            .unwrap();
+        let s = SessionSettings::from_toml("host = 'h'\n[log]\ndir = '/var/przm'\npath = '%H.log'")
+            .unwrap();
+        let session = Session::resolve("h", vec![], "h.toml", &s).unwrap();
+        assert_eq!(
+            session.log_file(Some(Path::new("/cfg")), &now),
+            PathBuf::from("/var/przm/h.log")
+        );
     }
 
     #[test]

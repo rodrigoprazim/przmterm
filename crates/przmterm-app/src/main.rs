@@ -108,6 +108,8 @@ struct PrzmApp {
     editor: Option<Editor>,
     confirm_delete: Option<Deletion>,
     name_dialog: Option<NameDialog>,
+    /// Sessions can be dragged between folders only while unlocked.
+    drag_unlocked: bool,
     notice: Option<String>,
 }
 
@@ -123,7 +125,12 @@ enum TreeAction {
     RenameFolder(PathBuf, String),
     FolderSettings(Vec<String>),
     DeleteFolder(PathBuf, String, usize),
+    /// Move a session file into a folder.
+    Move(PathBuf, PathBuf),
 }
+
+/// Drag-and-drop payload: the session file being moved.
+struct DragSession(PathBuf);
 
 /// A small dialog asking for a folder name.
 struct NameDialog {
@@ -167,6 +174,7 @@ impl PrzmApp {
             editor: None,
             confirm_delete: None,
             name_dialog: None,
+            drag_unlocked: false,
             notice: None,
         }
     }
@@ -436,12 +444,26 @@ impl PrzmApp {
 }
 
 /// Draws the session tree, collecting what the user picked.
-fn folder_ui(ui: &mut egui::Ui, folder: &Folder, picked: &mut Vec<TreeAction>) {
+fn folder_ui(ui: &mut egui::Ui, folder: &Folder, picked: &mut Vec<TreeAction>, drag: bool) {
     for f in &folder.folders {
         let header = egui::CollapsingHeader::new(format!("📁 {}", f.name))
             .id_salt(&f.dir)
             .default_open(true)
-            .show(ui, |ui| folder_ui(ui, f, picked));
+            .show(ui, |ui| folder_ui(ui, f, picked, drag));
+        if drag {
+            let r = &header.header_response;
+            if r.dnd_hover_payload::<DragSession>().is_some() {
+                ui.painter().rect_stroke(
+                    r.rect.expand(2.0),
+                    egui::CornerRadius::same(3),
+                    egui::Stroke::new(1.5, ui.visuals().selection.stroke.color),
+                    egui::StrokeKind::Outside,
+                );
+            }
+            if let Some(payload) = r.dnd_release_payload::<DragSession>() {
+                picked.push(TreeAction::Move(payload.0.clone(), f.dir.clone()));
+            }
+        }
         header
             .header_response
             .on_hover_text("Right-click to add sessions, rename or set folder defaults")
@@ -479,6 +501,16 @@ fn folder_ui(ui: &mut egui::Ui, folder: &Folder, picked: &mut Vec<TreeAction>) {
             });
     }
     for s in &folder.sessions {
+        if drag {
+            ui.dnd_drag_source(
+                ui.scope_id().with(("drag-session", &s.path)),
+                DragSession(s.path.clone()),
+                |ui| ui.label(format!("⠿ {}", s.name)),
+            )
+            .response
+            .on_hover_text("Drag onto a folder to move it");
+            continue;
+        }
         let response = ui.selectable_label(false, &s.name).on_hover_text(format!(
             "[{}] {}\nDouble-click to connect, right-click for more",
             s.protocol,
@@ -664,6 +696,21 @@ impl eframe::App for PrzmApp {
                     if ui.small_button("⟳").on_hover_text("Reload").clicked() {
                         self.reload_sessions();
                     }
+                    let (lock, hint) = if self.drag_unlocked {
+                        (
+                            "🔓",
+                            "Dragging is on: drag sessions onto folders. Click to lock.",
+                        )
+                    } else {
+                        ("🔒", "Unlock to drag sessions between folders")
+                    };
+                    if ui
+                        .selectable_label(self.drag_unlocked, lock)
+                        .on_hover_text(hint)
+                        .clicked()
+                    {
+                        self.drag_unlocked = !self.drag_unlocked;
+                    }
                     if let Some(dir) = &self.config_dir
                         && ui
                             .small_button("⚙")
@@ -707,7 +754,23 @@ impl eframe::App for PrzmApp {
                         ui.weak(hint);
                     } else {
                         let mut picked = Vec::new();
-                        folder_ui(ui, &self.sessions.root, &mut picked);
+                        let drag = self.drag_unlocked;
+                        // Always shown while unlocked, so the tree does not move mid-drag.
+                        if drag {
+                            let (_, dropped) = ui.dnd_drop_zone::<DragSession, _>(
+                                egui::Frame::default().inner_margin(4.0),
+                                |ui| {
+                                    ui.weak("⬆ Drop here for the top level · drag ⠿ sessions onto folders");
+                                },
+                            );
+                            if let Some(payload) = dropped {
+                                picked.push(TreeAction::Move(
+                                    payload.0.clone(),
+                                    self.sessions.root.dir.clone(),
+                                ));
+                            }
+                        }
+                        folder_ui(ui, &self.sessions.root, &mut picked, drag);
                         for p in picked {
                             match p {
                                 TreeAction::Connect(s) => actions.push(Action::Open(Box::new(s))),
@@ -717,6 +780,20 @@ impl eframe::App for PrzmApp {
                                 }
                                 TreeAction::Delete(s) => {
                                     self.confirm_delete = Some(Deletion::Session(s))
+                                }
+                                TreeAction::Move(path, dir) => {
+                                    self.notice =
+                                        Some(match przmterm_session::move_session(&path, &dir) {
+                                            Ok(new) if new == path => "Already there.".into(),
+                                            Ok(_) => format!(
+                                                "Moved {}.",
+                                                path.file_stem()
+                                                    .unwrap_or_default()
+                                                    .to_string_lossy()
+                                            ),
+                                            Err(e) => format!("Cannot move: {e}"),
+                                        });
+                                    self.reload_sessions();
                                 }
                                 TreeAction::NewSession(trail) => {
                                     self.editor = Some(Editor::new_session(&trail))
