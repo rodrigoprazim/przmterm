@@ -31,6 +31,14 @@ All notable changes to PrzmTerm are recorded here. The format follows
   global settings keep the other protocols' fields under a collapsed section.
 - A split or new tab of a serial session explains that the port is already
   open instead of failing to open it twice.
+- Messages such as "Saved …" or "BREAK sent." appear in the status bar for a
+  few seconds instead of under *Sessions*.
+
+### Fixed
+
+- A key file set to the public key (`.pub`) uses the private key next to it;
+  without one, the error says to choose the private key. The file dialog
+  does the same.
 
 ## [0.3.0] - 2026-11-01
 

@@ -10,7 +10,7 @@ date. Version numbering and the release procedure are in
 | 0.1.0 | Foundation | Released |
 | 0.2.0 | SSH | Released |
 | 0.3.0 | Daily-driver MVP | Released |
-| 0.4.0 | Telnet and serial | In progress |
+| 0.4.0 | Telnet and serial | Released |
 | 0.5.0 | Network gear | Planned |
 | 0.6.0 | Productivity | Planned |
 | 0.7.0 | Scripting | Planned |
@@ -64,15 +64,20 @@ Checked by the maintainer on macOS against his own servers, including 2FA logins
 
 - [x] Telnet with option negotiation (NAWS, TTYPE, ECHO, SGA)
 - [x] Serial console: baud rate, parity, stop bits, flow control, BREAK; port enumeration
-- [ ] Gate checked on real equipment
+- [x] Gate checked: Telnet on the maintainer's equipment; serial against a
+      virtual cable and in tests (real USB adapter still to be confirmed)
 
 **Gate:** a Telnet login and a serial console (USB adapter) to network
-equipment work for a full session, including BREAK.
+equipment work for a full session, including BREAK. Telnet was checked on real
+equipment; the serial console has only been checked against a virtual cable.
 
 ## 0.5.0 — Network gear
 
 - Import sessions from SecureCRT
-- Jump hosts (ProxyJump, chained) and port forwarding (local, remote, dynamic)
+- Jump hosts (ProxyJump, chained) and tunnels: port forwarding (local, remote,
+  dynamic / SOCKS)
+- X11 forwarding: remote graphical programs shown on the local X server
+  (XQuartz on macOS, VcXsrv or similar on Windows)
 - Legacy SSH algorithms enabled per session, with a visible "legacy" badge;
   libssh2 fallback where `russh` lacks an algorithm
 - Keepalive and automatic reconnect
@@ -81,7 +86,9 @@ equipment work for a full session, including BREAK.
 
 ## 0.6.0 — Productivity
 
-- Button bar and quick commands
+- Button bar with macro buttons organised in tabs (one tab per device type,
+  project, etc.): a button sends text or a command sequence to the current
+  session, to several sessions at once, or runs a script
 - Send input to several tabs at once
 - Keyword highlighting and regex triggers
 - Password vault: an encrypted file (master password, Argon2id +
@@ -125,5 +132,5 @@ equipment work for a full session, including BREAK.
 
 ## After 1.0
 
-X11 forwarding, Kerberos/GSSAPI, smart cards (PKCS#11), session sync through
+Kerberos/GSSAPI, smart cards (PKCS#11), session sync through
 Git, inventory import (Ansible, Zabbix, NetBox).

@@ -1140,6 +1140,19 @@ where
     last
 }
 
+fn is_public_key_file(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e == "pub")
+}
+
+/// For `id_ed25519.pub`, `id_ed25519` if it exists.
+pub fn private_key_for(path: &Path) -> Option<PathBuf> {
+    if !is_public_key_file(path) {
+        return None;
+    }
+    let private = path.with_extension("");
+    private.is_file().then_some(private)
+}
+
 /// Explicit identity files first, then the OpenSSH defaults that exist.
 fn identity_candidates(config: &SshConfig) -> Vec<(PathBuf, bool)> {
     let mut out: Vec<(PathBuf, bool)> = config
@@ -1176,6 +1189,25 @@ async fn key_file_auth(
         );
     }
     for (path, explicit) in candidates {
+        // A `.pub` file is the public half; the private key sits next to it.
+        let path = match private_key_for(&path) {
+            Some(private) => {
+                out.debug(&format!(
+                    "{} is a public key; using the private key {}",
+                    path.display(),
+                    private.display()
+                ));
+                private
+            }
+            None if is_public_key_file(&path) => {
+                out.error(&format!(
+                    "{} is a public key. Choose the private key (the same name without .pub).",
+                    path.display()
+                ));
+                continue;
+            }
+            None => path,
+        };
         out.debug(&format!("Trying key file {}", path.display()));
         let key = match keys::load_secret_key(&path, None) {
             Ok(key) => key,
@@ -1467,6 +1499,18 @@ mod tests {
             check_host_key("h", 2222, &k2, &own, std::slice::from_ref(&extra)),
             HostKeyStatus::Changed { .. }
         ));
+    }
+
+    #[test]
+    fn public_key_files_point_to_the_private_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let private = dir.path().join("lab_key");
+        let public = dir.path().join("lab_key.pub");
+        std::fs::write(&public, "ssh-ed25519 AAAA").unwrap();
+        assert_eq!(private_key_for(&public), None, "no private key yet");
+        std::fs::write(&private, "secret").unwrap();
+        assert_eq!(private_key_for(&public), Some(private.clone()));
+        assert_eq!(private_key_for(&private), None);
     }
 
     #[test]

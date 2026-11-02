@@ -851,7 +851,10 @@ fn pick_key_file() -> Option<PathBuf> {
     {
         dialog = dialog.set_directory(ssh);
     }
-    dialog.pick_file()
+    // Picking `key.pub` means the private key next to it.
+    dialog
+        .pick_file()
+        .map(|path| przmterm_transport::ssh::private_key_for(&path).unwrap_or(path))
 }
 
 /// A compact folder chooser: a button showing the path, opening a scrollable tree.

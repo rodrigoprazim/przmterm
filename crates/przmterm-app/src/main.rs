@@ -111,8 +111,14 @@ struct PrzmApp {
     name_dialog: Option<NameDialog>,
     /// Sessions can be dragged between folders only while unlocked.
     drag_unlocked: bool,
+    /// A message for the status bar, set anywhere during a frame.
     notice: Option<String>,
+    /// The message the status bar shows, and since when.
+    status: Option<(String, std::time::Instant)>,
 }
+
+/// How long a status bar message stays.
+const STATUS_TIME: std::time::Duration = std::time::Duration::from_secs(8);
 
 /// What the user picked in the session tree.
 enum TreeAction {
@@ -177,6 +183,7 @@ impl PrzmApp {
             name_dialog: None,
             drag_unlocked: false,
             notice: None,
+            status: None,
         }
     }
 
@@ -565,6 +572,15 @@ impl eframe::App for PrzmApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let mut actions: Vec<Action> = Vec::new();
+        if let Some(notice) = self.notice.take() {
+            self.status = Some((notice, std::time::Instant::now()));
+        }
+        if let Some((_, since)) = &self.status {
+            match STATUS_TIME.checked_sub(since.elapsed()) {
+                Some(left) => ctx.request_repaint_after(left),
+                None => self.status = None,
+            }
+        }
 
         // Every pane keeps reading, visible or not.
         let mut got = false;
@@ -717,6 +733,12 @@ impl eframe::App for PrzmApp {
                     {
                         actions.push(Action::SendBreak);
                     }
+                    if let Some((text, _)) = &self.status {
+                        ui.separator();
+                        ui.label(
+                            egui::RichText::new(text).color(egui::Color32::from_rgb(140, 200, 255)),
+                        );
+                    }
                 });
             });
         });
@@ -772,9 +794,6 @@ impl eframe::App for PrzmApp {
                         });
                     }
                 });
-                if let Some(notice) = &self.notice {
-                    ui.weak(notice);
-                }
                 ui.separator();
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     if self.sessions.root.all_sessions().is_empty() {
@@ -963,6 +982,10 @@ impl eframe::App for PrzmApp {
 
         for action in actions {
             self.apply(action, &ctx);
+        }
+        // A message set this frame shows on the next one.
+        if self.notice.is_some() {
+            ctx.request_repaint();
         }
     }
 }
