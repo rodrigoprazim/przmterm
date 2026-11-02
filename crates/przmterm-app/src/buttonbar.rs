@@ -5,13 +5,12 @@ use std::path::Path;
 
 use eframe::egui;
 use przmterm_session::buttons::{
-    ButtonBar, ButtonTab, Chunk, MacroButton, Target, parse_send, read_buttons, write_buttons,
+    ButtonBar, ButtonTab, Chunk, MacroButton, parse_send, read_buttons, write_buttons,
 };
 
-/// A button was pressed: what to send, and where.
+/// A button was pressed: what to send to the current session.
 pub struct Press {
     pub chunks: Vec<Chunk>,
-    pub target: Target,
 }
 
 struct ButtonEdit {
@@ -115,6 +114,13 @@ impl ButtonBarUi {
                         self.delete_tab = Some(i);
                         ui.close();
                     }
+                    ui.separator();
+                    if ui
+                        .checkbox(&mut self.bar.tooltips, "Show tooltips")
+                        .changed()
+                    {
+                        changed = true;
+                    }
                 });
             }
             ui.separator();
@@ -123,22 +129,17 @@ impl ButtonBarUi {
             let mut moved = None;
             let mut removed = None;
             for (i, button) in self.bar.tabs[tab].buttons.iter().enumerate() {
-                let mark = match button.target {
-                    Target::Current => "",
-                    Target::Tab => " ⇉",
-                    Target::All => " ⇶",
-                };
-                let response = ui
-                    .button(format!("{}{mark}", button.label))
-                    .on_hover_text(format!(
-                        "Sends to the {}:\n{}",
-                        button.target.label(),
-                        button.send
-                    ));
+                let mut response = ui.button(&button.label);
+                if self.bar.tooltips {
+                    response = response.on_hover_text(if button.description.is_empty() {
+                        button.send.clone()
+                    } else {
+                        button.description.clone()
+                    });
+                }
                 if response.clicked() {
                     press = Some(Press {
                         chunks: parse_send(&button.send),
-                        target: button.target,
                     });
                 }
                 response.context_menu(|ui| {
@@ -169,6 +170,13 @@ impl ButtonBarUi {
                     if ui.button("Delete").clicked() {
                         removed = Some(i);
                         ui.close();
+                    }
+                    ui.separator();
+                    if ui
+                        .checkbox(&mut self.bar.tooltips, "Show tooltips")
+                        .changed()
+                    {
+                        changed = true;
                     }
                 });
             }
@@ -249,21 +257,26 @@ impl ButtonBarUi {
                         ui.label("");
                         ui.weak("\\r Enter   \\n line feed   \\t Tab   \\e Esc   \\p pause 1 s");
                         ui.end_row();
-                        ui.label("Send to");
-                        egui::ComboBox::from_id_salt("button-target")
-                            .width(320.0)
-                            .selected_text(edit.button.target.label())
-                            .show_ui(ui, |ui| {
-                                for t in Target::ALL {
-                                    ui.selectable_value(&mut edit.button.target, t, t.label());
-                                }
-                            });
+                        ui.label("Description");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut edit.button.description)
+                                .hint_text("Shown when the pointer rests on the button")
+                                .desired_width(320.0),
+                        );
                         ui.end_row();
                     });
                 if let Some(err) = &edit.error {
                     ui.colored_label(ui.visuals().error_fg_color, err);
                 }
                 ui.horizontal(|ui| {
+                    if ui
+                        .button("Clear")
+                        .on_hover_text("Empty every field")
+                        .clicked()
+                    {
+                        edit.button = MacroButton::default();
+                        edit.error = None;
+                    }
                     if ui.button("Save").clicked() {
                         done = Some(true);
                     }

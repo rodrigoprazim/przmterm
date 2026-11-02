@@ -17,15 +17,21 @@ All notable changes to PrzmTerm are recorded here. The format follows
   default colour is recoloured.
 - Button bar with macro buttons in tabs (*▤ Buttons* in the status bar,
   `<config>/buttons.toml`): a button sends text with `\r` (Enter), `\t`,
-  `\e`, `\n` and `\p` (one-second pause) to the current session, every
-  session of the tab, or every session. Right-click a button to edit, move or
-  delete it, and a tab to rename, add or delete tabs.
-- *⇶ Send to all* in the status bar: while on, what is typed goes to every
-  connected session in every tab.
+  `\e`, `\n` and `\p` (one-second pause) to the current session. Each has
+  an optional description, shown as its tooltip; tooltips can be turned off
+  (right-click the bar). The button dialog has *Clear*. Right-click a button
+  to edit, move or delete it, and a tab to rename, add or delete tabs.
+- *⇶ Send to all* in the status bar of a split tab: after a warning, what is
+  typed goes to every pane of that tab until turned off (or the tab changes).
+- Search in the session list: filters by name, host or IP; Enter connects
+  to the first match, Esc clears it.
+- Quitting with sessions connected asks first.
 - Keyword set editor (**+** › *Keyword sets…*, or *Edit sets…* next to
   *Keywords* in the session editor): create, rename and delete sets; add,
   find, reorder and remove rules with colour pickers; a live preview on
-  editable sample text. Open panes using a changed set update at once.
+  editable sample text; *Cancel* drops unsaved changes, and closing or
+  switching sets with unsaved changes asks first. Open panes using a changed
+  set update at once.
 - SecureCRT keyword lists (`Config/Keywords/*.ini`) import with the other
   SecureCRT files, and imported sessions keep their keyword set.
 
@@ -102,6 +108,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
   open instead of failing to open it twice.
 - Messages such as "Saved …" or "BREAK sent." appear in the status bar for a
   few seconds instead of under *Sessions*.
+- The session list reaches up to the toolbar; the tabs of open sessions and
+  the button bar span the terminal only.
 - Long session names stay on one line; the session list scrolls sideways
   instead of wrapping them.
 - The session list can be hidden for a wider terminal: ◀ next to *Sessions*,

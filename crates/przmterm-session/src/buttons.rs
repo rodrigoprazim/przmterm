@@ -10,10 +10,13 @@
 //! send = 'show ip interface brief\r'
 //!
 //! [[tab.button]]
-//! label = "Save all"
+//! label = "Save"
 //! send = 'copy run start\r\p\r'   # \p waits a second
-//! target = "all"                 # current (default), tab or all
+//! description = "Saves the running configuration"
 //! ```
+//!
+//! A button sends to the session that has the keyboard. `tooltips = false`
+//! at the top of the file stops the descriptions from popping up.
 //!
 //! In `send`, `\r` is Enter, `\n` a line feed, `\t` Tab, `\e` Escape,
 //! `\p` a one-second pause and `\\` a backslash. Write `send` in single
@@ -30,43 +33,20 @@ pub const BUTTONS_FILE: &str = "buttons.toml";
 /// How long `\p` waits.
 pub const PAUSE: Duration = Duration::from_secs(1);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Target {
-    /// The pane with the keyboard focus.
-    #[default]
-    Current,
-    /// Every connected pane of the current tab.
-    Tab,
-    /// Every connected pane of every tab.
-    All,
-}
-
-impl Target {
-    pub const ALL: [Target; 3] = [Target::Current, Target::Tab, Target::All];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Target::Current => "current session",
-            Target::Tab => "all sessions in the tab",
-            Target::All => "all sessions",
-        }
-    }
-}
-
-fn is_default<T: Default + PartialEq>(v: &T) -> bool {
-    *v == T::default()
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MacroButton {
     pub label: String,
-    /// Text to send, with the escapes above.
+    /// Text to send to the current session, with the escapes above.
     #[serde(default)]
     pub send: String,
-    #[serde(default, skip_serializing_if = "is_default")]
-    pub target: Target,
+    /// Shown when the pointer rests on the button.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// Accepted and ignored: written by a development build of 0.6.
+    #[doc(hidden)]
+    #[serde(default, rename = "target", skip_serializing)]
+    pub legacy_target: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,11 +57,31 @@ pub struct ButtonTab {
     pub buttons: Vec<MacroButton>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ButtonBar {
+    /// Show a button's description (or text) when the pointer rests on it.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub tooltips: bool,
     #[serde(default, rename = "tab")]
     pub tabs: Vec<ButtonTab>,
+}
+
+impl Default for ButtonBar {
+    fn default() -> Self {
+        Self {
+            tooltips: true,
+            tabs: Vec::new(),
+        }
+    }
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
 }
 
 /// A piece of what a button sends.
@@ -178,28 +178,40 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(read_buttons(dir.path()).unwrap(), ButtonBar::default());
         let bar = ButtonBar {
+            tooltips: false,
             tabs: vec![ButtonTab {
                 name: "Cisco".into(),
                 buttons: vec![
                     MacroButton {
                         label: "Interfaces".into(),
                         send: "show ip int brief\\r".into(),
-                        target: Target::Current,
+                        ..MacroButton::default()
                     },
                     MacroButton {
-                        label: "Save all".into(),
+                        label: "Save".into(),
                         send: "wr\\r".into(),
-                        target: Target::All,
+                        description: "Saves the configuration".into(),
+                        ..MacroButton::default()
                     },
                 ],
             }],
         };
         write_buttons(dir.path(), &bar).unwrap();
         let text = std::fs::read_to_string(dir.path().join(BUTTONS_FILE)).unwrap();
+        assert!(text.contains("tooltips = false"), "{text}");
         assert!(
-            text.contains("[[tab.button]]") && text.contains("target = \"all\""),
+            text.contains("description = \"Saves the configuration\""),
             "{text}"
         );
         assert_eq!(read_buttons(dir.path()).unwrap(), bar);
+        // Files from before: `target` is accepted and dropped; tooltips on.
+        std::fs::write(
+            dir.path().join(BUTTONS_FILE),
+            "[[tab]]\nname = 'x'\n[[tab.button]]\nlabel = 'a'\nsend = 'b'\ntarget = 'all'\n",
+        )
+        .unwrap();
+        let old = read_buttons(dir.path()).unwrap();
+        assert!(old.tooltips);
+        assert_eq!(old.tabs[0].buttons[0].send, "b");
     }
 }

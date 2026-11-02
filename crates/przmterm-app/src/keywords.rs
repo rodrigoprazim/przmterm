@@ -13,6 +13,14 @@ GigabitEthernet0/2   down    down    admin-down
 BGP peer 2001:db8::1 Established, uptime 12:34:56
 Alarm: major LOS on port 3, mac 00:1a:2b:3c:4d:5e";
 
+/// What waits for "unsaved changes will be lost?".
+#[derive(Clone)]
+enum Pending {
+    Close,
+    Load(String),
+    New,
+}
+
 pub enum KeywordResult {
     Open,
     /// Closed; the named sets were saved or deleted.
@@ -36,6 +44,10 @@ pub struct KeywordEditor {
     confirm_delete: bool,
     /// Sets saved or deleted while the window was open.
     touched: Vec<String>,
+    /// An action held back because of unsaved changes.
+    pending: Option<Pending>,
+    /// Close on the next frame (the pending close was confirmed).
+    closing: bool,
     error: Option<String>,
 }
 
@@ -53,6 +65,8 @@ impl KeywordEditor {
             compiled: None,
             confirm_delete: false,
             touched: Vec::new(),
+            pending: None,
+            closing: false,
             error: None,
         };
         let first = select
@@ -160,11 +174,20 @@ impl KeywordEditor {
                     ui.vertical(|ui| self.set_ui(ui, &mut close));
                 });
             });
-        if !open || close {
-            KeywordResult::Closed(std::mem::take(&mut self.touched))
-        } else {
-            KeywordResult::Open
+        if !open {
+            close = true;
         }
+        if close {
+            if self.dirty() {
+                self.pending = Some(Pending::Close);
+            } else {
+                return KeywordResult::Closed(std::mem::take(&mut self.touched));
+            }
+        }
+        if self.closing {
+            return KeywordResult::Closed(std::mem::take(&mut self.touched));
+        }
+        KeywordResult::Open
     }
 
     fn list(&mut self, ui: &mut egui::Ui) {
@@ -188,12 +211,12 @@ impl KeywordEditor {
                         let _ = ui.selectable_label(true, RichText::new(&self.name).italics());
                     }
                     if let Some(name) = pick {
-                        self.load(&name);
+                        self.request(Pending::Load(name));
                     }
                 });
             ui.add_space(6.0);
             if ui.button("+ New set").clicked() {
-                self.new_set();
+                self.request(Pending::New);
             }
             if self.current.is_some() {
                 if self.confirm_delete {
@@ -226,6 +249,73 @@ impl KeywordEditor {
                     self.confirm_delete = true;
                 }
             }
+        });
+    }
+
+    /// Does `action` now, or asks first if there are unsaved changes.
+    fn request(&mut self, action: Pending) {
+        if self.dirty() {
+            self.pending = Some(action);
+        } else {
+            self.perform(action);
+        }
+    }
+
+    fn perform(&mut self, action: Pending) {
+        match action {
+            Pending::Close => self.closing = true,
+            Pending::Load(name) => self.load(&name),
+            Pending::New => self.new_set(),
+        }
+    }
+
+    /// Puts back the set as it was last saved (or drops a new one).
+    fn discard(&mut self) {
+        match self.current.clone() {
+            Some(name) => self.load(&name),
+            None => match self.sets.first().cloned() {
+                Some(first) => self.load(&first),
+                None => self.new_set(),
+            },
+        }
+        self.error = None;
+    }
+
+    /// The "unsaved changes" question, in place of the buttons.
+    fn pending_ui(&mut self, ui: &mut egui::Ui) {
+        let Some(action) = self.pending.clone() else {
+            return;
+        };
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                format!(
+                    "The changes to {} are not saved. They will be lost if you go on.",
+                    self.name.trim()
+                ),
+            );
+            ui.horizontal(|ui| {
+                if ui.button("Save and go on").clicked() {
+                    match self.save() {
+                        Ok(()) => {
+                            self.pending = None;
+                            self.perform(action.clone());
+                        }
+                        Err(e) => {
+                            self.error = Some(e);
+                            self.pending = None;
+                        }
+                    }
+                }
+                if ui.button("Discard changes").clicked() {
+                    self.pending = None;
+                    self.discard();
+                    self.perform(action.clone());
+                }
+                if ui.button("Back").clicked() {
+                    self.pending = None;
+                }
+            });
         });
     }
 
@@ -299,18 +389,27 @@ impl KeywordEditor {
             ui.colored_label(ui.visuals().error_fg_color, err);
         }
         ui.add_space(6.0);
+        if self.pending.is_some() {
+            self.pending_ui(ui);
+            return;
+        }
         ui.horizontal(|ui| {
+            let dirty = self.dirty();
+            if ui.add_enabled(dirty, egui::Button::new("Save")).clicked() {
+                self.error = self.save().err();
+            }
             if ui
-                .add_enabled(self.dirty(), egui::Button::new("Save"))
+                .add_enabled(dirty, egui::Button::new("Cancel"))
+                .on_hover_text("Throw away the changes since the last save")
                 .clicked()
             {
-                self.error = self.save().err();
+                self.discard();
             }
             if ui.button("Close").clicked() {
                 *close = true;
             }
-            if self.dirty() {
-                ui.weak("Unsaved changes");
+            if dirty {
+                ui.colored_label(ui.visuals().warn_fg_color, "Unsaved changes");
             }
         });
     }
@@ -448,7 +547,7 @@ fn rule_row(
         ui.checkbox(&mut rule.bold, "bold");
     });
     if ui
-        .small_button("✕")
+        .small_button("×")
         .on_hover_text("Remove the rule")
         .clicked()
     {
@@ -505,6 +604,14 @@ mod tests {
         e.save().unwrap();
         assert_eq!(przmterm_session::keyword_sets(dir.path()), ["Network"]);
         assert_eq!(e.touched, ["Cisco", "Cisco", "Network"]);
+
+        // Unsaved changes hold back switching sets until answered.
+        e.set.match_case = true;
+        e.request(Pending::New);
+        assert!(e.pending.is_some() && e.current.as_deref() == Some("Network"));
+        e.pending = None;
+        e.discard();
+        assert!(!e.dirty() && !e.set.match_case);
 
         // A second set cannot take an existing name.
         e.new_set();

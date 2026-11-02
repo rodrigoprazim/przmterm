@@ -119,6 +119,8 @@ struct PrzmApp {
     drag_unlocked: bool,
     /// The session list is folded away for more terminal room.
     sessions_hidden: bool,
+    /// Text the session list is filtered by (name, host or IP).
+    session_filter: String,
     /// A message for the status bar, set anywhere during a frame.
     notice: Option<String>,
     /// The message the status bar shows, and since when.
@@ -129,8 +131,14 @@ struct PrzmApp {
     keyword_editor: Option<keywords::KeywordEditor>,
     /// Macro buttons above the status bar.
     buttons: buttonbar::ButtonBarUi,
-    /// What is typed goes to every connected pane.
+    /// What is typed goes to every connected pane of the current tab.
     broadcast: bool,
+    /// Asking before turning `broadcast` on.
+    confirm_broadcast: bool,
+    /// Asking before quitting with sessions open.
+    confirm_quit: bool,
+    /// The quit was confirmed: let the window close.
+    quitting: bool,
 }
 
 /// Folder SecureCRT sessions are imported into.
@@ -203,12 +211,16 @@ impl PrzmApp {
             name_dialog: None,
             drag_unlocked: false,
             sessions_hidden: false,
+            session_filter: String::new(),
             notice: None,
             status: None,
             import_result: None,
             keyword_editor: None,
             buttons,
             broadcast: false,
+            confirm_broadcast: false,
+            confirm_quit: false,
+            quitting: false,
         }
     }
 
@@ -292,7 +304,10 @@ impl PrzmApp {
                 }
                 self.active_tab = self.active_tab.min(self.tabs.len() - 1);
             }
-            Action::SelectTab(index) => self.active_tab = index,
+            Action::SelectTab(index) => {
+                self.active_tab = index;
+                self.broadcast = false;
+            }
             Action::Split(layout) => {
                 let pane = self.tab().pane().clone_session(&env, waker);
                 let tab = self.tab_mut();
@@ -313,28 +328,20 @@ impl PrzmApp {
             }
             Action::FocusPane(index) => self.tab_mut().active = index,
             Action::ToggleSessions => self.sessions_hidden = !self.sessions_hidden,
-            Action::ToggleBroadcast => self.broadcast = !self.broadcast,
+            Action::ToggleBroadcast => {
+                if self.broadcast {
+                    self.broadcast = false;
+                } else {
+                    self.confirm_broadcast = true;
+                }
+            }
             Action::ToggleButtons => self.buttons.visible = !self.buttons.visible,
             Action::Macro(press) => {
-                use przmterm_session::buttons::Target;
-                let active_tab = self.active_tab;
-                let mut sent = 0;
-                for (t, tab) in self.tabs.iter_mut().enumerate() {
-                    let tab_active = tab.active;
-                    for (i, pane) in tab.panes.iter_mut().enumerate() {
-                        let wanted = match press.target {
-                            Target::Current => t == active_tab && i == tab_active,
-                            Target::Tab => t == active_tab,
-                            Target::All => true,
-                        };
-                        if wanted && !pane.transport.is_closed() {
-                            pane.enqueue(&press.chunks);
-                            sent += 1;
-                        }
-                    }
-                }
-                if press.target != Target::Current {
-                    self.notice = Some(format!("Sent to {sent} session(s)."));
+                let pane = self.tab_mut().pane_mut();
+                if pane.transport.is_closed() {
+                    self.notice = Some("The session is closed.".into());
+                } else {
+                    pane.enqueue(&press.chunks);
                 }
                 self.run_queues(ctx);
             }
@@ -434,6 +441,17 @@ impl PrzmApp {
             || self.import_result.is_some()
             || self.keyword_editor.is_some()
             || self.buttons.modal()
+            || self.confirm_broadcast
+            || self.confirm_quit
+    }
+
+    /// Panes with a live connection to a session.
+    fn open_sessions(&self) -> usize {
+        self.tabs
+            .iter()
+            .flat_map(|t| &t.panes)
+            .filter(|p| p.origin.is_some() && !p.transport.is_closed())
+            .count()
     }
 
     /// Imports SecureCRT sessions into the `SecureCRT` folder and shows what
@@ -479,6 +497,74 @@ impl PrzmApp {
 
     /// The session editor and the delete confirmation.
     fn dialogs(&mut self, ctx: &egui::Context) {
+        if self.confirm_quit {
+            let n = self.open_sessions();
+            let mut answer = None;
+            egui::Window::new("Quit PrzmTerm?")
+                .pivot(egui::Align2::CENTER_CENTER)
+                .default_pos(ctx.content_rect().center())
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label(format!(
+                        "{n} session(s) are still connected. Quitting disconnects them."
+                    ));
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Quit").clicked() {
+                            answer = Some(true);
+                        }
+                        if ui.button("Cancel").clicked()
+                            || ctx.input(|i| i.key_pressed(egui::Key::Escape))
+                        {
+                            answer = Some(false);
+                        }
+                    });
+                });
+            match answer {
+                Some(true) => {
+                    self.confirm_quit = false;
+                    self.quitting = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                Some(false) => self.confirm_quit = false,
+                None => {}
+            }
+        }
+        if self.confirm_broadcast {
+            let n = self.tab().panes.len();
+            let mut answer = None;
+            egui::Window::new("Send to all sessions in this tab?")
+                .pivot(egui::Align2::CENTER_CENTER)
+                .default_pos(ctx.content_rect().center())
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label(format!(
+                        "Everything you type will go to all {n} sessions in this tab, \
+                         until you turn it off."
+                    ));
+                    ui.colored_label(
+                        ui.visuals().warn_fg_color,
+                        "Check that every pane is where the commands should run.",
+                    );
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Turn on").clicked() {
+                            answer = Some(true);
+                        }
+                        if ui.button("Cancel").clicked()
+                            || ctx.input(|i| i.key_pressed(egui::Key::Escape))
+                        {
+                            answer = Some(false);
+                        }
+                    });
+                });
+            if let Some(on) = answer {
+                self.broadcast = on;
+                self.confirm_broadcast = false;
+            }
+        }
         if let Some(editor) = &mut self.keyword_editor
             && let keywords::KeywordResult::Closed(changed) = editor.show(ctx)
         {
@@ -649,12 +735,32 @@ impl PrzmApp {
 }
 
 /// Draws the session tree, collecting what the user picked.
-fn folder_ui(ui: &mut egui::Ui, folder: &Folder, picked: &mut Vec<TreeAction>, drag: bool) {
+/// True if the session's name, host or address contains `filter`
+/// (already lower-case).
+fn session_matches(s: &Session, filter: &str) -> bool {
+    filter.is_empty()
+        || s.name.to_lowercase().contains(filter)
+        || s.display_target().to_lowercase().contains(filter)
+}
+
+fn folder_ui(
+    ui: &mut egui::Ui,
+    folder: &Folder,
+    picked: &mut Vec<TreeAction>,
+    drag: bool,
+    filter: &str,
+) {
     for f in &folder.folders {
-        let header = egui::CollapsingHeader::new(format!("📁 {}", f.name))
+        if !filter.is_empty() && !f.all_sessions().iter().any(|s| session_matches(s, filter)) {
+            continue;
+        }
+        let mut header = egui::CollapsingHeader::new(format!("📁 {}", f.name))
             .id_salt(&f.dir)
-            .default_open(true)
-            .show(ui, |ui| folder_ui(ui, f, picked, drag));
+            .default_open(true);
+        if !filter.is_empty() {
+            header = header.open(Some(true)); // show every match while searching
+        }
+        let header = header.show(ui, |ui| folder_ui(ui, f, picked, drag, filter));
         if drag {
             let r = &header.header_response;
             if r.dnd_hover_payload::<DragSession>().is_some() {
@@ -706,6 +812,9 @@ fn folder_ui(ui: &mut egui::Ui, folder: &Folder, picked: &mut Vec<TreeAction>, d
             });
     }
     for s in &folder.sessions {
+        if !session_matches(s, filter) {
+            continue;
+        }
         if drag {
             ui.dnd_drag_source(
                 ui.scope_id().with(("drag-session", &s.path)),
@@ -754,6 +863,14 @@ impl eframe::App for PrzmApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let mut actions: Vec<Action> = Vec::new();
+        // Closing the window (or ⌘Q) with sessions open asks first.
+        if ctx.input(|i| i.viewport().close_requested())
+            && !self.quitting
+            && self.open_sessions() > 0
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.confirm_quit = true;
+        }
         if let Some(notice) = self.notice.take() {
             self.status = Some((notice, std::time::Instant::now()));
         }
@@ -776,6 +893,10 @@ impl eframe::App for PrzmApp {
         }
         self.run_retries(&ctx);
         self.run_queues(&ctx);
+        // "Send to all" is for split panes: off when the tab has one pane.
+        if self.tab().panes.len() < 2 {
+            self.broadcast = false;
+        }
 
         let title = format!("{} — PrzmTerm", self.tab().pane().title());
         if title != self.title {
@@ -815,7 +936,7 @@ impl eframe::App for PrzmApp {
                         }
                     };
                     if ui
-                        .button("✕ Pane")
+                        .button("× Pane")
                         .on_hover_text(format!("Close pane ({})", shortcut("W")))
                         .clicked()
                     {
@@ -836,41 +957,6 @@ impl eframe::App for PrzmApp {
                         actions.push(Action::Split(Layout::Columns));
                     }
                 });
-            });
-        });
-
-        egui::Panel::top("tabs").show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                for (i, tab) in self.tabs.iter().enumerate() {
-                    let mut title = tab.title();
-                    if title.chars().count() > 28 {
-                        title = title.chars().take(27).collect::<String>() + "…";
-                    }
-                    if tab.pane().transport.is_closed() && tab.pane().origin.is_some() {
-                        title = format!("○ {title}");
-                    } else if !tab.pane().transport.weak_algorithms().is_empty() {
-                        title = format!("⚠ {title}");
-                    }
-                    let tab_button = ui.selectable_label(i == self.active_tab, title);
-                    if tab_button.clicked() {
-                        actions.push(Action::SelectTab(i));
-                    }
-                    if tab_button.middle_clicked() {
-                        actions.push(Action::CloseTab(i));
-                    }
-                    if ui.small_button("×").on_hover_text("Close tab").clicked() {
-                        actions.push(Action::CloseTab(i));
-                    }
-                    ui.separator();
-                }
-                let new_tab = if cfg!(target_os = "macos") {
-                    "New tab with the same session (⌘⇧T)"
-                } else {
-                    "New tab with the same session (Ctrl+Shift+T)"
-                };
-                if ui.button("+").on_hover_text(new_tab).clicked() {
-                    actions.push(Action::NewTab);
-                }
             });
         });
 
@@ -921,21 +1007,24 @@ impl eframe::App for PrzmApp {
                     if ui.add(button).on_hover_text(hover).clicked() {
                         actions.push(Action::ToggleLog);
                     }
-                    let broadcast = ui
-                        .selectable_label(
-                            self.broadcast,
-                            if self.broadcast {
-                                egui::RichText::new(" ⇶ Typing to all ")
-                                    .color(egui::Color32::BLACK)
-                                    .background_color(egui::Color32::from_rgb(240, 170, 60))
-                            } else {
-                                egui::RichText::new("⇶ Send to all")
-                            },
-                        )
-                        .on_hover_text(
-                            "When on, what you type goes to every connected session in every tab",
-                        );
-                    if broadcast.clicked() {
+                    let split = self.tabs[self.active_tab].panes.len() > 1;
+                    let broadcast = split
+                        && ui
+                            .selectable_label(
+                                self.broadcast,
+                                if self.broadcast {
+                                    egui::RichText::new(" ⇶ Typing to all ")
+                                        .color(egui::Color32::BLACK)
+                                        .background_color(egui::Color32::from_rgb(240, 170, 60))
+                                } else {
+                                    egui::RichText::new("⇶ Send to all")
+                                },
+                            )
+                            .on_hover_text(
+                                "When on, what you type goes to every session in this tab",
+                            )
+                            .clicked();
+                    if broadcast {
                         actions.push(Action::ToggleBroadcast);
                     }
                     if ui
@@ -966,16 +1055,6 @@ impl eframe::App for PrzmApp {
             });
         });
 
-        if self.buttons.visible {
-            egui::Panel::bottom("buttons").show(ui, |ui| {
-                if let Some(press) = self.buttons.show(ui, self.config_dir.as_deref()) {
-                    actions.push(Action::Macro(press));
-                }
-                if let Some(err) = &self.buttons.error {
-                    ui.colored_label(ui.visuals().error_fg_color, format!("Buttons: {err}"));
-                }
-            });
-        }
         if self.sessions_hidden {
             egui::Panel::left("sessions-folded")
                 .resizable(false)
@@ -1088,6 +1167,20 @@ impl eframe::App for PrzmApp {
                         });
                     }
                 });
+                let search = ui.add(
+                    egui::TextEdit::singleline(&mut self.session_filter)
+                        .hint_text("🔍 Name, host or IP")
+                        .desired_width(f32::INFINITY),
+                );
+                // Enter connects to the first match; Esc clears the search.
+                let search_enter =
+                    search.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                // Esc takes the focus off the field before we see it.
+                if (search.has_focus() || search.lost_focus())
+                    && ui.input(|i| i.key_pressed(egui::Key::Escape))
+                {
+                    self.session_filter.clear();
+                }
                 ui.separator();
                 // Long names stay on one line; the list scrolls sideways.
                 egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
@@ -1119,7 +1212,28 @@ impl eframe::App for PrzmApp {
                                 ));
                             }
                         }
-                        folder_ui(ui, &self.sessions.root, &mut picked, drag);
+                        let filter = self.session_filter.trim().to_lowercase();
+                        if !filter.is_empty()
+                            && !self
+                                .sessions
+                                .root
+                                .all_sessions()
+                                .iter()
+                                .any(|s| session_matches(s, &filter))
+                        {
+                            ui.weak("No session matches.");
+                        }
+                        if search_enter
+                            && let Some(first) = self
+                                .sessions
+                                .root
+                                .all_sessions()
+                                .into_iter()
+                                .find(|s| session_matches(s, &filter))
+                        {
+                            picked.push(TreeAction::Connect(first.clone()));
+                        }
+                        folder_ui(ui, &self.sessions.root, &mut picked, drag, &filter);
                         for p in picked {
                             match p {
                                 TreeAction::Connect(s) => actions.push(Action::Open(Box::new(s))),
@@ -1205,6 +1319,53 @@ impl eframe::App for PrzmApp {
                 });
             });
 
+        // Added after the session list: the tabs and buttons span the
+        // terminal only, and the session list reaches up to the toolbar.
+        egui::Panel::top("tabs").show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for (i, tab) in self.tabs.iter().enumerate() {
+                    let mut title = tab.title();
+                    if title.chars().count() > 28 {
+                        title = title.chars().take(27).collect::<String>() + "…";
+                    }
+                    if tab.pane().transport.is_closed() && tab.pane().origin.is_some() {
+                        title = format!("○ {title}");
+                    } else if !tab.pane().transport.weak_algorithms().is_empty() {
+                        title = format!("⚠ {title}");
+                    }
+                    let tab_button = ui.selectable_label(i == self.active_tab, title);
+                    if tab_button.clicked() {
+                        actions.push(Action::SelectTab(i));
+                    }
+                    if tab_button.middle_clicked() {
+                        actions.push(Action::CloseTab(i));
+                    }
+                    if ui.small_button("×").on_hover_text("Close tab").clicked() {
+                        actions.push(Action::CloseTab(i));
+                    }
+                    ui.separator();
+                }
+                let new_tab = if cfg!(target_os = "macos") {
+                    "New tab with the same session (⌘⇧T)"
+                } else {
+                    "New tab with the same session (Ctrl+Shift+T)"
+                };
+                if ui.button("+").on_hover_text(new_tab).clicked() {
+                    actions.push(Action::NewTab);
+                }
+            });
+        });
+
+        if self.buttons.visible {
+            egui::Panel::bottom("buttons").show(ui, |ui| {
+                if let Some(press) = self.buttons.show(ui, self.config_dir.as_deref()) {
+                    actions.push(Action::Macro(press));
+                }
+                if let Some(err) = &self.buttons.error {
+                    ui.colored_label(ui.visuals().error_fg_color, format!("Buttons: {err}"));
+                }
+            });
+        }
         let modal = self.modal_open();
         // What was typed in the active pane, for "send to all".
         let mut typed: Option<Vec<u8>> = None;
@@ -1280,12 +1441,11 @@ impl eframe::App for PrzmApp {
         if self.broadcast
             && let Some(bytes) = typed
         {
-            let (source_tab, source_pane) = (self.active_tab, self.tab().active);
-            for (t, tab) in self.tabs.iter_mut().enumerate() {
-                for (i, pane) in tab.panes.iter_mut().enumerate() {
-                    if (t, i) != (source_tab, source_pane) && !pane.transport.is_closed() {
-                        pane.send(&bytes);
-                    }
+            let tab = self.tab_mut();
+            let source = tab.active;
+            for (i, pane) in tab.panes.iter_mut().enumerate() {
+                if i != source && !pane.transport.is_closed() {
+                    pane.send(&bytes);
                 }
             }
         }

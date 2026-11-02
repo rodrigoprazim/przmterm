@@ -94,8 +94,11 @@ maintainer's servers; legacy algorithms only against a test server.
 
 - [x] Button bar with macro buttons organised in tabs (one tab per device type,
   project, etc.): a button sends text or a command sequence to the current
-  session or to several sessions at once (running a script waits for 0.7.0)
-- [x] Send input to several tabs at once
+  session, with a description and optional tooltips (running a script waits
+  for 0.7.0)
+- [x] Send input to every pane of a split tab at once, after a warning
+- Keymap editor: assign keyboard shortcuts to sending text, app commands
+  (new tab, split, send BREAK…) and buttons
 - [x] Keyword highlighting: named keyword sets (words or regular expressions, each
   with its colours), chosen per session or folder; SecureCRT keyword lists
   (`Keywords/*.ini`, e.g. a `CORES` set) can be imported
@@ -142,6 +145,11 @@ maintainer's servers; legacy algorithms only against a test server.
 **Gate:** real scripts migrated from SecureCRT and no open critical bugs.
 
 ## After 1.0
+
+More button functions, as in SecureCRT's *Map Button*: send to the command
+window, credentials, menu and scroll bar functions, Telnet/SSH/VT/TN3270
+functions, switching button bars, running a script, launching an application,
+and button icon colours.
 
 libssh2 fallback for SSH algorithms `russh` lacks (only if real equipment
 needs one), Kerberos/GSSAPI, smart cards (PKCS#11), session sync through

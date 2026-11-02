@@ -830,7 +830,7 @@ impl Editor {
                                 .desired_width(110.0),
                         );
                     }
-                    if ui.small_button("✕").on_hover_text("Remove").clicked() {
+                    if ui.small_button("×").on_hover_text("Remove").clicked() {
                         remove = Some(i);
                     }
                 });
