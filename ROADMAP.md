@@ -76,7 +76,7 @@ equipment; the serial console has only been checked against a virtual cable.
 - [x] Import sessions from SecureCRT
 - [x] Jump hosts (ProxyJump, chained) and tunnels: port forwarding (local, remote,
   dynamic / SOCKS)
-- X11 forwarding: remote graphical programs shown on the local X server
+- [x] X11 forwarding: remote graphical programs shown on the local X server
   (XQuartz on macOS, VcXsrv or similar on Windows)
 - [x] Legacy SSH algorithms enabled per session, with a visible "legacy" badge
       (`russh` covers SHA-1 key exchange, CBC and 3DES, HMAC-SHA1, `ssh-rsa`

@@ -19,6 +19,12 @@ All notable changes to PrzmTerm are recorded here. The format follows
   and logging. Passwords are not imported (they stay encrypted in SecureCRT);
   sessions with logon scripts, port forwards or unsupported protocols (RDP,
   local shell) are listed in the summary.
+- X11 forwarding (`x11_forwarding`, *X11 forwarding* in the editor), like
+  `ssh -X`: remote graphical programs open on the local X server (XQuartz on
+  macOS, VcXsrv and the like on Windows, the desktop on Linux). The server
+  gets a random cookie; PrzmTerm swaps in the display's real one (from
+  `xauth`) for each connection and refuses connections without it. Imported
+  SecureCRT sessions keep their *Forward X11* setting.
 - Legacy SSH algorithms per session (`legacy_algorithms`, *Legacy algorithms*
   in the editor) for old switches and routers: SHA-1 key exchange
   (`diffie-hellman-group1/14/exchange-sha1`), CBC and 3DES ciphers,

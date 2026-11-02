@@ -96,6 +96,15 @@ The editor has the same under *Jump host* and *Tunnels*. A jump host's own
 `jump_host` is followed too, so chains work. Tunnels open after login and
 close with the session.
 
+### X11 forwarding
+
+**X11 forwarding** (`x11_forwarding = true`) works like `ssh -X`: programs
+started on the server (`xclock`, `wireshark`, installers) open on this
+computer. It needs a local X server: XQuartz on macOS (log out and in once
+after installing it), VcXsrv or similar on Windows; Linux desktops have one.
+PrzmTerm uses `$DISPLAY` (default `:0`, or `localhost:0` on Windows) and the
+display's cookie from `xauth`; the server only ever sees a random stand-in.
+
 ### Old equipment
 
 Switches and routers that only know old SSH algorithms connect with
@@ -184,6 +193,7 @@ debug = true               # show each step of the SSH login (like ssh -v)
 keepalive = 30             # seconds between keepalives, 0 = off
 auto_reconnect = true      # reconnect when the connection drops
 legacy_algorithms = true   # also offer old SSH algorithms (old switches)
+x11_forwarding = true      # remote graphical programs on this screen (ssh -X)
 serial_port = "/dev/ttyUSB0"   # COM3 on Windows, /dev/cu.usbserial-… on macOS
 baud_rate = 9600
 data_bits = 8              # 5-8

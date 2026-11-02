@@ -92,6 +92,7 @@ pub struct Editor {
     auto_reconnect: Option<bool>,
     jump_host: String,
     legacy_algorithms: Option<bool>,
+    x11_forwarding: Option<bool>,
     /// Tunnels set here; `None` inherits the list from above.
     forwards: Option<Vec<Forward>>,
     show_log_help: bool,
@@ -137,6 +138,7 @@ fn field_label(key: &str) -> &'static str {
         "auto_reconnect" => "auto reconnect",
         "jump_host" => "jump host",
         "legacy_algorithms" => "legacy algorithms",
+        "x11_forwarding" => "X11 forwarding",
         "forward" => "tunnels",
         "baud_rate" => "baud rate",
         "data_bits" => "data bits",
@@ -178,6 +180,7 @@ impl Context<'_> {
             "auto_reconnect" => "no".into(),
             "jump_host" => "none (direct), or a session name or user@host".into(),
             "legacy_algorithms" => "no".into(),
+            "x11_forwarding" => "no".into(),
             "forward" => "none".into(),
             "serial_port" => "/dev/ttyUSB0 or COM3".into(),
             "baud_rate" => przmterm_session::DEFAULT_BAUD_RATE.to_string(),
@@ -290,6 +293,7 @@ impl Editor {
             auto_reconnect: s.auto_reconnect,
             jump_host: text(&s.jump_host),
             legacy_algorithms: s.legacy_algorithms,
+            x11_forwarding: s.x11_forwarding,
             forwards: s.forwards.clone(),
             show_log_help: false,
             confirm: None,
@@ -324,6 +328,7 @@ impl Editor {
             auto_reconnect: self.auto_reconnect,
             jump_host: opt(&self.jump_host),
             legacy_algorithms: self.legacy_algorithms,
+            x11_forwarding: self.x11_forwarding,
             forwards: match &self.forwards {
                 None => None,
                 Some(list) => {
@@ -703,6 +708,20 @@ impl Editor {
             ["yes", "no"],
             None,
             &cx.hint("legacy_algorithms"),
+        );
+        ui.end_row();
+
+        ui.label("X11 forwarding").on_hover_text(
+            "Show remote graphical programs on this computer's X server \
+             (XQuartz on macOS, VcXsrv or similar on Windows), like ssh -X",
+        );
+        bool_pick(
+            ui,
+            &mut self.x11_forwarding,
+            cx.inherited.x11_forwarding.unwrap_or(false),
+            ["yes", "no"],
+            None,
+            &cx.hint("x11_forwarding"),
         );
         ui.end_row();
 

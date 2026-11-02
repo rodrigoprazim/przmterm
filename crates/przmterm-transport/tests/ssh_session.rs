@@ -27,6 +27,8 @@ struct TestServer {
     channels: usize,
     /// Session channels; tunnel channels are not echoed.
     shells: Vec<ChannelId>,
+    /// The X11 request: protocol, cookie (hex), screen.
+    x11: Option<(String, String, u32)>,
 }
 
 impl TestServer {
@@ -140,6 +142,20 @@ impl server::Handler for TestServer {
         Ok(())
     }
 
+    async fn x11_request(
+        &mut self,
+        channel: ChannelId,
+        _single_connection: bool,
+        protocol: &str,
+        cookie: &str,
+        screen: u32,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        self.x11 = Some((protocol.into(), cookie.into(), screen));
+        session.channel_success(channel)?;
+        Ok(())
+    }
+
     async fn shell_request(
         &mut self,
         channel: ChannelId,
@@ -147,6 +163,41 @@ impl server::Handler for TestServer {
     ) -> Result<(), Self::Error> {
         session.data(channel, b"welcome\r\n".to_vec())?;
         session.channel_success(channel)?;
+        // Like `xclock`: connect back to the client's display with the
+        // cookie it gave us, and report how that went.
+        if let Some((protocol, cookie, _)) = self.x11.clone() {
+            let handle = session.handle();
+            tokio::spawn(async move {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let report = |text: String| {
+                    let handle = handle.clone();
+                    async move {
+                        let _ = handle.data(channel, text.into_bytes()).await;
+                    }
+                };
+                let Ok(x) = handle.channel_open_x11("10.9.8.7", 4321).await else {
+                    return report("x11 refused\r\n".into()).await;
+                };
+                let mut x = x.into_stream();
+                let cookie: Vec<u8> = (0..cookie.len())
+                    .step_by(2)
+                    .map(|i| u8::from_str_radix(&cookie[i..i + 2], 16).unwrap())
+                    .collect();
+                let mut setup = vec![b'l', 0, 11, 0, 0, 0];
+                setup.extend((protocol.len() as u16).to_le_bytes());
+                setup.extend((cookie.len() as u16).to_le_bytes());
+                setup.extend([0, 0]);
+                setup.extend(protocol.as_bytes());
+                setup.extend(std::iter::repeat_n(0, (4 - protocol.len() % 4) % 4));
+                setup.extend(&cookie);
+                x.write_all(&setup).await.unwrap();
+                let mut reply = [0u8; 3];
+                match x.read_exact(&mut reply).await {
+                    Ok(_) => report(format!("x11 {}\r\n", String::from_utf8_lossy(&reply))).await,
+                    Err(e) => report(format!("x11 failed {e}\r\n")).await,
+                }
+            });
+        }
         Ok(())
     }
 
@@ -345,6 +396,7 @@ fn start_server_with_algorithms(
                 max_channels,
                 channels: 0,
                 shells: Vec::new(),
+                x11: None,
             };
             for _ in 0..connections {
                 let (socket, _) = listener.accept().await.unwrap();
@@ -812,6 +864,40 @@ fn old_equipment_needs_legacy_algorithms_and_gets_a_badge() {
         s.transport.weak_algorithms(),
         ["diffie-hellman-group14-sha1", "aes128-cbc", "hmac-sha1"]
     );
+}
+
+#[test]
+fn x11_connections_reach_the_local_display_with_the_real_cookie() {
+    use przmterm_transport::x11::X11Display;
+    use std::io::{Read, Write};
+    let dir = tempfile::tempdir().unwrap();
+    let port = start_server(host_key(), 1);
+    // A fake local X server on display :N (TCP port 6000 + N).
+    let (listener, display) = (50..150)
+        .find_map(|n| {
+            std::net::TcpListener::bind(("127.0.0.1", 6000 + n))
+                .ok()
+                .map(|l| (l, n))
+        })
+        .unwrap();
+    let real = vec![0xab; 16];
+    let expected = real.clone();
+    let x_server = std::thread::spawn(move || {
+        let (mut s, _) = listener.accept().unwrap();
+        let mut setup = vec![0u8; 12 + 20 + 16];
+        s.read_exact(&mut setup).unwrap();
+        let ok = &setup[12..30] == b"MIT-MAGIC-COOKIE-1" && setup[32..] == expected[..];
+        s.write_all(if ok { b"YES" } else { b"BAD" }).unwrap();
+    });
+
+    let mut c = config(port, &dir.path().join("known_hosts"));
+    let mut x11 = X11Display::parse(&format!("127.0.0.1:{display}")).unwrap();
+    x11.cookie = Some(real);
+    c.x11 = Some(x11);
+    let mut s = Screen::connect(c);
+    log_in(&mut s);
+    s.wait_for("x11 YES");
+    x_server.join().unwrap();
 }
 
 #[test]

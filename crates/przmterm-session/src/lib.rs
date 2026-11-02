@@ -126,6 +126,9 @@ pub struct SessionSettings {
     /// DSA) for equipment that knows nothing newer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub legacy_algorithms: Option<bool>,
+    /// SSH: forward X11 to the local display (`ssh -X`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x11_forwarding: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub serial_port: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -155,7 +158,7 @@ pub struct SessionSettings {
 }
 
 /// Keys of the individual settings, used to compare and copy them.
-pub const FIELDS: [&str; 23] = [
+pub const FIELDS: [&str; 24] = [
     "protocol",
     "host",
     "port",
@@ -167,6 +170,7 @@ pub const FIELDS: [&str; 23] = [
     "auto_reconnect",
     "jump_host",
     "legacy_algorithms",
+    "x11_forwarding",
     "forward",
     "serial_port",
     "baud_rate",
@@ -196,6 +200,7 @@ impl SessionSettings {
             "auto_reconnect" => self.auto_reconnect = from.auto_reconnect,
             "jump_host" => self.jump_host = from.jump_host.clone(),
             "legacy_algorithms" => self.legacy_algorithms = from.legacy_algorithms,
+            "x11_forwarding" => self.x11_forwarding = from.x11_forwarding,
             "forward" => self.forwards = from.forwards.clone(),
             "serial_port" => self.serial_port = from.serial_port.clone(),
             "baud_rate" => self.baud_rate = from.baud_rate,
@@ -227,6 +232,7 @@ impl SessionSettings {
             "auto_reconnect" => self.auto_reconnect.map(yes_no),
             "jump_host" => self.jump_host.clone(),
             "legacy_algorithms" => self.legacy_algorithms.map(yes_no),
+            "x11_forwarding" => self.x11_forwarding.map(yes_no),
             "forward" => self.forwards.as_ref().map(|f| {
                 if f.is_empty() {
                     "none".to_string()
@@ -278,6 +284,7 @@ impl SessionSettings {
             auto_reconnect: pick(&self.auto_reconnect, &over.auto_reconnect),
             jump_host: pick(&self.jump_host, &over.jump_host),
             legacy_algorithms: pick(&self.legacy_algorithms, &over.legacy_algorithms),
+            x11_forwarding: pick(&self.x11_forwarding, &over.x11_forwarding),
             forwards: pick(&self.forwards, &over.forwards),
             serial_port: pick(&self.serial_port, &over.serial_port),
             baud_rate: pick(&self.baud_rate, &over.baud_rate),
@@ -317,6 +324,7 @@ impl SessionSettings {
             "keepalive" => s.keepalive = Some(DEFAULT_KEEPALIVE),
             "auto_reconnect" => s.auto_reconnect = Some(false),
             "legacy_algorithms" => s.legacy_algorithms = Some(false),
+            "x11_forwarding" => s.x11_forwarding = Some(false),
             "log.path" => s.log.path = Some(DEFAULT_LOG_TEMPLATE.into()),
             _ => return None,
         }
@@ -367,6 +375,7 @@ pub struct Session {
     pub jump_host: Option<String>,
     pub tunnels: Vec<Tunnel>,
     pub legacy_algorithms: bool,
+    pub x11_forwarding: bool,
     pub term_type: String,
     pub scrollback: usize,
     pub log_enabled: bool,
@@ -449,6 +458,7 @@ impl Session {
             },
             auto_reconnect: settings.auto_reconnect.unwrap_or(false),
             legacy_algorithms: settings.legacy_algorithms.unwrap_or(false),
+            x11_forwarding: settings.x11_forwarding.unwrap_or(false),
             jump_host: settings.jump_host.clone().filter(|j| !j.trim().is_empty()),
             tunnels: settings
                 .forwards

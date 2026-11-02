@@ -167,6 +167,9 @@ fn convert(name: &str, f: &Fields, report: &mut Report) -> Option<SessionSetting
                     s.jump_host = Some(jump.to_string());
                 }
             }
+            if number(f, "Forward X11") == Some(1) {
+                s.x11_forwarding = Some(true);
+            }
             if list_len(f, "Port Forward Table V3") + list_len(f, "Reverse Forward Table V3") > 0 {
                 report.tunnels += 1;
             }
@@ -548,6 +551,7 @@ mod tests {
           <dword name="Idle NO-OP Check">1</dword>
           <dword name="Idle NO-OP Timeout">60</dword>
           <dword name="Use Login Script">1</dword>
+          <dword name="Forward X11">1</dword>
           <array name="Port Forward Table V3"><string>web|127.0.0.1|8080|10.0.0.5|80</string></array>
         </key>
       </key>
@@ -584,6 +588,7 @@ mod tests {
         assert_eq!(s.terminal.term_type, None, "xterm-256color is the default");
         assert_eq!(s.terminal.scrollback, Some(MAX_SCROLLBACK));
         assert_eq!(s.keepalive, Some(60));
+        assert_eq!(s.x11_forwarding, Some(true));
         assert_eq!(s.log.enabled, Some(true));
         assert_eq!(s.log.path.as_deref(), Some("%H_%D%M%Y-%h%m%s.log"));
         assert_eq!(

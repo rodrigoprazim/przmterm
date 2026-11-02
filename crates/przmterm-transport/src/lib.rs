@@ -13,6 +13,7 @@ mod pipe;
 pub mod serial;
 pub mod ssh;
 pub mod telnet;
+pub mod x11;
 
 use std::collections::VecDeque;
 use std::io;

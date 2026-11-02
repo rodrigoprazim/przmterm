@@ -22,6 +22,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{Mutex, mpsc};
 
 use crate::pipe::{Closed, Cmd, Output, Pipe, runtime};
+use crate::x11::{X11Display, X11Forward};
 use crate::{Ending, Protocol, Size, Transport, TransportError, Waker};
 pub use przmterm_core::forward::{Forward, ForwardKind, HostPort, Tunnel};
 
@@ -91,6 +92,8 @@ pub struct SshConfig {
     /// Also offer old algorithms (SHA-1 key exchange, CBC and 3DES ciphers,
     /// HMAC-SHA1, DSA host keys) for equipment that knows nothing newer.
     pub legacy_algorithms: bool,
+    /// Forward X11 to this local display (`ssh -X`).
+    pub x11: Option<X11Display>,
     /// Old algorithms the connection ended up using, for the "legacy" badge.
     pub(crate) weak: WeakAlgorithms,
 }
@@ -214,6 +217,7 @@ impl SshConfig {
             jump: None,
             forwards: Vec::new(),
             legacy_algorithms: false,
+            x11: None,
             weak: WeakAlgorithms::default(),
         }
     }
@@ -532,6 +536,8 @@ pub(crate) struct ClientHandler {
     /// Where to record old algorithms in use (the session's own connection,
     /// not its jump hosts).
     weak: Option<WeakAlgorithms>,
+    /// X11 forwarding, when on.
+    x11: Option<Arc<X11Forward>>,
     /// The jump host this connection runs through, kept alive with it.
     _jump: Option<Arc<Handle>>,
 }
@@ -681,6 +687,29 @@ impl client::Handler for ClientHandler {
             "Remote tunnel: {originator_address}:{originator_port} → {target}"
         ));
         crate::forward::serve_remote(channel, target, self.out.clone());
+        Ok(())
+    }
+
+    async fn server_channel_open_x11(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        originator_address: &str,
+        originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        let Some(x11) = self.x11.clone() else {
+            reply
+                .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+            return Ok(());
+        };
+        reply.accept().await;
+        self.out.debug(&format!(
+            "X11 connection from {originator_address}:{originator_port} to {}",
+            x11.display.name
+        ));
+        crate::x11::serve(channel.into_stream(), x11, self.out.clone());
         Ok(())
     }
 
@@ -851,7 +880,7 @@ async fn channel_task(
     out.notice(&format!(
         "New session on the existing connection to {host} (no new login)."
     ));
-    let result = run_channel(&handle, &config.term_type, &input, &out, true).await;
+    let result = run_channel(&handle, &config.term_type, &input, &out, true, None).await;
     release(handle).await;
     let end = match result {
         Ok(status) => End::Closed(status),
@@ -914,12 +943,21 @@ async fn run_session(
     shared: &Shared,
 ) -> Result<Option<u32>, End> {
     let remote = RemoteTargets::default();
-    let handle = Arc::new(login(config, input, out, remote.clone(), false).await?);
+    let x11 = config.x11.clone().map(|d| Arc::new(X11Forward::new(d)));
+    let handle = Arc::new(login(config, input, out, remote.clone(), x11.clone(), false).await?);
     if let Ok(mut slot) = shared.lock() {
         *slot = Some(Arc::downgrade(&handle));
     }
     let tunnels = crate::forward::start(&handle, &config.forwards, &remote, out).await;
-    let result = run_channel(&handle, &config.term_type, input, out, false).await;
+    let result = run_channel(
+        &handle,
+        &config.term_type,
+        input,
+        out,
+        false,
+        x11.as_deref(),
+    )
+    .await;
     // The tunnels belong to this pane's session.
     for task in tunnels {
         task.abort();
@@ -939,6 +977,7 @@ fn login<'a>(
     input: &'a Arc<Mutex<Input>>,
     out: &'a Output,
     remote: RemoteTargets,
+    x11: Option<Arc<X11Forward>>,
     is_jump: bool,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Handle, End>> + Send + 'a>> {
     Box::pin(async move {
@@ -952,7 +991,8 @@ fn login<'a>(
                 (Box::new(stream), None)
             }
             Some(via) => {
-                let jump = Arc::new(login(via, input, out, RemoteTargets::default(), true).await?);
+                let jump =
+                    Arc::new(login(via, input, out, RemoteTargets::default(), None, true).await?);
                 out.notice(&format!(
                     "Connecting to {}:{} through {}…",
                     config.host, config.port, via.host
@@ -998,6 +1038,7 @@ fn login<'a>(
             out: out.clone(),
             remote,
             weak: (!is_jump).then(|| config.weak.clone()),
+            x11,
             _jump: jump,
         };
         let mut handle = match client::connect_stream(ssh_config, stream, handler).await {
@@ -1099,6 +1140,7 @@ async fn run_channel(
     input: &Arc<Mutex<Input>>,
     out: &Output,
     confirm: bool,
+    x11: Option<&X11Forward>,
 ) -> Result<Option<u32>, End> {
     out.debug("Opening a session channel");
     let mut channel = match handle.channel_open_session().await {
@@ -1126,6 +1168,25 @@ async fn run_channel(
         .map_err(failed("PTY request failed"))?;
     if confirm {
         confirmed(&mut channel, "terminal", out).await?;
+    }
+    if let Some(x11) = x11 {
+        out.debug(&format!(
+            "Requesting X11 forwarding to {} (screen {})",
+            x11.display.name, x11.display.screen
+        ));
+        // A refusal is not fatal: the shell works without X11.
+        if let Err(e) = channel
+            .request_x11(
+                false,
+                false,
+                crate::x11::MIT_MAGIC_COOKIE,
+                crate::x11::to_hex(&x11.fake),
+                x11.display.screen,
+            )
+            .await
+        {
+            out.error(&format!("X11 forwarding was not set up: {e}"));
+        }
     }
     out.debug("Starting the shell");
     channel

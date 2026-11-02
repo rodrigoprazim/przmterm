@@ -16,10 +16,10 @@ russh.workspace = true
 serialport.workspace = true
 dirs.workspace = true
 tracing.workspace = true
+rand.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-rand.workspace = true
 
 [lints]
 workspace = true

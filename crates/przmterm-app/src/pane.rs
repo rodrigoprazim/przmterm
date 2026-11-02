@@ -13,6 +13,7 @@ use przmterm_term::log::TextLog;
 use przmterm_transport::serial::SerialTransport;
 use przmterm_transport::ssh::{SavePassword, SshConfig, SshTransport, Store};
 use przmterm_transport::telnet::{TelnetConfig, TelnetTransport};
+use przmterm_transport::x11::X11Display;
 use przmterm_transport::{Ending, Size, Transport, TransportError, Waker};
 
 use crate::demo::DemoShell;
@@ -47,6 +48,11 @@ fn ssh_config(session: &Session, env: &Env, depth: usize) -> Result<SshConfig, S
     config.debug = session.debug;
     config.keepalive = session.keepalive;
     config.legacy_algorithms = session.legacy_algorithms;
+    if session.x11_forwarding && depth == 0 {
+        let mut display = X11Display::from_env();
+        display.cookie = xauth_cookie(&display.name);
+        config.x11 = Some(display);
+    }
     // A jump host's own tunnels are not opened.
     config.forwards = if depth == 0 {
         session.tunnels.clone()
@@ -70,6 +76,18 @@ fn ssh_config(session: &Session, env: &Env, depth: usize) -> Result<SshConfig, S
         config.jump = Some(Box::new(ssh_config(&via, env, depth + 1)?));
     }
     Ok(config)
+}
+
+/// The real cookie of a local X display, from `xauth` (XQuartz installs it
+/// in /opt/X11/bin, which apps started from the Finder do not have in PATH).
+fn xauth_cookie(display: &str) -> Option<Vec<u8>> {
+    ["xauth", "/opt/X11/bin/xauth"].iter().find_map(|xauth| {
+        let out = std::process::Command::new(xauth)
+            .args(["list", display])
+            .output()
+            .ok()?;
+        przmterm_transport::x11::cookie_from_xauth_list(&String::from_utf8_lossy(&out.stdout))
+    })
 }
 
 /// A jump host: a saved session by name, else `user@host:port`.
