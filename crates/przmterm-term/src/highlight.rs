@@ -24,6 +24,15 @@ struct Rule {
     bold: bool,
 }
 
+/// A highlighted stretch of text, in chars.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Highlight {
+    pub range: std::ops::Range<usize>,
+    pub fg: Option<[u8; 3]>,
+    pub bg: Option<[u8; 3]>,
+    pub bold: bool,
+}
+
 /// A match: first char, end char, rule index.
 type Span = (usize, usize, usize);
 
@@ -175,6 +184,30 @@ impl Highlighter {
                 found.push((a, b, r));
             }
         }
+        found
+    }
+
+    /// What would be highlighted in `text`: char ranges with their text
+    /// colour, background and boldness, for previews outside a terminal.
+    pub fn spans(&self, text: &str) -> Vec<Highlight> {
+        let rgb = |c: Option<Color>| match c {
+            Some(Color::Rgb(r, g, b)) => Some([r, g, b]),
+            _ => None,
+        };
+        let mut found: Vec<Highlight> = self
+            .find(text)
+            .into_iter()
+            .map(|(a, b, r)| {
+                let rule = &self.rules[r];
+                Highlight {
+                    range: a..b,
+                    fg: rgb(rule.fg),
+                    bg: rgb(rule.bg),
+                    bold: rule.bold,
+                }
+            })
+            .collect();
+        found.sort_by_key(|h| h.range.start);
         found
     }
 

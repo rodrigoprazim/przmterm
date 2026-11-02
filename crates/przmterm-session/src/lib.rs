@@ -977,6 +977,12 @@ pub fn write_keyword_set(
     Ok(path)
 }
 
+/// Deletes `<config>/keywords/<name>.toml`.
+pub fn delete_keyword_set(config_dir: &Path, name: &str) -> Result<(), SessionError> {
+    let path = config_dir.join(KEYWORDS_DIR).join(format!("{name}.toml"));
+    fs::remove_file(&path).map_err(|source| SessionError::Io { path, source })
+}
+
 /// Deletes the folder at `dir` with everything in it.
 pub fn delete_folder(dir: &Path) -> Result<(), SessionError> {
     fs::remove_dir_all(dir).map_err(|source| SessionError::Io {

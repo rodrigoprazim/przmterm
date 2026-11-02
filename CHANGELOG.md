@@ -15,6 +15,10 @@ All notable changes to PrzmTerm are recorded here. The format follows
   folder or globally (*Keywords* in the editor, `keywords = "NAME"`). Where
   matches overlap the longest wins; only text the remote side left in the
   default colour is recoloured.
+- Keyword set editor (**+** › *Keyword sets…*, or *Edit sets…* next to
+  *Keywords* in the session editor): create, rename and delete sets; add,
+  find, reorder and remove rules with colour pickers; a live preview on
+  editable sample text. Open panes using a changed set update at once.
 - SecureCRT keyword lists (`Config/Keywords/*.ini`) import with the other
   SecureCRT files, and imported sessions keep their keyword set.
 

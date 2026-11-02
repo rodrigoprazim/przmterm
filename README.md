@@ -77,8 +77,9 @@ port forwards and RDP or local-shell sessions are listed in the summary.
 
 A keyword set colours words and patterns in the output: `up` green, `down`
 red, IP addresses, MAC addresses… Choose one under **Keywords** in the
-session, folder or global settings (`keywords = "CORES"`). Sets live in
-`<config>/keywords/<name>.toml`:
+session, folder or global settings (`keywords = "CORES"`). **+** ›
+*Keyword sets…* (or *Edit sets…* next to *Keywords*) opens the editor, with a
+live preview. Sets are files in `<config>/keywords/<name>.toml`:
 
 ```toml
 [[rule]]

@@ -255,6 +255,14 @@ impl Pane {
         pane
     }
 
+    /// Reads the session's keyword set again, after it was edited.
+    pub fn reload_keywords(&mut self, env: &Env) {
+        self.view.highlighter = None;
+        if let Some(session) = self.origin.clone() {
+            self.load_keywords(&session, env);
+        }
+    }
+
     /// Sets up highlighting with the session's keyword set; problems with
     /// the set are shown in the terminal.
     fn load_keywords(&mut self, session: &Session, env: &Env) {

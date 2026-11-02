@@ -94,6 +94,8 @@ pub struct Editor {
     legacy_algorithms: Option<bool>,
     x11_forwarding: Option<bool>,
     keywords: Option<String>,
+    /// The keyword editor was asked for, for this set (if any).
+    keyword_request: Option<Option<String>>,
     /// Tunnels set here; `None` inherits the list from above.
     forwards: Option<Vec<Forward>>,
     show_log_help: bool,
@@ -300,11 +302,17 @@ impl Editor {
             legacy_algorithms: s.legacy_algorithms,
             x11_forwarding: s.x11_forwarding,
             keywords: s.keywords.clone(),
+            keyword_request: None,
             forwards: s.forwards.clone(),
             show_log_help: false,
             confirm: None,
             error: None,
         }
+    }
+
+    /// The set to open the keyword editor on, once, when asked for.
+    pub fn take_keyword_request(&mut self) -> Option<Option<String>> {
+        self.keyword_request.take()
     }
 
     fn is_session(&self) -> bool {
@@ -968,6 +976,18 @@ impl Editor {
                     }
                 });
             reset(ui, &mut self.keywords, &cx.hint("keywords"));
+            if ui
+                .small_button("Edit sets…")
+                .on_hover_text("Create and change keyword sets")
+                .clicked()
+            {
+                let current = self
+                    .keywords
+                    .clone()
+                    .or_else(|| cx.inherited.keywords.clone())
+                    .filter(|k| !k.is_empty());
+                self.keyword_request = Some(current);
+            }
         });
         ui.end_row();
 

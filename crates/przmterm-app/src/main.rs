@@ -4,6 +4,7 @@ mod demo;
 mod editor;
 mod input;
 mod keychain;
+mod keywords;
 mod pane;
 mod view;
 
@@ -120,6 +121,8 @@ struct PrzmApp {
     status: Option<(String, std::time::Instant)>,
     /// What the last SecureCRT import did, shown until dismissed.
     import_result: Option<Vec<String>>,
+    /// The keyword set editor, when open.
+    keyword_editor: Option<keywords::KeywordEditor>,
 }
 
 /// Folder SecureCRT sessions are imported into.
@@ -194,6 +197,7 @@ impl PrzmApp {
             notice: None,
             status: None,
             import_result: None,
+            keyword_editor: None,
         }
     }
 
@@ -378,6 +382,7 @@ impl PrzmApp {
             || self.name_dialog.is_some()
             || self.confirm_delete.is_some()
             || self.import_result.is_some()
+            || self.keyword_editor.is_some()
     }
 
     /// Imports SecureCRT sessions into the `SecureCRT` folder and shows what
@@ -423,6 +428,29 @@ impl PrzmApp {
 
     /// The session editor and the delete confirmation.
     fn dialogs(&mut self, ctx: &egui::Context) {
+        if let Some(editor) = &mut self.keyword_editor
+            && let keywords::KeywordResult::Closed(changed) = editor.show(ctx)
+        {
+            self.keyword_editor = None;
+            // Open panes using a changed set pick it up at once.
+            let env = self.env();
+            for pane in self.tabs.iter_mut().flat_map(|t| &mut t.panes) {
+                if pane
+                    .origin
+                    .as_ref()
+                    .and_then(|s| s.keywords.as_ref())
+                    .is_some_and(|k| changed.contains(k))
+                {
+                    pane.reload_keywords(&env);
+                }
+            }
+        }
+        if let Some(editor) = &mut self.editor
+            && let Some(select) = editor.take_keyword_request()
+            && let Some(dir) = &self.config_dir
+        {
+            self.keyword_editor = Some(keywords::KeywordEditor::new(dir, select.as_deref()));
+        }
         if let Some(lines) = &self.import_result {
             let mut close =
                 ctx.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape));
@@ -930,6 +958,13 @@ impl eframe::App for PrzmApp {
                                     value: String::new(),
                                     error: None,
                                 });
+                                ui.close();
+                            }
+                            if ui.button("Keyword sets…").clicked() {
+                                if let Some(dir) = &self.config_dir {
+                                    self.keyword_editor =
+                                        Some(keywords::KeywordEditor::new(dir, None));
+                                }
                                 ui.close();
                             }
                             ui.separator();
