@@ -3971,7 +3971,7 @@ checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 
 [[package]]
 name = "przmterm-app"
-version = "0.5.0"
+version = "0.6.0-dev"
 dependencies = [
  "arboard",
  "chrono",
@@ -3990,7 +3990,7 @@ dependencies = [
 
 [[package]]
 name = "przmterm-cli"
-version = "0.5.0"
+version = "0.6.0-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -4001,7 +4001,7 @@ dependencies = [
 
 [[package]]
 name = "przmterm-core"
-version = "0.5.0"
+version = "0.6.0-dev"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -4010,7 +4010,7 @@ dependencies = [
 
 [[package]]
 name = "przmterm-session"
-version = "0.5.0"
+version = "0.6.0-dev"
 dependencies = [
  "chrono",
  "dirs",
@@ -4024,7 +4024,7 @@ dependencies = [
 
 [[package]]
 name = "przmterm-term"
-version = "0.5.0"
+version = "0.6.0-dev"
 dependencies = [
  "unicode-width",
  "vte",
@@ -4032,7 +4032,7 @@ dependencies = [
 
 [[package]]
 name = "przmterm-transport"
-version = "0.5.0"
+version = "0.6.0-dev"
 dependencies = [
  "dirs",
  "przmterm-core",
