@@ -435,13 +435,17 @@ mod tests {
 
         // Rename an entry in place.
         vault
-            .put(Some("lab"), entry("Lab admin", "admin", "pw"))
+            .put(Some("lab"), entry("Lab admin", "admin", "hunter2-lab"))
             .unwrap();
         vault.change_master("battery staple").unwrap();
         assert!(Vault::open(&path, "correct horse").is_err());
         let vault = Vault::open(&path, "battery staple").unwrap();
         assert_eq!(vault.names(), ["Lab admin", "NOC"]);
-        assert!(!format!("{vault:?}").contains("pw"), "no secrets in Debug");
+        // (Not "pw": the random temporary path in Debug may contain it.)
+        assert!(
+            !format!("{vault:?}").contains("hunter2"),
+            "no secrets in Debug"
+        );
     }
 
     #[test]
