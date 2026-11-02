@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use przmterm_core::Protocol;
+use przmterm_session::buttons::Chunk;
 use przmterm_session::{Session, Target};
 use przmterm_term::Terminal;
 use przmterm_term::log::TextLog;
@@ -205,6 +206,9 @@ pub struct Pane {
     retry: Option<Retry>,
     /// Failed attempts in a row, for the back-off.
     attempts: usize,
+    /// Macro text still to send, and when the next piece is due (`\p`).
+    queue: VecDeque<Chunk>,
+    queue_at: Option<std::time::Instant>,
 }
 
 /// When the next automatic reconnect happens.
@@ -228,6 +232,8 @@ impl Pane {
             closed_announced: false,
             retry: None,
             attempts: 0,
+            queue: VecDeque::new(),
+            queue_at: None,
         }
     }
 
@@ -247,6 +253,8 @@ impl Pane {
             closed_announced: false,
             retry: None,
             attempts: 0,
+            queue: VecDeque::new(),
+            queue_at: None,
         };
         pane.load_keywords(session, env);
         if session.log_enabled {
@@ -282,6 +290,36 @@ impl Pane {
                 .term
                 .feed(format!("\x1b[33m[Keywords {name}: {e}]\x1b[0m\r\n").as_bytes()),
         }
+    }
+
+    /// Queues macro text for this pane; pauses are kept.
+    pub fn enqueue(&mut self, chunks: &[Chunk]) {
+        self.queue.extend(chunks.iter().cloned());
+    }
+
+    /// Sends what is due from the macro queue. Returns when to come back for
+    /// the rest, if a pause is pending.
+    pub fn run_queue(&mut self, now: std::time::Instant) -> Option<std::time::Instant> {
+        if let Some(at) = self.queue_at {
+            if at > now {
+                return Some(at);
+            }
+            self.queue_at = None;
+        }
+        while let Some(chunk) = self.queue.pop_front() {
+            match chunk {
+                Chunk::Bytes(bytes) => {
+                    self.term.screen_mut().reset_display();
+                    self.send(&bytes);
+                }
+                Chunk::Pause(d) => {
+                    let at = now + d;
+                    self.queue_at = Some(at);
+                    return Some(at);
+                }
+            }
+        }
+        None
     }
 
     /// Connects again on the same screen, keeping the scrollback and the log.
@@ -522,6 +560,8 @@ impl Pane {
             closed_announced: false,
             retry: None,
             attempts: 0,
+            queue: VecDeque::new(),
+            queue_at: None,
         };
         pane.view.highlighter = self.view.highlighter.clone();
         if session.log_enabled {
@@ -600,6 +640,19 @@ mod tests {
             ..env
         };
         assert!(ssh_config(&looped, &env, 0).unwrap_err().contains("loop"));
+    }
+
+    #[test]
+    fn macro_queue_waits_at_pauses() {
+        use przmterm_session::buttons::parse_send;
+        let mut pane = Pane::demo();
+        pane.enqueue(&parse_send("one\\r\\ptwo\\r"));
+        let now = std::time::Instant::now();
+        let next = pane.run_queue(now).expect("waits at the pause");
+        assert_eq!(pane.queue.len(), 1, "only the part after the pause is left");
+        assert_eq!(pane.run_queue(now), Some(next), "not due yet");
+        assert_eq!(pane.run_queue(next), None, "the rest went out");
+        assert!(pane.queue.is_empty());
     }
 
     #[test]

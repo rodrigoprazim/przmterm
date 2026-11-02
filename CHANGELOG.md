@@ -15,6 +15,13 @@ All notable changes to PrzmTerm are recorded here. The format follows
   folder or globally (*Keywords* in the editor, `keywords = "NAME"`). Where
   matches overlap the longest wins; only text the remote side left in the
   default colour is recoloured.
+- Button bar with macro buttons in tabs (*▤ Buttons* in the status bar,
+  `<config>/buttons.toml`): a button sends text with `\r` (Enter), `\t`,
+  `\e`, `\n` and `\p` (one-second pause) to the current session, every
+  session of the tab, or every session. Right-click a button to edit, move or
+  delete it, and a tab to rename, add or delete tabs.
+- *⇶ Send to all* in the status bar: while on, what is typed goes to every
+  connected session in every tab.
 - Keyword set editor (**+** › *Keyword sets…*, or *Edit sets…* next to
   *Keywords* in the session editor): create, rename and delete sets; add,
   find, reorder and remove rules with colour pickers; a live preview on

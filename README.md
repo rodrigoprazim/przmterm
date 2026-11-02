@@ -73,6 +73,29 @@ Passwords are not imported: SecureCRT keeps them encrypted, and PrzmTerm asks
 at the first login and can save them in the system keychain. Logon scripts,
 port forwards and RDP or local-shell sessions are listed in the summary.
 
+### Buttons and sending to several sessions
+
+**▤ Buttons** in the status bar shows the button bar: tabs of buttons (one per
+device type, say) that send commands. **+** on the bar adds a button;
+right-click a button to edit, move or delete it, and a tab to rename, add or
+delete tabs. A button sends to the current session, to every session of the
+tab, or to every session. In the text, `\r` is Enter, `\t` Tab, `\e` Esc,
+`\n` a line feed and `\p` a one-second pause. Buttons are kept in
+`<config>/buttons.toml`:
+
+```toml
+[[tab]]
+name = "Cisco"
+
+[[tab.button]]
+label = "Save all"
+send = 'copy run start\r\p\r'   # single quotes keep the backslashes
+target = "all"                  # current (default), tab or all
+```
+
+**⇶ Send to all** in the status bar sends what you type to every connected
+session, in every tab, until you turn it off.
+
 ### Keyword highlighting
 
 A keyword set colours words and patterns in the output: `up` green, `down`

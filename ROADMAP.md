@@ -92,10 +92,10 @@ maintainer's servers; legacy algorithms only against a test server.
 
 ## 0.6.0 — Productivity
 
-- Button bar with macro buttons organised in tabs (one tab per device type,
+- [x] Button bar with macro buttons organised in tabs (one tab per device type,
   project, etc.): a button sends text or a command sequence to the current
-  session, to several sessions at once, or runs a script
-- Send input to several tabs at once
+  session or to several sessions at once (running a script waits for 0.7.0)
+- [x] Send input to several tabs at once
 - [x] Keyword highlighting: named keyword sets (words or regular expressions, each
   with its colours), chosen per session or folder; SecureCRT keyword lists
   (`Keywords/*.ini`, e.g. a `CORES` set) can be imported

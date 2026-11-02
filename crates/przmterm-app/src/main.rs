@@ -1,5 +1,6 @@
 //! PrzmTerm desktop application.
 
+mod buttonbar;
 mod demo;
 mod editor;
 mod input;
@@ -97,6 +98,9 @@ enum Action {
     Reconnect,
     ToggleLog,
     SendBreak,
+    Macro(buttonbar::Press),
+    ToggleBroadcast,
+    ToggleButtons,
     ToggleSessions,
 }
 
@@ -123,6 +127,10 @@ struct PrzmApp {
     import_result: Option<Vec<String>>,
     /// The keyword set editor, when open.
     keyword_editor: Option<keywords::KeywordEditor>,
+    /// Macro buttons above the status bar.
+    buttons: buttonbar::ButtonBarUi,
+    /// What is typed goes to every connected pane.
+    broadcast: bool,
 }
 
 /// Folder SecureCRT sessions are imported into.
@@ -174,6 +182,7 @@ enum Deletion {
 impl PrzmApp {
     fn new() -> Self {
         let config_dir = przmterm_session::default_config_dir();
+        let buttons = buttonbar::ButtonBarUi::load(config_dir.as_deref());
         let sessions = config_dir
             .as_deref()
             .map(SessionTree::load)
@@ -198,6 +207,8 @@ impl PrzmApp {
             status: None,
             import_result: None,
             keyword_editor: None,
+            buttons,
+            broadcast: false,
         }
     }
 
@@ -302,6 +313,31 @@ impl PrzmApp {
             }
             Action::FocusPane(index) => self.tab_mut().active = index,
             Action::ToggleSessions => self.sessions_hidden = !self.sessions_hidden,
+            Action::ToggleBroadcast => self.broadcast = !self.broadcast,
+            Action::ToggleButtons => self.buttons.visible = !self.buttons.visible,
+            Action::Macro(press) => {
+                use przmterm_session::buttons::Target;
+                let active_tab = self.active_tab;
+                let mut sent = 0;
+                for (t, tab) in self.tabs.iter_mut().enumerate() {
+                    let tab_active = tab.active;
+                    for (i, pane) in tab.panes.iter_mut().enumerate() {
+                        let wanted = match press.target {
+                            Target::Current => t == active_tab && i == tab_active,
+                            Target::Tab => t == active_tab,
+                            Target::All => true,
+                        };
+                        if wanted && !pane.transport.is_closed() {
+                            pane.enqueue(&press.chunks);
+                            sent += 1;
+                        }
+                    }
+                }
+                if press.target != Target::Current {
+                    self.notice = Some(format!("Sent to {sent} session(s)."));
+                }
+                self.run_queues(ctx);
+            }
             Action::SendBreak => {
                 let pane = self.tab_mut().pane_mut();
                 if pane.view.offer_break && !pane.transport.is_closed() {
@@ -323,6 +359,20 @@ impl PrzmApp {
         }
         let tab = self.tab_mut();
         tab.pane_mut().view.focus();
+    }
+
+    /// Sends macro text that is due, and wakes up for the next piece.
+    fn run_queues(&mut self, ctx: &egui::Context) {
+        let now = std::time::Instant::now();
+        let next = self
+            .tabs
+            .iter_mut()
+            .flat_map(|t| &mut t.panes)
+            .filter_map(|p| p.run_queue(now))
+            .min();
+        if let Some(at) = next {
+            ctx.request_repaint_after(at.saturating_duration_since(now));
+        }
     }
 
     /// Reconnects the panes whose automatic reconnect is due, and wakes up
@@ -383,6 +433,7 @@ impl PrzmApp {
             || self.confirm_delete.is_some()
             || self.import_result.is_some()
             || self.keyword_editor.is_some()
+            || self.buttons.modal()
     }
 
     /// Imports SecureCRT sessions into the `SecureCRT` folder and shows what
@@ -724,6 +775,7 @@ impl eframe::App for PrzmApp {
             ctx.request_repaint();
         }
         self.run_retries(&ctx);
+        self.run_queues(&ctx);
 
         let title = format!("{} — PrzmTerm", self.tab().pane().title());
         if title != self.title {
@@ -869,6 +921,30 @@ impl eframe::App for PrzmApp {
                     if ui.add(button).on_hover_text(hover).clicked() {
                         actions.push(Action::ToggleLog);
                     }
+                    let broadcast = ui
+                        .selectable_label(
+                            self.broadcast,
+                            if self.broadcast {
+                                egui::RichText::new(" ⇶ Typing to all ")
+                                    .color(egui::Color32::BLACK)
+                                    .background_color(egui::Color32::from_rgb(240, 170, 60))
+                            } else {
+                                egui::RichText::new("⇶ Send to all")
+                            },
+                        )
+                        .on_hover_text(
+                            "When on, what you type goes to every connected session in every tab",
+                        );
+                    if broadcast.clicked() {
+                        actions.push(Action::ToggleBroadcast);
+                    }
+                    if ui
+                        .selectable_label(self.buttons.visible, "▤ Buttons")
+                        .on_hover_text("Show or hide the button bar")
+                        .clicked()
+                    {
+                        actions.push(Action::ToggleButtons);
+                    }
                     if pane.view.offer_break
                         && ui
                             .add_enabled(
@@ -890,6 +966,16 @@ impl eframe::App for PrzmApp {
             });
         });
 
+        if self.buttons.visible {
+            egui::Panel::bottom("buttons").show(ui, |ui| {
+                if let Some(press) = self.buttons.show(ui, self.config_dir.as_deref()) {
+                    actions.push(Action::Macro(press));
+                }
+                if let Some(err) = &self.buttons.error {
+                    ui.colored_label(ui.visuals().error_fg_color, format!("Buttons: {err}"));
+                }
+            });
+        }
         if self.sessions_hidden {
             egui::Panel::left("sessions-folded")
                 .resizable(false)
@@ -1120,6 +1206,8 @@ impl eframe::App for PrzmApp {
             });
 
         let modal = self.modal_open();
+        // What was typed in the active pane, for "send to all".
+        let mut typed: Option<Vec<u8>> = None;
         egui::CentralPanel::no_frame().show(ui, |ui| {
             let tab = &mut self.tabs[self.active_tab];
             let area = ui.available_rect_before_wrap();
@@ -1180,13 +1268,30 @@ impl eframe::App for PrzmApp {
                         }
                     } else {
                         pane.send(&out.input);
+                        if active {
+                            typed = Some(out.input.clone());
+                        }
                     }
                     ctx.request_repaint();
                 }
             }
         });
 
+        if self.broadcast
+            && let Some(bytes) = typed
+        {
+            let (source_tab, source_pane) = (self.active_tab, self.tab().active);
+            for (t, tab) in self.tabs.iter_mut().enumerate() {
+                for (i, pane) in tab.panes.iter_mut().enumerate() {
+                    if (t, i) != (source_tab, source_pane) && !pane.transport.is_closed() {
+                        pane.send(&bytes);
+                    }
+                }
+            }
+        }
+
         self.dialogs(&ctx);
+        self.buttons.dialogs(&ctx, self.config_dir.as_deref());
         // Give the keyboard back to the terminal when the last dialog closes.
         if modal && !self.modal_open() {
             self.tab_mut().pane_mut().view.focus();
