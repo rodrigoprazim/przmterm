@@ -11,7 +11,7 @@ date. Version numbering and the release procedure are in
 | 0.2.0 | SSH | Released |
 | 0.3.0 | Daily-driver MVP | Released |
 | 0.4.0 | Telnet and serial | Released |
-| 0.5.0 | Network gear | Planned |
+| 0.5.0 | Network gear | In progress |
 | 0.6.0 | Productivity | Planned |
 | 0.7.0 | Scripting | Planned |
 | 0.8.0 | File transfer | Planned |
