@@ -17,6 +17,8 @@
 //! from the root down, then the session file. Passwords never live here; they
 //! go to the OS keychain.
 
+pub mod securecrt;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

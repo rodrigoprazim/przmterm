@@ -55,6 +55,24 @@ and the known_hosts file it was found in, every key, password and
 keyboard-interactive attempt with the server's answer and the methods it still
 allows, and the reason the server gave if it disconnected.
 
+### Moving from SecureCRT
+
+**+** next to *Sessions* › *Import from SecureCRT…* takes SecureCRT's XML
+export (*File › Export Settings*) or session `.ini` files; *Import a SecureCRT
+Sessions folder…* takes the whole `Config/Sessions` folder (macOS:
+`~/Library/Application Support/VanDyke/SecureCRT/Config/Sessions`). Sessions
+land in a `SecureCRT` folder with the same sub-folders; names already used get
+` (2)`. From the command line:
+
+```sh
+przm import-securecrt --dry-run export.xml     # show what would be imported
+przm import-securecrt export.xml --into SecureCRT
+```
+
+Passwords are not imported: SecureCRT keeps them encrypted, and PrzmTerm asks
+at the first login and can save them in the system keychain. Logon scripts,
+port forwards and RDP or local-shell sessions are listed in the summary.
+
 ### Tunnels and jump hosts
 
 ```toml

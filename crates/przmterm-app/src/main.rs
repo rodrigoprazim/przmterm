@@ -115,7 +115,12 @@ struct PrzmApp {
     notice: Option<String>,
     /// The message the status bar shows, and since when.
     status: Option<(String, std::time::Instant)>,
+    /// What the last SecureCRT import did, shown until dismissed.
+    import_result: Option<Vec<String>>,
 }
+
+/// Folder SecureCRT sessions are imported into.
+const IMPORT_FOLDER: &str = "SecureCRT";
 
 /// How long a status bar message stays.
 const STATUS_TIME: std::time::Duration = std::time::Duration::from_secs(8);
@@ -184,6 +189,7 @@ impl PrzmApp {
             drag_unlocked: false,
             notice: None,
             status: None,
+            import_result: None,
         }
     }
 
@@ -361,11 +367,70 @@ impl PrzmApp {
 
 impl PrzmApp {
     fn modal_open(&self) -> bool {
-        self.editor.is_some() || self.name_dialog.is_some() || self.confirm_delete.is_some()
+        self.editor.is_some()
+            || self.name_dialog.is_some()
+            || self.confirm_delete.is_some()
+            || self.import_result.is_some()
+    }
+
+    /// Imports SecureCRT sessions into the `SecureCRT` folder and shows what
+    /// happened.
+    fn import_securecrt(&mut self, paths: &[PathBuf]) {
+        use przmterm_session::securecrt;
+        let Some(dir) = self.config_dir.clone() else {
+            return;
+        };
+        let result = securecrt::parse_any(paths).and_then(|report| {
+            let n = securecrt::write(&dir, IMPORT_FOLDER, &report)?;
+            let mut lines = vec![if n == 0 {
+                "No sessions found.".to_string()
+            } else {
+                format!("Imported {n} session(s) into the folder {IMPORT_FOLDER}.")
+            }];
+            lines.extend(
+                report
+                    .skipped
+                    .iter()
+                    .map(|(name, why)| format!("Skipped {name}: {why}.")),
+            );
+            lines.extend(report.notes.iter().cloned());
+            Ok(lines)
+        });
+        self.import_result = Some(result.unwrap_or_else(|e| vec![format!("Import failed: {e}")]));
+        self.reload_sessions();
     }
 
     /// The session editor and the delete confirmation.
     fn dialogs(&mut self, ctx: &egui::Context) {
+        if let Some(lines) = &self.import_result {
+            let mut close =
+                ctx.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape));
+            egui::Window::new("SecureCRT import")
+                .pivot(egui::Align2::CENTER_CENTER)
+                .default_pos(ctx.content_rect().center())
+                .collapsible(false)
+                .resizable(false)
+                .default_width(460.0)
+                .show(ctx, |ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height(320.0)
+                        .show(ui, |ui| {
+                            for (i, line) in lines.iter().enumerate() {
+                                if i == 0 {
+                                    ui.label(egui::RichText::new(line).strong());
+                                } else {
+                                    ui.label(line);
+                                }
+                                ui.add_space(4.0);
+                            }
+                        });
+                    ui.add_space(4.0);
+                    close |= ui.button("OK").clicked();
+                });
+            if close {
+                self.import_result = None;
+            }
+        }
         if let (Some(editor), Some(dir)) = (&mut self.editor, self.config_dir.clone()) {
             match editor.show(ctx, &dir, &self.sessions.root) {
                 EditorResult::Open => {}
@@ -812,6 +877,36 @@ impl eframe::App for PrzmApp {
                                     error: None,
                                 });
                                 ui.close();
+                            }
+                            ui.separator();
+                            if ui
+                                .button("Import from SecureCRT…")
+                                .on_hover_text("An XML export or session .ini files")
+                                .clicked()
+                            {
+                                ui.close();
+                                if let Some(paths) = rfd::FileDialog::new()
+                                    .set_title("SecureCRT export (.xml) or session files (.ini)")
+                                    .add_filter("SecureCRT", &["xml", "ini"])
+                                    .pick_files()
+                                {
+                                    self.import_securecrt(&paths);
+                                }
+                            }
+                            if ui
+                                .button("Import a SecureCRT Sessions folder…")
+                                .on_hover_text(
+                                    "SecureCRT's Config/Sessions folder, with its sub-folders",
+                                )
+                                .clicked()
+                            {
+                                ui.close();
+                                if let Some(dir) = rfd::FileDialog::new()
+                                    .set_title("SecureCRT Sessions folder")
+                                    .pick_folder()
+                                {
+                                    self.import_securecrt(&[dir]);
+                                }
                             }
                         });
                     }

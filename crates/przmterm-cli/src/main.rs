@@ -32,6 +32,19 @@ enum Command {
         #[arg(long, default_value_t = 24)]
         rows: usize,
     },
+    /// Imports SecureCRT sessions: an XML export, session .ini files, or a
+    /// Sessions folder. Passwords are not imported.
+    ImportSecurecrt {
+        /// XML export, .ini files or folders.
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+        /// Folder of the session tree to import into ("" for the top level).
+        #[arg(long, default_value = "SecureCRT")]
+        into: String,
+        /// Show what would be imported without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -39,7 +52,66 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Sessions => sessions(cli.config),
         Command::Render { file, cols, rows } => render(file, cols, rows),
+        Command::ImportSecurecrt {
+            paths,
+            into,
+            dry_run,
+        } => import_securecrt(cli.config, &paths, &into, dry_run),
     }
+}
+
+fn import_securecrt(
+    config: Option<PathBuf>,
+    paths: &[PathBuf],
+    into: &str,
+    dry_run: bool,
+) -> Result<()> {
+    use przmterm_session::securecrt;
+    let report = securecrt::parse_any(paths).map_err(anyhow::Error::msg)?;
+    for s in &report.sessions {
+        let folder = std::iter::once(into)
+            .filter(|f| !f.is_empty())
+            .chain(s.folder.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join("/");
+        let target = s
+            .settings
+            .host
+            .clone()
+            .or_else(|| s.settings.serial_port.clone())
+            .unwrap_or_default();
+        let via = s
+            .settings
+            .jump_host
+            .as_ref()
+            .map(|j| format!("  via {j}"))
+            .unwrap_or_default();
+        println!("{folder}/{}  {target}{via}", s.name);
+    }
+    for (name, why) in &report.skipped {
+        println!("skipped {name}: {why}");
+    }
+    for note in &report.notes {
+        println!("note: {note}");
+    }
+    if dry_run {
+        println!(
+            "{} session(s) would be imported (dry run).",
+            report.sessions.len()
+        );
+        return Ok(());
+    }
+    let dir = config
+        .or_else(przmterm_session::default_config_dir)
+        .context("no configuration directory found; pass --config")?;
+    let n = securecrt::write(&dir, into, &report).map_err(anyhow::Error::msg)?;
+    println!(
+        "Imported {n} session(s) into {}.",
+        dir.join(przmterm_session::SESSIONS_DIR)
+            .join(into)
+            .display()
+    );
+    Ok(())
 }
 
 fn sessions(config: Option<PathBuf>) -> Result<()> {

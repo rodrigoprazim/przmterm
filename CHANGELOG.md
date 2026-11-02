@@ -11,6 +11,14 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 - Keepalive interval per session (`keepalive`, seconds; 0 turns it off):
   SSH keepalives, Telnet NOPs. Default 30 s.
+- Import from SecureCRT (**+** › *Import from SecureCRT…*, or
+  `przm import-securecrt`): the XML export, session `.ini` files or the whole
+  `Config/Sessions` folder go into a `SecureCRT` folder with the same
+  sub-folders. Taken over: protocol (SSH, Telnet, serial), host, port, user
+  name, key file, jump host, serial line, terminal type, scrollback, keepalive
+  and logging. Passwords are not imported (they stay encrypted in SecureCRT);
+  sessions with logon scripts, port forwards or unsupported protocols (RDP,
+  local shell) are listed in the summary.
 - Tunnels (`[[forward]]` in the session file, *Tunnels* in the editor):
   local (`-L`), remote (`-R`) and dynamic SOCKS 4/4a/5 (`-D`) port
   forwarding, opened after login and closed with the session. A port already

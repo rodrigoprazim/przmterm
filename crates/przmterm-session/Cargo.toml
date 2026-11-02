@@ -15,6 +15,7 @@ toml.workspace = true
 thiserror.workspace = true
 dirs.workspace = true
 chrono.workspace = true
+roxmltree.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
