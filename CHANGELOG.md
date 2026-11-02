@@ -24,7 +24,9 @@ All notable changes to PrzmTerm are recorded here. The format follows
   files to send. On a Unix host the dialog can type the `rz`/`sz`/`rb`/`sb`/
   `rx`/`sx` command for you. The status bar shows the file and progress with
   *Cancel* (Ctrl+C works too); received files never overwrite others, and a
-  cancelled one is removed.
+  cancelled one is removed. When the typed command does not exist on the
+  other side ("command not found", "Unknown command"…), nothing is sent to
+  the shell and a note says to install lrzsz or use SFTP.
 
 ## [0.7.0] - 2026-11-02
 

@@ -272,6 +272,9 @@ pub struct Pane {
     queued_download: Option<std::path::PathBuf>,
     /// An Xmodem/Ymodem receive that starts once the typed `sx`/`sb` runs.
     delayed: Option<(std::time::Instant, modem::Kind, std::path::PathBuf, String)>,
+    /// After typing `rz`/`sz`/…: the tool, until when to watch, and the
+    /// output since (to see "command not found").
+    watching: Option<(String, std::time::Instant, String)>,
 }
 
 pub struct Transfer {
@@ -339,7 +342,64 @@ impl Pane {
             queued_upload: None,
             queued_download: None,
             delayed: None,
+            watching: None,
         }
+    }
+
+    /// Types the command that starts the other side, and watches whether
+    /// it runs.
+    fn type_command(&mut self, cmd: &str) {
+        let _ = self.transport.write(format!("{cmd}\r").as_bytes());
+        let tool = cmd.split_whitespace().next().unwrap_or(cmd).to_string();
+        self.watching = Some((
+            tool,
+            std::time::Instant::now() + std::time::Duration::from_secs(15),
+            String::new(),
+        ));
+    }
+
+    /// Looks at the output after a typed command: when it failed, nothing
+    /// is started (and nothing is sent to the shell).
+    fn watch_start(&mut self, data: &[u8]) {
+        let Some((tool, until, seen)) = &mut self.watching else {
+            return;
+        };
+        seen.push_str(&String::from_utf8_lossy(data));
+        if seen.len() > 4096 {
+            let cut = seen.len() - 2048;
+            let cut = (cut..seen.len())
+                .find(|&i| seen.is_char_boundary(i))
+                .unwrap_or(0);
+            seen.drain(..cut);
+        }
+        // Skip the echo of the command itself.
+        let after = seen.split_once('\n').map_or("", |(_, rest)| rest);
+        let failed = crate::transfer::start_failed(after);
+        let late = std::time::Instant::now() > *until;
+        let tool = tool.clone();
+        if failed {
+            self.abandon(&crate::transfer::not_started_message(&tool));
+        } else if late {
+            self.watching = None;
+            if self.queued_upload.is_some() || self.queued_download.is_some() {
+                self.abandon(&crate::transfer::not_started_message(&tool));
+            }
+        }
+    }
+
+    /// Gives up on a transfer that never started, without sending anything.
+    fn abandon(&mut self, message: &str) {
+        self.watching = None;
+        self.queued_upload = None;
+        self.queued_download = None;
+        self.delayed = None;
+        if self.transfer.take().is_some() {
+            self.upload_asked = false;
+        }
+        self.term
+            .feed(format!("\r\n\x1b[33m[{message}]\x1b[0m\r\n").as_bytes());
+        self.transfer_events
+            .push(TransferEvent::Ended(message.to_string()));
     }
 
     /// Starts what the transfer dialog asked for.
@@ -355,7 +415,7 @@ impl Pane {
                 command: Some(cmd),
             } => {
                 self.queued_upload = Some(files);
-                let _ = self.transport.write(format!("{cmd}\r").as_bytes());
+                self.type_command(&cmd);
             }
             Start::Send {
                 kind,
@@ -369,7 +429,7 @@ impl Pane {
                 ..
             } => {
                 self.queued_download = Some(dir);
-                let _ = self.transport.write(format!("{cmd}\r").as_bytes());
+                self.type_command(&cmd);
             }
             Start::Receive {
                 kind,
@@ -377,8 +437,14 @@ impl Pane {
                 name,
                 command: Some(cmd),
             } => {
-                let _ = self.transport.write(format!("{cmd}\r").as_bytes());
-                self.delayed = Some((now + std::time::Duration::from_secs(1), kind, dir, name));
+                self.type_command(&cmd);
+                // Time for the command to fail before we ask it for data.
+                self.delayed = Some((
+                    now + std::time::Duration::from_millis(1500),
+                    kind,
+                    dir,
+                    name,
+                ));
             }
             Start::Receive {
                 kind, dir, name, ..
@@ -395,7 +461,7 @@ impl Pane {
         command: Option<String>,
     ) {
         if let Some(cmd) = command {
-            let _ = self.transport.write(format!("{cmd}\r").as_bytes());
+            self.type_command(&cmd);
         }
         match modem::send(kind, files, std::time::Instant::now()) {
             Ok(engine) => {
@@ -496,6 +562,7 @@ impl Pane {
             .feed(format!("\r\n\x1b[2m[{message}]\x1b[0m\r\n").as_bytes());
         self.transfer = None;
         self.upload_asked = false;
+        self.watching = None;
         self.transfer_events.push(TransferEvent::Ended(message));
     }
 
@@ -817,6 +884,14 @@ impl Pane {
                     let now = std::time::Instant::now();
                     if let Some(t) = &mut self.transfer {
                         t.engine.input(&buf[..n], now);
+                        // Data moving: the command ran. File contents must
+                        // not be read as an error message.
+                        if t.engine.progress().done > 0 {
+                            self.watching = None;
+                        }
+                        if self.watching.is_some() {
+                            self.watch_start(&buf[..n]);
+                        }
                         continue;
                     }
                     // `sz` or `rz` started on the other side.
@@ -838,6 +913,13 @@ impl Pane {
                     }
                     if let Some(script) = &self.script {
                         script.feed(&self.plain.text(data));
+                    }
+                    if start.is_some() {
+                        self.watching = None;
+                    } else if self.watching.is_some() {
+                        // After the terminal shows the error, so the note
+                        // comes below it.
+                        self.watch_start(&buf[..n]);
                     }
                     match (start, tail) {
                         (Some((_, modem::ZmodemStart::Download)), Some(tail)) => {
@@ -874,13 +956,16 @@ impl Pane {
         if !replies.is_empty() && self.transfer.is_none() {
             self.send(&replies);
         }
+        if self.watching.is_some() {
+            self.watch_start(&[]);
+        }
         if let Some((at, kind, dir, name)) = self.delayed.clone()
             && std::time::Instant::now() >= at
         {
             self.delayed = None;
             self.start_receive(kind, dir, &name);
         }
-        if self.transfer.is_some() || self.delayed.is_some() {
+        if self.transfer.is_some() || self.delayed.is_some() || self.watching.is_some() {
             self.run_transfer();
             // Keep going while it runs.
             got = true;

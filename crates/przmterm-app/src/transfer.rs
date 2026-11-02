@@ -34,6 +34,40 @@ pub fn downloads() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// Whether the output after a typed `rz`/`sz`/… says the command does not
+/// exist or failed (shells in English and Portuguese, network equipment).
+/// `text` is what came after the echo of the command.
+pub fn start_failed(text: &str) -> bool {
+    let text = text.to_lowercase();
+    [
+        "command not found",
+        "comando não encontrado",
+        "não encontrado",
+        "not found",
+        "no such file",
+        "unknown command",
+        "unrecognized command",
+        "invalid input",
+        "invalid command",
+        "bad command",
+        "error locates",
+        "cannot open",
+        "is not recognized",
+    ]
+    .iter()
+    .any(|p| text.contains(p))
+}
+
+/// Why the other side did not start, and what to do.
+pub fn not_started_message(tool: &str) -> String {
+    format!(
+        "`{tool}` did not start on the other side. On a Unix host install lrzsz \
+         (dnf install lrzsz, or apt install lrzsz), or use Connect SFTP Session. \
+         Network equipment rarely has it: use its own copy command (TFTP, FTP, SCP), \
+         or Xmodem on the console port without \"Start the other side for me\"."
+    )
+}
+
 pub struct TransferDialog {
     /// The tab whose active pane transfers.
     pub tab: usize,
@@ -189,9 +223,10 @@ impl TransferDialog {
                     ui.label("");
                     ui.checkbox(&mut self.command, "Start the other side for me")
                         .on_hover_text(
-                            "On a Unix host, type the lrzsz command (rz, sz NAME, rb, sb, rx, sx) \
-                             first. Leave it off for a device that is already waiting \
-                             (a bootloader, for example).",
+                            "On a Unix host with lrzsz installed, type its command (rz, sz NAME, \
+                             rb, sb, rx, sx) first. Leave it off for a device that is already \
+                             waiting (a bootloader, for example). Routers and switches \
+                             usually have no lrzsz.",
                         );
                     ui.end_row();
                     if let Some(cmd) = self.command() {
@@ -243,6 +278,19 @@ impl TransferDialog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_starts_are_recognised() {
+        assert!(start_failed("-bash: rz: command not found\r\n"));
+        assert!(start_failed("-bash: rz: comando não encontrado"));
+        assert!(start_failed(
+            "  % Unknown command, the error locates at '^'"
+        ));
+        assert!(start_failed("% Invalid input detected at '^' marker."));
+        assert!(start_failed("sz: cannot open x: No such file or directory"));
+        assert!(!start_failed("rz waiting to receive."));
+        assert!(!start_failed("**\u{18}B00000000000000"));
+    }
 
     #[test]
     fn commands_for_the_other_side() {
