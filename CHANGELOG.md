@@ -7,6 +7,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-02
+
 ### Added
 
 - Scripts in [Rhai](https://rhai.rs) (`<config>/scripts/*.rhai`): a
@@ -291,10 +293,11 @@ All notable changes to PrzmTerm are recorded here. The format follows
 - Desktop app with a session tree, terminal widget, xterm key mapping and a demo shell.
 - CI on Linux, macOS and Windows and a release workflow for version tags.
 
-[Unreleased]: https://github.com/rodrigoprazim/przmterm/compare/v0.6.0...main
+[Unreleased]: https://github.com/rodrigoprazim/przmterm/compare/v0.7.0...main
 [0.1.0]: https://github.com/rodrigoprazim/przmterm/releases/tag/v0.1.0
 [0.2.0]: https://github.com/rodrigoprazim/przmterm/compare/v0.1.0...v0.2.0
 [0.3.0]: https://github.com/rodrigoprazim/przmterm/compare/v0.2.0...v0.3.0
 [0.4.0]: https://github.com/rodrigoprazim/przmterm/compare/v0.3.0...v0.4.0
 [0.5.0]: https://github.com/rodrigoprazim/przmterm/compare/v0.4.0...v0.5.0
 [0.6.0]: https://github.com/rodrigoprazim/przmterm/compare/v0.5.0...v0.6.0
+[0.7.0]: https://github.com/rodrigoprazim/przmterm/compare/v0.6.0...v0.7.0
