@@ -11,6 +11,7 @@
 mod forward;
 mod pipe;
 pub mod serial;
+pub mod sftp;
 pub mod ssh;
 pub mod telnet;
 pub mod x11;
@@ -106,6 +107,12 @@ pub trait Transport: Send {
     /// Another session over the same connection, without logging in again,
     /// if the protocol supports it (SSH channels). `None` otherwise.
     fn duplicate(&self, _size: Size, _waker: Waker) -> Option<Box<dyn Transport>> {
+        None
+    }
+
+    /// An SFTP session on the same connection, if the protocol has one and
+    /// the connection is logged in (SSH). `None` otherwise.
+    fn sftp(&self, _waker: Waker) -> Option<sftp::SftpClient> {
         None
     }
 }

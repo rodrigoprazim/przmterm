@@ -143,8 +143,11 @@ highlighting, triggers, saved credentials) work in PrzmTerm.
 
 ## 0.8.0 — File transfer
 
-- SFTP with a file browser, also opened from a tab's menu ("Connect SFTP
-  Session")
+- [x] SFTP with a file browser, also opened from a tab's menu ("Connect SFTP
+  Session"), from the session list and with a shortcut, on the same
+  connection (no new login); uploads (also by dropping files) and downloads
+  of files and whole folders with progress and cancel, new folder, rename,
+  delete
 - Xmodem, Ymodem and Zmodem
 
 ## 0.9.0 — Automation and hardening

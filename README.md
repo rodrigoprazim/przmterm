@@ -89,6 +89,15 @@ encrypted. Opening a session that uses the vault asks for the master
 password once per run; *Lock* in the vault window asks again next time.
 Sessions without an entry keep using the system keychain.
 
+### SFTP
+
+*Connect SFTP Session* in a tab's menu (or *Connect SFTP…* on an SSH
+session in the list) opens a file browser on the same connection, without
+logging in again. Double-click a folder to open it and a file to download
+it; *Download…* takes several files or whole folders. *Upload files…*,
+*Upload folder…* or dropping files on the window sends them to the folder
+shown. Transfers run in the background with a progress bar and *Cancel*.
+
 ### Backup and sharing sessions
 
 **+** next to *Sessions* › *Back up settings…* writes one `.przm` file with

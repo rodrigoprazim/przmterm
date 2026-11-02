@@ -7,6 +7,17 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- SFTP browser: *Connect SFTP Session* in the tab menu, *Connect SFTP…* in
+  the session list (connects first if needed) or a keyboard shortcut opens a
+  window on the same SSH connection, with no new login. Browse folders (path
+  field, parent, refresh, hidden files), upload files or folders (also by
+  dropping them on the window), download files or folders (double-click a
+  file, or *Download…*), with progress and *Cancel*; new folder, rename and
+  delete (folders with their contents, after asking). Downloads never
+  overwrite: an existing name gets ` (2)`.
+
 ## [0.7.0] - 2026-11-02
 
 ### Added

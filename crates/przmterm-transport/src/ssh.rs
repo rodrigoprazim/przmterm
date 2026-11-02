@@ -350,6 +350,14 @@ impl Transport for SshTransport {
         self.share_connection(size, waker)
             .map(|t| Box::new(t) as Box<dyn Transport>)
     }
+
+    fn sftp(&self, waker: Waker) -> Option<crate::sftp::SftpClient> {
+        let handle = self.shared.lock().ok()?.as_ref()?.upgrade()?;
+        if handle.is_closed() {
+            return None;
+        }
+        Some(crate::sftp::start(handle, waker))
+    }
 }
 
 /// User-bound side of the task: keystrokes and resizes from the GUI.
@@ -952,7 +960,7 @@ async fn confirmed(
 }
 
 /// Drops one user of the connection, disconnecting if it was the last.
-async fn release(handle: Arc<Handle>) {
+pub(crate) async fn release(handle: Arc<Handle>) {
     if Arc::strong_count(&handle) == 1 {
         let _ = handle.disconnect(Disconnect::ByApplication, "", "en").await;
     }

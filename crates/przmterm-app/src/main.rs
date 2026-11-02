@@ -9,6 +9,7 @@ mod keymap;
 mod keywords;
 mod pane;
 mod scriptguide;
+mod sftp;
 mod vault;
 mod view;
 
@@ -270,6 +271,10 @@ enum Action {
     StopScript(usize),
     /// Opens the script guide.
     ScriptGuide,
+    /// Opens an SFTP browser on the active pane's connection of this tab.
+    OpenSftp(usize),
+    /// Connects a session and opens an SFTP browser once logged in.
+    SftpFor(Box<Session>),
     ClosePane,
     FocusPane(usize),
     Reconnect,
@@ -341,6 +346,11 @@ struct PrzmApp {
     shortcuts: keymap::Shortcuts,
     /// The keyboard shortcut editor, when open.
     keymap_editor: Option<keymap::KeymapEditor>,
+    /// SFTP browsers.
+    sftp_windows: Vec<sftp::SftpBrowser>,
+    sftp_next: u64,
+    /// A session whose SFTP browser opens once it is logged in.
+    sftp_pending: Option<(PathBuf, std::time::Instant)>,
     /// The script guide, when open.
     script_guide: Option<scriptguide::ScriptGuide>,
     /// Questions from scripts, asked one at a time.
@@ -361,6 +371,8 @@ const STATUS_TIME: std::time::Duration = std::time::Duration::from_secs(8);
 /// What the user picked in the session tree.
 enum TreeAction {
     Connect(Session),
+    /// Connect (if needed) and open an SFTP browser.
+    Sftp(Session),
     Edit(Session),
     Duplicate(Session),
     Delete(Session),
@@ -449,6 +461,9 @@ impl PrzmApp {
             split_dialog: None,
             script_prompts: Default::default(),
             script_guide: None,
+            sftp_windows: Vec::new(),
+            sftp_next: 0,
+            sftp_pending: None,
             shortcuts,
             keymap_editor: None,
             bundle_dialog: None,
@@ -710,6 +725,40 @@ impl PrzmApp {
                 }
             }
             Action::StopScript(t) => self.tabs[t].pane_mut().stop_script(),
+            Action::OpenSftp(t) => {
+                let pane = self.tabs[t].pane();
+                let name = pane
+                    .origin
+                    .as_ref()
+                    .map_or_else(|| pane.title(), |s| s.name.clone());
+                match pane.transport.sftp(waker) {
+                    Some(client) => {
+                        self.sftp_next += 1;
+                        self.sftp_windows.push(sftp::SftpBrowser::new(
+                            name,
+                            self.sftp_next,
+                            client,
+                        ));
+                    }
+                    None => {
+                        self.notice =
+                            Some("SFTP needs a connected SSH session (log in first).".into())
+                    }
+                }
+            }
+            Action::SftpFor(session) => {
+                self.sftp_pending = Some((session.path.clone(), std::time::Instant::now()));
+                // Already connected: SFTP right away; otherwise connect first.
+                let live = self.tabs.iter().any(|t| {
+                    t.panes.iter().any(|p| {
+                        !p.transport.is_closed()
+                            && p.origin.as_ref().is_some_and(|o| o.path == session.path)
+                    })
+                });
+                if !live {
+                    self.apply(Action::Open(session), ctx);
+                }
+            }
             Action::ScriptGuide => {
                 self.script_guide
                     .get_or_insert_with(scriptguide::ScriptGuide::new);
@@ -769,6 +818,49 @@ impl PrzmApp {
                     pane::ScriptEvent::Ended(message) => self.notice = Some(message),
                 }
             }
+        }
+    }
+
+    /// Opens the SFTP browser asked for with "Connect SFTP…" once its
+    /// session is logged in.
+    fn run_sftp_pending(&mut self, ctx: &egui::Context) {
+        let Some((path, since)) = self.sftp_pending.clone() else {
+            return;
+        };
+        if since.elapsed() > std::time::Duration::from_secs(120) {
+            self.sftp_pending = None;
+            return;
+        }
+        let found = self.tabs.iter().enumerate().find_map(|(t, tab)| {
+            tab.panes.iter().find_map(|p| {
+                (!p.transport.is_closed() && p.origin.as_ref().is_some_and(|o| o.path == path))
+                    .then_some(t)
+            })
+        });
+        let Some(t) = found else {
+            ctx.request_repaint_after(std::time::Duration::from_millis(300));
+            return;
+        };
+        let ctx2 = ctx.clone();
+        let waker: Waker = Arc::new(move || ctx2.request_repaint());
+        let pane = self.tabs[t]
+            .panes
+            .iter()
+            .find(|p| !p.transport.is_closed() && p.origin.as_ref().is_some_and(|o| o.path == path))
+            .expect("found above");
+        if let Some(client) = pane.transport.sftp(waker) {
+            let name = pane
+                .origin
+                .as_ref()
+                .map(|o| o.name.clone())
+                .unwrap_or_default();
+            self.sftp_next += 1;
+            self.sftp_windows
+                .push(sftp::SftpBrowser::new(name, self.sftp_next, client));
+            self.sftp_pending = None;
+        } else {
+            // Not logged in yet.
+            ctx.request_repaint_after(std::time::Duration::from_millis(300));
         }
     }
 
@@ -839,6 +931,7 @@ impl PrzmApp {
                 "run_script" => Action::RunScript(t),
                 "stop_script" => Action::StopScript(t),
                 "script_guide" => Action::ScriptGuide,
+                "open_sftp" => Action::OpenSftp(t),
                 _ => return None,
             },
             Does::Send(text) => Action::Macro(buttonbar::Press {
@@ -1264,6 +1357,14 @@ impl PrzmApp {
                 self.shortcuts = keymap::Shortcuts::load(Some(&dir));
             }
         }
+        // Files dropped outside every SFTP window go to the newest one.
+        let last = self.sftp_windows.len().saturating_sub(1);
+        let mut i = 0;
+        self.sftp_windows.retain_mut(|w| {
+            let keep = w.show(ctx, i == last);
+            i += 1;
+            keep
+        });
         if let (Some(guide), Some(dir)) = (&mut self.script_guide, self.config_dir.clone()) {
             let open = guide.show(ctx, &dir);
             if let Some(n) = guide.notice.take() {
@@ -1695,6 +1796,14 @@ fn tab_menu(
     }
     item(ui, true, "Script Guide…", Action::ScriptGuide);
     ui.separator();
+    let ssh_live = tab
+        .pane()
+        .origin
+        .as_ref()
+        .is_some_and(|s| s.protocol == przmterm_core::Protocol::Ssh)
+        && !tab.pane().transport.is_closed();
+    item(ui, ssh_live, "Connect SFTP Session", Action::OpenSftp(i));
+    ui.separator();
     // Typing into every pane of this tab: only for split tabs.
     let split = tab.panes.len() > 1;
     let on = broadcast && i == active;
@@ -1846,6 +1955,15 @@ fn folder_ui(
                 picked.push(TreeAction::Connect(s.clone()));
                 ui.close();
             }
+            if s.protocol == przmterm_core::Protocol::Ssh
+                && ui
+                    .button("Connect SFTP…")
+                    .on_hover_text("Browse and transfer files on this server")
+                    .clicked()
+            {
+                picked.push(TreeAction::Sftp(s.clone()));
+                ui.close();
+            }
             if ui.button("Edit…").clicked() {
                 picked.push(TreeAction::Edit(s.clone()));
                 ui.close();
@@ -1910,6 +2028,7 @@ impl eframe::App for PrzmApp {
         self.run_retries(&ctx);
         self.run_queues(&ctx);
         self.run_scripts();
+        self.run_sftp_pending(&ctx);
         // "Send to all" is for split panes: off when the tab has one pane.
         if self.tab().panes.len() < 2 {
             self.broadcast = false;
@@ -2373,6 +2492,7 @@ impl eframe::App for PrzmApp {
                         for p in picked {
                             match p {
                                 TreeAction::Connect(s) => actions.push(Action::Open(Box::new(s))),
+                                TreeAction::Sftp(s) => actions.push(Action::SftpFor(Box::new(s))),
                                 TreeAction::Edit(s) => self.editor = Some(Editor::edit(&s)),
                                 TreeAction::Duplicate(s) => {
                                     self.editor = Some(Editor::duplicate(&s))

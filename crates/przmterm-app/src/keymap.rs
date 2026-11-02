@@ -16,7 +16,7 @@ pub struct Command {
     pub default: Option<&'static str>,
 }
 
-pub const COMMANDS: [Command; 19] = [
+pub const COMMANDS: [Command; 20] = [
     Command {
         id: "new_tab",
         label: "New tab (same session)",
@@ -110,6 +110,11 @@ pub const COMMANDS: [Command; 19] = [
     Command {
         id: "script_guide",
         label: "Script guide",
+        default: None,
+    },
+    Command {
+        id: "open_sftp",
+        label: "Connect SFTP session",
         default: None,
     },
 ];
