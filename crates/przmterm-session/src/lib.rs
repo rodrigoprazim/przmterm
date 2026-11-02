@@ -348,11 +348,37 @@ impl Session {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Folder {
     pub name: String,
+    /// Directory on disk.
+    pub dir: PathBuf,
+    /// Folder names from the root to this folder (empty for the root).
+    pub trail: Vec<String>,
+    /// Settings this folder passes down: defaults plus every `folder.toml`
+    /// from the root to here.
+    pub settings: SessionSettings,
+    /// Settings this folder receives from above (without its own `folder.toml`).
+    pub inherited: SessionSettings,
     pub folders: Vec<Folder>,
     pub sessions: Vec<Session>,
 }
 
 impl Folder {
+    /// The folder at `trail` below this one (`[]` is this folder).
+    pub fn find(&self, trail: &[String]) -> Option<&Folder> {
+        match trail.split_first() {
+            None => Some(self),
+            Some((first, rest)) => self
+                .folders
+                .iter()
+                .find(|f| f.name == *first)
+                .and_then(|f| f.find(rest)),
+        }
+    }
+
+    /// Number of sessions in this folder and below.
+    pub fn session_count(&self) -> usize {
+        self.all_sessions().len()
+    }
+
     /// Paths of this folder and every folder below it, e.g. `["", "Cisco", "Cisco/Core"]`.
     pub fn folder_paths(&self) -> Vec<String> {
         fn walk(folder: &Folder, prefix: &str, out: &mut Vec<String>) {
@@ -411,6 +437,13 @@ impl SessionTree {
                 &defaults,
                 &mut tree.errors,
             );
+        } else {
+            tree.root = Folder {
+                dir: sessions_dir,
+                settings: defaults.clone(),
+                inherited: defaults,
+                ..Folder::default()
+            };
         }
         tree
     }
@@ -471,6 +504,79 @@ pub fn write_session(
         source,
     })?;
     Ok(path)
+}
+
+/// Creates the folder `name` inside `parent` and returns its path.
+pub fn create_folder(parent: &Path, name: &str) -> Result<PathBuf, SessionError> {
+    let path = parent.join(name.trim());
+    validate_name(name).map_err(|reason| SessionError::Invalid {
+        path: path.clone(),
+        reason,
+    })?;
+    if path.exists() {
+        return Err(SessionError::Invalid {
+            path,
+            reason: "a folder with this name already exists".into(),
+        });
+    }
+    fs::create_dir_all(&path).map_err(|source| SessionError::Io {
+        path: path.clone(),
+        source,
+    })?;
+    Ok(path)
+}
+
+/// Renames the folder at `dir` and returns its new path.
+pub fn rename_folder(dir: &Path, new_name: &str) -> Result<PathBuf, SessionError> {
+    let parent = dir.parent().unwrap_or(dir);
+    let path = parent.join(new_name.trim());
+    validate_name(new_name).map_err(|reason| SessionError::Invalid {
+        path: path.clone(),
+        reason,
+    })?;
+    if path == dir {
+        return Ok(path);
+    }
+    if path.exists() {
+        return Err(SessionError::Invalid {
+            path,
+            reason: "a folder with this name already exists".into(),
+        });
+    }
+    fs::rename(dir, &path).map_err(|source| SessionError::Io {
+        path: dir.to_path_buf(),
+        source,
+    })?;
+    Ok(path)
+}
+
+/// Deletes the folder at `dir` with everything in it.
+pub fn delete_folder(dir: &Path) -> Result<(), SessionError> {
+    fs::remove_dir_all(dir).map_err(|source| SessionError::Io {
+        path: dir.to_path_buf(),
+        source,
+    })
+}
+
+/// Writes a folder's own settings (`folder.toml`); empty settings remove the file.
+pub fn write_folder_settings(dir: &Path, settings: &SessionSettings) -> Result<(), SessionError> {
+    let path = dir.join(FOLDER_FILE);
+    let io = |source| SessionError::Io {
+        path: path.clone(),
+        source,
+    };
+    if *settings == SessionSettings::default() {
+        match fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(io(e)),
+            _ => Ok(()),
+        }
+    } else {
+        fs::create_dir_all(dir).map_err(|source| SessionError::Io {
+            path: dir.to_path_buf(),
+            source,
+        })?;
+        fs::write(&path, settings.to_toml()).map_err(io)
+    }
 }
 
 /// Default configuration directory: `$PRZMTERM_HOME`, else the OS config dir.
@@ -600,6 +706,10 @@ fn load_folder(
 
     let mut folder = Folder {
         name,
+        dir: dir.to_path_buf(),
+        trail: trail.clone(),
+        settings: settings.clone(),
+        inherited: inherited.clone(),
         ..Folder::default()
     };
     for path in entries {
@@ -738,6 +848,48 @@ mod tests {
         assert!(write_session(tmp.path(), "", "a/b", &settings).is_err());
         assert!(write_session(tmp.path(), "", "folder", &settings).is_err());
         assert!(write_session(tmp.path(), "../x", "ok", &settings).is_err());
+    }
+
+    #[test]
+    fn folder_operations_and_effective_settings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write(dir, "defaults.toml", "username = 'root'");
+        let lab = create_folder(&dir.join(SESSIONS_DIR), "Lab").unwrap();
+        assert!(create_folder(&dir.join(SESSIONS_DIR), "Lab").is_err());
+        let core = create_folder(&lab, "Core").unwrap();
+        write_folder_settings(&lab, &SessionSettings::from_toml("port = 2222").unwrap()).unwrap();
+        write(dir, "sessions/Lab/Core/sw.toml", "host = 'sw'");
+
+        let tree = SessionTree::load(dir);
+        let core_folder = tree.root.find(&["Lab".into(), "Core".into()]).unwrap();
+        assert_eq!(core_folder.dir, core);
+        assert_eq!(
+            core_folder.trail,
+            vec!["Lab".to_string(), "Core".to_string()]
+        );
+        assert_eq!(core_folder.settings.port, Some(2222));
+        assert_eq!(core_folder.settings.username.as_deref(), Some("root"));
+        let lab_folder = tree.root.find(&["Lab".into()]).unwrap();
+        assert_eq!(
+            lab_folder.inherited.port, None,
+            "own folder.toml not inherited"
+        );
+        assert_eq!(lab_folder.session_count(), 1);
+
+        let renamed = rename_folder(&lab, "Datacenter").unwrap();
+        let tree = SessionTree::load(dir);
+        let sw = tree.root.all_sessions()[0];
+        assert_eq!(
+            sw.folder,
+            vec!["Datacenter".to_string(), "Core".to_string()]
+        );
+        assert_eq!(sw.display_target(), "root@sw:2222");
+
+        write_folder_settings(&renamed, &SessionSettings::default()).unwrap();
+        assert!(!renamed.join(FOLDER_FILE).exists());
+        delete_folder(&renamed).unwrap();
+        assert!(SessionTree::load(dir).root.all_sessions().is_empty());
     }
 
     #[test]

@@ -29,7 +29,14 @@ All notable changes to PrzmTerm are recorded here. The format follows
   The `save_password` setting makes this always or never.
 - Session editor: create, edit, duplicate and delete sessions from the tree
   (right-click, or + for a new one). Only values set in the file are written;
-  empty fields inherit.
+  empty fields show the value they inherit and where it comes from. The folder
+  is chosen from a compact tree, the terminal type from a list, and the key
+  file with the system file dialog.
+- Folders: right-click a folder to add a session or a subfolder, rename it,
+  delete it, or edit its settings (`folder.toml`), which the sessions inside inherit.
+- New tabs and split panes open another channel on the existing SSH connection,
+  so there is no second login or two-factor prompt.
+- Two panes logging the same session write to separate files (`-2`, `-3`…).
 
 ## [0.2.0] - 2026-11-01
 

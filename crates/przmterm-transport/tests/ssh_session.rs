@@ -533,3 +533,45 @@ fn keyboard_interactive_password_prompt_uses_the_store() {
     s.transport.close().unwrap();
     s.wait_closed();
 }
+
+#[test]
+fn duplicate_reuses_the_authenticated_connection() {
+    let dir = tempfile::tempdir().unwrap();
+    // One TCP connection only: a second login would hang, not succeed.
+    let port = start_server_with(host_key(), 1, &[MethodKind::KeyboardInteractive], None);
+    let mut first = Screen::connect(config(port, &dir.path().join("known_hosts")));
+    assert!(
+        first
+            .transport
+            .share_connection(Size { cols: 80, rows: 24 }, noop_waker())
+            .is_none(),
+        "nothing to share before login"
+    );
+    first.wait_for("(yes/no)? ");
+    first.send("yes\r");
+    first.wait_for("Verification code: ");
+    first.send("123456\r");
+    first.wait_for("welcome");
+
+    let mut second = Screen {
+        transport: first
+            .transport
+            .share_connection(Size { cols: 70, rows: 20 }, noop_waker())
+            .expect("connection is shared"),
+        text: String::new(),
+    };
+    second.wait_for("welcome");
+    assert!(second.text.contains("no new login"));
+    assert!(second.text.contains("pty xterm-256color 70x20"));
+    assert!(!second.text.contains("Verification code"));
+
+    // Closing the first pane keeps the second one alive.
+    first.transport.close().unwrap();
+    first.wait_closed();
+    second.send("still here");
+    second.wait_for("still here");
+
+    second.send("exit\r");
+    second.wait_closed();
+    assert!(second.text.contains("exit status 3"));
+}

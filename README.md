@@ -50,7 +50,7 @@ changes, PrzmTerm refuses to connect and shows the old and new fingerprints.
 
 | Action | Linux / Windows | macOS |
 | --- | --- | --- |
-| New tab (same session) | Ctrl+Shift+T | ⌘⇧T |
+| New tab (same session, no new login) | Ctrl+Shift+T | ⌘⇧T |
 | Split side by side / stacked | Ctrl+Shift+D / Ctrl+Shift+E | ⌘⇧D / ⌘⇧E |
 | Close pane | Ctrl+Shift+W | ⌘⇧W |
 | Next / previous tab | Ctrl+Tab / Ctrl+Shift+Tab | same |
@@ -104,7 +104,9 @@ path = "~/logs/%S-%Y%M%D.log"   # %S session, %H host, %Y%M%D date, %h%m%s time
 ```
 
 Sessions can also be created and edited from the app: **+** next to
-*Sessions*, or right-click a session for Edit, Duplicate and Delete.
+*Sessions*, or right-click a session for Edit, Duplicate and Delete. Right-click
+a folder to add a session or subfolder there, rename it, or edit the settings
+its sessions inherit.
 
 A sample tree is in [examples/config](examples/config). Try it with
 `PRZMTERM_HOME=examples/config cargo run`.

@@ -106,7 +106,8 @@ struct PrzmApp {
     quick_connect: String,
     quick_error: Option<String>,
     editor: Option<Editor>,
-    confirm_delete: Option<Session>,
+    confirm_delete: Option<Deletion>,
+    name_dialog: Option<NameDialog>,
     notice: Option<String>,
 }
 
@@ -117,6 +118,32 @@ enum TreeAction {
     Duplicate(Session),
     Delete(Session),
     ForgetPassword(Session),
+    NewSession(Vec<String>),
+    NewFolder(PathBuf),
+    RenameFolder(PathBuf, String),
+    FolderSettings(Vec<String>),
+    DeleteFolder(PathBuf, String, usize),
+}
+
+/// A small dialog asking for a folder name.
+struct NameDialog {
+    title: &'static str,
+    /// For a new folder: the parent. For a rename: the folder itself.
+    dir: PathBuf,
+    rename: bool,
+    value: String,
+    error: Option<String>,
+}
+
+/// What a confirmation dialog would delete.
+#[derive(Clone)]
+enum Deletion {
+    Session(Session),
+    Folder {
+        dir: PathBuf,
+        name: String,
+        sessions: usize,
+    },
 }
 
 impl PrzmApp {
@@ -139,6 +166,7 @@ impl PrzmApp {
             quick_error: None,
             editor: None,
             confirm_delete: None,
+            name_dialog: None,
             notice: None,
         }
     }
@@ -274,42 +302,104 @@ impl PrzmApp {
     /// The session editor and the delete confirmation.
     fn dialogs(&mut self, ctx: &egui::Context) {
         if let (Some(editor), Some(dir)) = (&mut self.editor, self.config_dir.clone()) {
-            let folders = self.sessions.root.folder_paths();
-            match editor.show(ctx, &dir, &folders) {
+            match editor.show(ctx, &dir, &self.sessions.root) {
                 EditorResult::Open => {}
                 EditorResult::Cancel => self.editor = None,
-                EditorResult::Saved(path) => {
+                EditorResult::Saved(name) => {
                     self.editor = None;
-                    self.notice = Some(format!(
-                        "Saved {}.",
-                        path.file_stem().unwrap_or_default().to_string_lossy()
-                    ));
+                    self.notice = Some(format!("Saved {name}."));
                     self.reload_sessions();
                 }
             }
         }
-        if let Some(session) = self.confirm_delete.clone() {
-            let mut keep_open = true;
-            egui::Window::new("Delete session")
+
+        if let Some(dialog) = &mut self.name_dialog {
+            let mut close = false;
+            let mut done: Option<String> = None;
+            egui::Window::new(dialog.title)
                 .collapsible(false)
                 .resizable(false)
                 .show(ctx, |ui| {
-                    ui.label(format!(
-                        "Delete “{}”?\n{}",
-                        session.name,
-                        session.path.display()
-                    ));
+                    let edit = ui.add(
+                        egui::TextEdit::singleline(&mut dialog.value)
+                            .hint_text("Folder name")
+                            .desired_width(240.0),
+                    );
+                    edit.request_focus();
+                    let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                    if let Some(err) = &dialog.error {
+                        ui.colored_label(ui.visuals().error_fg_color, err);
+                    }
+                    ui.horizontal(|ui| {
+                        if ui.button("OK").clicked() || enter {
+                            let result = if dialog.rename {
+                                przmterm_session::rename_folder(&dialog.dir, &dialog.value)
+                            } else {
+                                przmterm_session::create_folder(&dialog.dir, &dialog.value)
+                            };
+                            match result {
+                                Ok(_) => done = Some(dialog.value.trim().to_string()),
+                                Err(e) => dialog.error = Some(e.to_string()),
+                            }
+                        }
+                        if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(Key::Escape))
+                        {
+                            close = true;
+                        }
+                    });
+                });
+            if let Some(name) = done {
+                self.notice = Some(format!("Folder {name} saved."));
+                self.reload_sessions();
+                close = true;
+            }
+            if close {
+                self.name_dialog = None;
+            }
+        }
+
+        if let Some(deletion) = self.confirm_delete.clone() {
+            let mut keep_open = true;
+            let (title, question) = match &deletion {
+                Deletion::Session(s) => (
+                    "Delete session",
+                    format!("Delete “{}”?\n{}", s.name, s.path.display()),
+                ),
+                Deletion::Folder { name, sessions, .. } => (
+                    "Delete folder",
+                    match sessions {
+                        0 => format!("Delete the folder “{name}”?"),
+                        1 => format!("Delete the folder “{name}” and the session in it?"),
+                        n => format!("Delete the folder “{name}” and the {n} sessions in it?"),
+                    },
+                ),
+            };
+            egui::Window::new(title)
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label(question);
                     ui.horizontal(|ui| {
                         if ui.button("Delete").clicked() {
-                            match std::fs::remove_file(&session.path) {
-                                Ok(()) => {
-                                    if let Some(account) = session.password_account() {
+                            let result = match &deletion {
+                                Deletion::Session(s) => {
+                                    if let Some(account) = s.password_account() {
                                         Keychain.delete(&account);
                                     }
-                                    self.notice = Some(format!("Deleted {}.", session.name));
+                                    std::fs::remove_file(&s.path)
+                                        .map(|_| s.name.clone())
+                                        .map_err(|e| e.to_string())
                                 }
-                                Err(e) => self.notice = Some(format!("Cannot delete: {e}")),
-                            }
+                                Deletion::Folder { dir, name, .. } => {
+                                    przmterm_session::delete_folder(dir)
+                                        .map(|_| name.clone())
+                                        .map_err(|e| e.to_string())
+                                }
+                            };
+                            self.notice = Some(match result {
+                                Ok(name) => format!("Deleted {name}."),
+                                Err(e) => format!("Cannot delete: {e}"),
+                            });
                             keep_open = false;
                             self.reload_sessions();
                         }
@@ -328,9 +418,45 @@ impl PrzmApp {
 /// Draws the session tree, collecting what the user picked.
 fn folder_ui(ui: &mut egui::Ui, folder: &Folder, picked: &mut Vec<TreeAction>) {
     for f in &folder.folders {
-        egui::CollapsingHeader::new(&f.name)
+        let header = egui::CollapsingHeader::new(format!("📁 {}", f.name))
+            .id_salt(&f.dir)
             .default_open(true)
             .show(ui, |ui| folder_ui(ui, f, picked));
+        header
+            .header_response
+            .on_hover_text("Right-click to add sessions, rename or set folder defaults")
+            .context_menu(|ui| {
+                if ui.button("New session here…").clicked() {
+                    picked.push(TreeAction::NewSession(f.trail.clone()));
+                    ui.close();
+                }
+                if ui.button("New folder inside…").clicked() {
+                    picked.push(TreeAction::NewFolder(f.dir.clone()));
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Rename…").clicked() {
+                    picked.push(TreeAction::RenameFolder(f.dir.clone(), f.name.clone()));
+                    ui.close();
+                }
+                if ui
+                    .button("Folder settings…")
+                    .on_hover_text("Values every session in this folder inherits")
+                    .clicked()
+                {
+                    picked.push(TreeAction::FolderSettings(f.trail.clone()));
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Delete…").clicked() {
+                    picked.push(TreeAction::DeleteFolder(
+                        f.dir.clone(),
+                        f.name.clone(),
+                        f.session_count(),
+                    ));
+                    ui.close();
+                }
+            });
     }
     for s in &folder.sessions {
         let response = ui.selectable_label(false, &s.name).on_hover_text(format!(
@@ -518,10 +644,23 @@ impl eframe::App for PrzmApp {
                     if ui.small_button("⟳").on_hover_text("Reload").clicked() {
                         self.reload_sessions();
                     }
-                    if self.config_dir.is_some()
-                        && ui.small_button("+").on_hover_text("New session").clicked()
-                    {
-                        self.editor = Some(Editor::new_session(""));
+                    if self.config_dir.is_some() {
+                        ui.menu_button("+", |ui| {
+                            if ui.button("New session…").clicked() {
+                                self.editor = Some(Editor::new_session(&[]));
+                                ui.close();
+                            }
+                            if ui.button("New folder…").clicked() {
+                                self.name_dialog = Some(NameDialog {
+                                    title: "New folder",
+                                    dir: self.sessions.root.dir.clone(),
+                                    rename: false,
+                                    value: String::new(),
+                                    error: None,
+                                });
+                                ui.close();
+                            }
+                        });
                     }
                 });
                 if let Some(notice) = &self.notice {
@@ -548,7 +687,42 @@ impl eframe::App for PrzmApp {
                                 TreeAction::Duplicate(s) => {
                                     self.editor = Some(Editor::duplicate(&s))
                                 }
-                                TreeAction::Delete(s) => self.confirm_delete = Some(s),
+                                TreeAction::Delete(s) => {
+                                    self.confirm_delete = Some(Deletion::Session(s))
+                                }
+                                TreeAction::NewSession(trail) => {
+                                    self.editor = Some(Editor::new_session(&trail))
+                                }
+                                TreeAction::NewFolder(parent) => {
+                                    self.name_dialog = Some(NameDialog {
+                                        title: "New folder",
+                                        dir: parent,
+                                        rename: false,
+                                        value: String::new(),
+                                        error: None,
+                                    })
+                                }
+                                TreeAction::RenameFolder(dir, name) => {
+                                    self.name_dialog = Some(NameDialog {
+                                        title: "Rename folder",
+                                        dir,
+                                        rename: true,
+                                        value: name,
+                                        error: None,
+                                    })
+                                }
+                                TreeAction::FolderSettings(trail) => {
+                                    if let Some(f) = self.sessions.root.find(&trail) {
+                                        self.editor = Some(Editor::folder(f));
+                                    }
+                                }
+                                TreeAction::DeleteFolder(dir, name, sessions) => {
+                                    self.confirm_delete = Some(Deletion::Folder {
+                                        dir,
+                                        name,
+                                        sessions,
+                                    })
+                                }
                                 TreeAction::ForgetPassword(s) => {
                                     if let Some(account) = s.password_account() {
                                         Keychain.delete(&account);

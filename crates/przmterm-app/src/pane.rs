@@ -30,8 +30,45 @@ pub struct SessionLog {
     pub path: PathBuf,
 }
 
+/// Log files currently open, so two panes never write to the same file.
+fn open_logs() -> &'static std::sync::Mutex<std::collections::HashSet<PathBuf>> {
+    static OPEN: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
+        std::sync::OnceLock::new();
+    OPEN.get_or_init(Default::default)
+}
+
+/// `path`, or `name-2.ext`, `name-3.ext`… if another pane has it open.
+fn claim_log_path(path: PathBuf) -> PathBuf {
+    let mut open = open_logs().lock().unwrap_or_else(|e| e.into_inner());
+    let mut candidate = path.clone();
+    let mut n = 2;
+    while open.contains(&candidate) {
+        let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+        let name = match path.extension() {
+            Some(ext) => format!("{stem}-{n}.{}", ext.to_string_lossy()),
+            None => format!("{stem}-{n}"),
+        };
+        candidate = path.with_file_name(name);
+        n += 1;
+    }
+    open.insert(candidate.clone());
+    candidate
+}
+
 impl SessionLog {
     fn start(path: PathBuf, title: &str) -> std::io::Result<Self> {
+        let path = claim_log_path(path);
+        let opened = Self::open(path.clone(), title);
+        if opened.is_err() {
+            open_logs()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&path);
+        }
+        opened
+    }
+
+    fn open(path: PathBuf, title: &str) -> std::io::Result<Self> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
@@ -66,6 +103,10 @@ impl Drop for SessionLog {
         let _ = self.file.write_all(rest.as_bytes());
         let _ = writeln!(self.file, "===== log closed {now} =====");
         let _ = self.file.flush();
+        open_logs()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.path);
     }
 }
 
@@ -271,11 +312,55 @@ impl Pane {
         }
     }
 
-    /// A new pane connected to the same session (or a fresh demo shell).
+    /// A new pane on the same session: another channel on the live
+    /// connection when possible (no new login, so no 2FA prompt), else a
+    /// fresh connection. Without a session, a demo shell.
     pub fn clone_session(&self, env: &Env, waker: Waker) -> Self {
-        match &self.origin {
-            Some(session) => Pane::open(session, env, self.size(), waker),
-            None => Pane::demo(),
+        let Some(session) = &self.origin else {
+            return Pane::demo();
+        };
+        let size = self.size();
+        let Some(transport) = (!self.transport.is_closed())
+            .then(|| self.transport.duplicate(size, waker.clone()))
+            .flatten()
+        else {
+            return Pane::open(session, env, size, waker);
+        };
+        let mut pane = Self {
+            term: Terminal::with_scrollback(
+                usize::from(size.cols),
+                usize::from(size.rows),
+                session.scrollback,
+            ),
+            transport,
+            view: TerminalView::default(),
+            label: self.label.clone(),
+            origin: Some(session.clone()),
+            log: None,
+            closed_announced: false,
+        };
+        if session.log_enabled {
+            pane.start_log(env);
         }
+        pane
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn concurrent_logs_get_distinct_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sw-20261101.log");
+        let a = SessionLog::start(path.clone(), "sw").unwrap();
+        let b = SessionLog::start(path.clone(), "sw").unwrap();
+        assert_eq!(a.path, path);
+        assert_eq!(b.path, dir.path().join("sw-20261101-2.log"));
+        drop(a);
+        let c = SessionLog::start(path.clone(), "sw").unwrap();
+        assert_eq!(c.path, path, "freed when the first log closes");
+        drop((b, c));
     }
 }

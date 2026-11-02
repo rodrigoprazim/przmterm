@@ -105,6 +105,10 @@ impl SshConfig {
     }
 }
 
+/// The authenticated connection, once there is one. Held weakly so that the
+/// connection ends when its last channel does.
+type Shared = Arc<std::sync::Mutex<Option<std::sync::Weak<Handle>>>>;
+
 /// An SSH session seen from the GUI: non-blocking reads and writes.
 pub struct SshTransport {
     cmds: mpsc::UnboundedSender<Cmd>,
@@ -112,27 +116,78 @@ pub struct SshTransport {
     pending: Vec<u8>,
     pending_pos: usize,
     closed: Arc<AtomicBool>,
+    shared: Shared,
+    host: String,
+    term_type: String,
 }
 
 impl SshTransport {
-    /// Starts connecting in the background and returns immediately.
-    /// `waker` is called whenever new output is available.
-    pub fn connect(config: SshConfig, size: Size, waker: Waker) -> Self {
+    fn spawn(
+        size: Size,
+        waker: Waker,
+        shared: Shared,
+        host: String,
+        term_type: String,
+        task: impl FnOnce(Arc<Mutex<Input>>, Output, Arc<AtomicBool>) -> TaskFuture,
+    ) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (out_tx, out_rx) = std_mpsc::channel();
         let closed = Arc::new(AtomicBool::new(false));
         let input = Arc::new(Mutex::new(Input { rx: cmd_rx, size }));
         let out = Output { tx: out_tx, waker };
-        runtime().spawn(session_task(config, input, out, closed.clone()));
+        runtime().spawn(task(input, out, closed.clone()));
         Self {
             cmds: cmd_tx,
             output: out_rx,
             pending: Vec::new(),
             pending_pos: 0,
             closed,
+            shared,
+            host,
+            term_type,
         }
     }
+
+    /// Starts connecting in the background and returns immediately.
+    /// `waker` is called whenever new output is available.
+    pub fn connect(config: SshConfig, size: Size, waker: Waker) -> Self {
+        let shared: Shared = Arc::default();
+        let (host, term_type) = (config.host.clone(), config.term_type.clone());
+        let shared2 = shared.clone();
+        Self::spawn(
+            size,
+            waker,
+            shared,
+            host,
+            term_type,
+            move |input, out, closed| Box::pin(session_task(config, input, out, closed, shared2)),
+        )
+    }
+
+    /// Opens another shell on this transport's connection, without logging
+    /// in again (like OpenSSH connection sharing). `None` if the connection
+    /// is not authenticated yet or has ended.
+    pub fn share_connection(&self, size: Size, waker: Waker) -> Option<SshTransport> {
+        let handle = self.shared.lock().ok()?.as_ref()?.upgrade()?;
+        if handle.is_closed() {
+            return None;
+        }
+        let (host, term_type) = (self.host.clone(), self.term_type.clone());
+        let (host2, term2) = (host.clone(), term_type.clone());
+        Some(Self::spawn(
+            size,
+            waker,
+            self.shared.clone(),
+            host,
+            term_type,
+            move |input, out, closed| {
+                Box::pin(channel_task(handle, host2, term2, input, out, closed))
+            },
+        ))
+    }
 }
+
+type TaskFuture = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 
 impl Transport for SshTransport {
     fn protocol(&self) -> Protocol {
@@ -175,6 +230,11 @@ impl Transport for SshTransport {
 
     fn is_closed(&self) -> bool {
         self.closed.load(Ordering::Acquire)
+    }
+
+    fn duplicate(&self, size: Size, waker: Waker) -> Option<Box<dyn Transport>> {
+        self.share_connection(size, waker)
+            .map(|t| Box::new(t) as Box<dyn Transport>)
     }
 }
 
@@ -501,22 +561,12 @@ fn failed(context: &str) -> impl Fn(russh::Error) -> End + '_ {
     move |e| End::Failed(format!("{context}: {e}"))
 }
 
-async fn session_task(
-    config: SshConfig,
-    input: Arc<Mutex<Input>>,
-    out: Output,
-    closed: Arc<AtomicBool>,
-) {
-    let end = match run_session(&config, &input, &out).await {
-        Ok(status) => End::Closed(status),
-        Err(end) => end,
-    };
+fn report(end: End, host: &str, out: &Output, closed: &AtomicBool) {
     match end {
         End::Closed(Some(code)) if code != 0 => out.notice(&format!(
-            "Connection to {} closed (exit status {code}).",
-            config.host
+            "Connection to {host} closed (exit status {code})."
         )),
-        End::Closed(_) => out.notice(&format!("Connection to {} closed.", config.host)),
+        End::Closed(_) => out.notice(&format!("Connection to {host} closed.")),
         End::Cancelled => out.notice("Connection cancelled."),
         End::Failed(msg) => out.error(&msg),
     }
@@ -524,10 +574,52 @@ async fn session_task(
     (out.waker)();
 }
 
+async fn session_task(
+    config: SshConfig,
+    input: Arc<Mutex<Input>>,
+    out: Output,
+    closed: Arc<AtomicBool>,
+    shared: Shared,
+) {
+    let end = match run_session(&config, &input, &out, &shared).await {
+        Ok(status) => End::Closed(status),
+        Err(end) => end,
+    };
+    report(end, &config.host, &out, &closed);
+}
+
+/// A further shell on an already authenticated connection.
+async fn channel_task(
+    handle: Arc<Handle>,
+    host: String,
+    term_type: String,
+    input: Arc<Mutex<Input>>,
+    out: Output,
+    closed: Arc<AtomicBool>,
+) {
+    out.notice(&format!(
+        "New session on the existing connection to {host} (no new login)."
+    ));
+    let end = match run_channel(&handle, &term_type, &input, &out).await {
+        Ok(status) => End::Closed(status),
+        Err(end) => end,
+    };
+    release(handle).await;
+    report(end, &host, &out, &closed);
+}
+
+/// Drops one user of the connection, disconnecting if it was the last.
+async fn release(handle: Arc<Handle>) {
+    if Arc::strong_count(&handle) == 1 {
+        let _ = handle.disconnect(Disconnect::ByApplication, "", "en").await;
+    }
+}
+
 async fn run_session(
     config: &SshConfig,
     input: &Arc<Mutex<Input>>,
     out: &Output,
+    shared: &Shared,
 ) -> Result<Option<u32>, End> {
     out.notice(&format!("Connecting to {}:{}…", config.host, config.port));
 
@@ -585,6 +677,22 @@ async fn run_session(
 
     authenticate(&mut handle, config, &user, input, out).await?;
 
+    let handle = Arc::new(handle);
+    if let Ok(mut slot) = shared.lock() {
+        *slot = Some(Arc::downgrade(&handle));
+    }
+    let result = run_channel(&handle, &config.term_type, input, out).await;
+    release(handle).await;
+    result
+}
+
+/// Opens a shell channel with a PTY and relays it until it closes.
+async fn run_channel(
+    handle: &Handle,
+    term_type: &str,
+    input: &Arc<Mutex<Input>>,
+    out: &Output,
+) -> Result<Option<u32>, End> {
     let channel = handle
         .channel_open_session()
         .await
@@ -594,7 +702,7 @@ async fn run_session(
     channel
         .request_pty(
             false,
-            &config.term_type,
+            term_type,
             u32::from(size.cols),
             u32::from(size.rows),
             0,
@@ -638,7 +746,6 @@ async fn run_session(
             },
         }
     }
-    let _ = handle.disconnect(Disconnect::ByApplication, "", "en").await;
     Ok(exit_status)
 }
 

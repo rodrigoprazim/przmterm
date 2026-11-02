@@ -72,6 +72,12 @@ pub trait Transport: Send {
     fn is_closed(&self) -> bool {
         false
     }
+
+    /// Another session over the same connection, without logging in again,
+    /// if the protocol supports it (SSH channels). `None` otherwise.
+    fn duplicate(&self, _size: Size, _waker: Waker) -> Option<Box<dyn Transport>> {
+        None
+    }
 }
 
 /// In-memory transport that echoes everything written back to the reader.
