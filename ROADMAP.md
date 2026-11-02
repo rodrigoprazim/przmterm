@@ -9,7 +9,7 @@ date. Version numbering and the release procedure are in
 | --- | --- | --- |
 | 0.1.0 | Foundation | Released |
 | 0.2.0 | SSH | Released |
-| 0.3.0 | Daily-driver MVP | In progress |
+| 0.3.0 | Daily-driver MVP | Released |
 | 0.4.0 | Telnet and serial | Planned |
 | 0.5.0 | Network gear | Planned |
 | 0.6.0 | Productivity | Planned |
@@ -55,8 +55,10 @@ Checked on Linux against OpenSSH 9.6 and on macOS against the maintainer's serve
 - [x] Per-session logging with file-name templates
 - [x] Credentials in the OS keychain (`keyring`)
 - [x] Session editor in the GUI (create, edit, duplicate, delete)
+- [x] Gate checked on macOS (Windows and Linux: CI build and tests only)
 
 **Gate:** used every day instead of SecureCRT for SSH sessions.
+Checked by the maintainer on macOS against his own servers, including 2FA logins.
 
 ## 0.4.0 — Telnet and serial
 
