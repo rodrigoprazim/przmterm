@@ -160,7 +160,13 @@ fn files_with(dir: &Path, extension: &str, out: &mut Vec<PathBuf>) {
 /// disk: encrypted, and opened with the same master password.
 pub fn backup(config_dir: &Path) -> Result<Bundle, String> {
     let mut bundle = Bundle::new(Kind::Backup);
-    for name in [DEFAULTS_FILE, BUTTONS_FILE, KNOWN_HOSTS_FILE, VAULT_FILE] {
+    for name in [
+        DEFAULTS_FILE,
+        BUTTONS_FILE,
+        KNOWN_HOSTS_FILE,
+        VAULT_FILE,
+        crate::keymap::KEYMAP_FILE,
+    ] {
         let path = config_dir.join(name);
         if path.is_file() {
             add_file(&mut bundle, config_dir, &path)?;

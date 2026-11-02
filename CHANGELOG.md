@@ -16,6 +16,14 @@ All notable changes to PrzmTerm are recorded here. The format follows
   tab menu, from a button (*Script* in the button dialog) or as a session's
   *Logon script*, run each time it connects. The status bar shows the running
   script with **■ Stop**. Scripts are included in backups.
+- Keyboard shortcuts (**+** › *Keyboard shortcuts…*): change or delete the
+  built-in ones and add new ones that send text (with the button escapes),
+  run an app command (19 of them: tabs, split, reconnect, log, scripts…),
+  run a script or press a button. Keys are recorded by pressing them;
+  clashes are refused and keys that would get in the way of typing are
+  flagged. Saved in `<config>/keymap.toml` (and in backups); *Reset to
+  defaults* goes back to the built-in ones. Menus and tooltips show the keys
+  in use.
 - Script guide (**+** › *Script guide…*, or *Script Guide…* in the tab menu):
   how to write scripts, topic by topic, with a snippet for each and six
   ready examples (Linux health check, run a list of commands, watch a host

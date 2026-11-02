@@ -5,6 +5,7 @@ mod demo;
 mod editor;
 mod input;
 mod keychain;
+mod keymap;
 mod keywords;
 mod pane;
 mod scriptguide;
@@ -14,7 +15,7 @@ mod view;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use eframe::egui::{self, Key, Modifiers};
+use eframe::egui::{self, Key};
 use przmterm_session::{Folder, Session, SessionTree};
 use przmterm_transport::ssh::PasswordStore;
 use przmterm_transport::{TransportError, Waker};
@@ -336,6 +337,10 @@ struct PrzmApp {
     font_dialog: Option<usize>,
     /// The "Split" dialog.
     split_dialog: Option<SplitDialog>,
+    /// The keyboard shortcuts in force.
+    shortcuts: keymap::Shortcuts,
+    /// The keyboard shortcut editor, when open.
+    keymap_editor: Option<keymap::KeymapEditor>,
     /// The script guide, when open.
     script_guide: Option<scriptguide::ScriptGuide>,
     /// Questions from scripts, asked one at a time.
@@ -405,6 +410,7 @@ enum Deletion {
 impl PrzmApp {
     fn new() -> Self {
         let config_dir = przmterm_session::default_config_dir();
+        let shortcuts = keymap::Shortcuts::load(config_dir.as_deref());
         let buttons = buttonbar::ButtonBarUi::load(config_dir.as_deref());
         let sessions = config_dir
             .as_deref()
@@ -443,6 +449,8 @@ impl PrzmApp {
             split_dialog: None,
             script_prompts: Default::default(),
             script_guide: None,
+            shortcuts,
+            keymap_editor: None,
             bundle_dialog: None,
             quitting: false,
         }
@@ -798,35 +806,65 @@ impl PrzmApp {
         }
     }
 
-    /// Window-level shortcuts, taken before the terminal sees the keys.
-    /// Cmd on macOS, Ctrl elsewhere, always with Shift so plain Ctrl
-    /// combinations still reach the remote side.
-    fn shortcuts(&self, ctx: &egui::Context) -> Option<Action> {
-        let cmd_shift = Modifiers::COMMAND | Modifiers::SHIFT;
-        ctx.input_mut(|i| {
-            if i.consume_key(cmd_shift, Key::T) {
-                Some(Action::NewTab)
-            } else if i.consume_key(cmd_shift, Key::W) {
-                Some(Action::RequestClosePane)
-            } else if i.consume_key(cmd_shift, Key::G) {
-                Some(Action::Split(Layout::Grid))
-            } else if i.consume_key(cmd_shift, Key::D) {
-                Some(Action::Split(Layout::Columns))
-            } else if i.consume_key(cmd_shift, Key::E) {
-                Some(Action::Split(Layout::Rows))
-            } else if i.consume_key(cmd_shift, Key::B) {
-                Some(Action::SendBreak)
-            } else if i.consume_key(cmd_shift, Key::S) {
-                Some(Action::ToggleSessions)
-            } else if i.consume_key(Modifiers::CTRL | Modifiers::SHIFT, Key::Tab) {
-                let n = self.tabs.len();
-                Some(Action::SelectTab((self.active_tab + n - 1) % n))
-            } else if i.consume_key(Modifiers::CTRL, Key::Tab) {
-                Some(Action::SelectTab((self.active_tab + 1) % self.tabs.len()))
-            } else {
-                None
-            }
+    /// Window-level shortcuts (the keymap), taken before the terminal sees
+    /// the keys.
+    fn shortcuts(&mut self, ctx: &egui::Context) -> Option<Action> {
+        // Recording a new shortcut, or typing in a dialog: keys are not
+        // shortcuts then.
+        if self.keymap_editor.is_some() {
+            return None;
+        }
+        let binding = self.shortcuts.take(ctx)?;
+        let t = self.active_tab;
+        let n = self.tabs.len();
+        use przmterm_session::keymap::Does;
+        Some(match binding.does().ok()? {
+            Does::Command(id) => match id {
+                "new_tab" => Action::NewTab,
+                "close_pane" => Action::RequestClosePane,
+                "close_tab" => Action::RequestClose(vec![t]),
+                "next_tab" => Action::SelectTab((t + 1) % n),
+                "previous_tab" => Action::SelectTab((t + n - 1) % n),
+                "split_grid" => Action::Split(Layout::Grid),
+                "split_columns" => Action::Split(Layout::Columns),
+                "split_rows" => Action::Split(Layout::Rows),
+                "separate_panes" => Action::SeparateAll(t),
+                "clone_session" => Action::CloneTab(t),
+                "reconnect" => Action::ReconnectTab(t),
+                "disconnect" => Action::DisconnectTab(t),
+                "send_break" => Action::SendBreak,
+                "toggle_sessions" => Action::ToggleSessions,
+                "toggle_buttons" => Action::ToggleButtons,
+                "toggle_log" => Action::ToggleLog,
+                "run_script" => Action::RunScript(t),
+                "stop_script" => Action::StopScript(t),
+                "script_guide" => Action::ScriptGuide,
+                _ => return None,
+            },
+            Does::Send(text) => Action::Macro(buttonbar::Press {
+                chunks: przmterm_session::buttons::parse_send(text),
+                script: None,
+            }),
+            Does::Script(name) => Action::Macro(buttonbar::Press {
+                chunks: Vec::new(),
+                script: Some(name.to_string()),
+            }),
+            Does::Button(id) => match self.buttons.press(id) {
+                Some(press) => Action::Macro(press),
+                None => {
+                    self.notice = Some(format!("No button {id} (see the keyboard shortcuts)."));
+                    return None;
+                }
+            },
         })
+    }
+
+    /// The shortcut of an app command, for tooltips: ` (⌘⇧T)`.
+    fn keys_hint(&self, id: &str) -> String {
+        self.shortcuts
+            .label_for(id)
+            .map(|k| format!(" ({k})"))
+            .unwrap_or_default()
     }
 }
 
@@ -846,6 +884,7 @@ impl PrzmApp {
             || self.split_dialog.is_some()
             || !self.script_prompts.is_empty()
             || self.script_guide.is_some()
+            || self.keymap_editor.is_some()
             || self.bundle_dialog.is_some()
             || self.vault.modal()
     }
@@ -1216,6 +1255,13 @@ impl PrzmApp {
                         ctx,
                     );
                 }
+            }
+        }
+        if let (Some(editor), Some(dir)) = (&mut self.keymap_editor, self.config_dir.clone()) {
+            let buttons = self.buttons.ids();
+            if let keymap::KeymapResult::Closed = editor.show(ctx, &dir, &buttons) {
+                self.keymap_editor = None;
+                self.shortcuts = keymap::Shortcuts::load(Some(&dir));
             }
         }
         if let (Some(guide), Some(dir)) = (&mut self.script_guide, self.config_dir.clone()) {
@@ -1657,7 +1703,7 @@ fn tab_menu(
             split,
             egui::Button::selectable(on, "Send Commands to This Tab"),
         )
-        .on_disabled_hover_text("Split the tab first (Ctrl+Shift+D, ⌘⇧D)")
+        .on_disabled_hover_text("Split the tab first (◫ Split)")
         .clicked()
     {
         if i != active {
@@ -1899,17 +1945,11 @@ impl eframe::App for PrzmApp {
                     ui.colored_label(ui.visuals().error_fg_color, err);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let shortcut = |k: &str| {
-                        if cfg!(target_os = "macos") {
-                            format!("⌘⇧{k}")
-                        } else {
-                            format!("Ctrl+Shift+{k}")
-                        }
-                    };
+                    let keys = |id: &str| self.shortcuts.label_for(id).unwrap_or_default();
                     if self.tabs[self.active_tab].panes.len() > 1
                         && ui
                             .button("× Pane")
-                            .on_hover_text(format!("Close pane ({})", shortcut("W")))
+                            .on_hover_text(format!("Close pane{}", self.keys_hint("close_pane")))
                             .clicked()
                     {
                         actions.push(Action::RequestClosePane);
@@ -1921,16 +1961,16 @@ impl eframe::App for PrzmApp {
                     });
                     ui.menu_button("◫ Split ▾", |ui| {
                         ui.weak("Join sessions open in other tabs");
-                        for (layout, key) in [
-                            (Layout::Grid, "G"),
-                            (Layout::Columns, "D"),
-                            (Layout::Rows, "E"),
+                        for (layout, id) in [
+                            (Layout::Grid, "split_grid"),
+                            (Layout::Columns, "split_columns"),
+                            (Layout::Rows, "split_rows"),
                         ] {
                             if ui
                                 .add_enabled(
                                     elsewhere,
                                     egui::Button::new(format!("{}…", layout.label()))
-                                        .shortcut_text(shortcut(key)),
+                                        .shortcut_text(keys(id)),
                                 )
                                 .on_disabled_hover_text(NO_OTHER_SESSION)
                                 .clicked()
@@ -2072,7 +2112,7 @@ impl eframe::App for PrzmApp {
                                 !pane.transport.is_closed(),
                                 egui::Button::new("Break").small(),
                             )
-                            .on_hover_text("Send BREAK (Ctrl+Shift+B, ⌘⇧B on macOS)")
+                            .on_hover_text(format!("Send BREAK{}", self.keys_hint("send_break")))
                             .clicked()
                     {
                         actions.push(Action::SendBreak);
@@ -2100,7 +2140,10 @@ impl eframe::App for PrzmApp {
                 .show(ui, |ui| {
                     if ui
                         .small_button("▶")
-                        .on_hover_text("Show the sessions (Ctrl+Shift+S, ⌘⇧S)")
+                        .on_hover_text(format!(
+                            "Show the sessions{}",
+                            self.keys_hint("toggle_sessions")
+                        ))
                         .clicked()
                     {
                         actions.push(Action::ToggleSessions);
@@ -2115,7 +2158,7 @@ impl eframe::App for PrzmApp {
                 ui.horizontal(|ui| {
                     if ui
                         .small_button("◀")
-                        .on_hover_text("Hide the sessions (Ctrl+Shift+S, ⌘⇧S)")
+                        .on_hover_text(format!("Hide the sessions{}", self.keys_hint("toggle_sessions")))
                         .clicked()
                     {
                         actions.push(Action::ToggleSessions);
@@ -2200,6 +2243,15 @@ impl eframe::App for PrzmApp {
                                 .clicked()
                             {
                                 self.vault.open_window();
+                                ui.close();
+                            }
+                            if ui
+                                .button("Keyboard shortcuts…")
+                                .on_hover_text("Choose the keys for commands, text, scripts and buttons")
+                                .clicked()
+                            {
+                                self.keymap_editor =
+                                    Some(keymap::KeymapEditor::new(&self.shortcuts));
                                 ui.close();
                             }
                             if ui

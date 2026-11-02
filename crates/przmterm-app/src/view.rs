@@ -528,7 +528,7 @@ impl TerminalView {
                 ui.separator();
                 if ui
                     .button("Send BREAK")
-                    .on_hover_text("Ctrl+Shift+B (⌘⇧B on macOS)")
+                    .on_hover_text("Also in the status bar; the shortcut is in Keyboard shortcuts")
                     .clicked()
                 {
                     send_break = true;

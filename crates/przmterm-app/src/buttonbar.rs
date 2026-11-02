@@ -62,6 +62,36 @@ impl ButtonBarUi {
         }
     }
 
+    /// Every button as `Tab/Label`, for the keyboard shortcuts.
+    pub fn ids(&self) -> Vec<String> {
+        self.bar
+            .tabs
+            .iter()
+            .flat_map(|t| {
+                t.buttons
+                    .iter()
+                    .map(move |b| format!("{}/{}", t.name, b.label))
+            })
+            .collect()
+    }
+
+    /// What pressing the button `Tab/Label` does.
+    pub fn press(&self, id: &str) -> Option<Press> {
+        let (tab, label) = id.split_once('/')?;
+        let button = self
+            .bar
+            .tabs
+            .iter()
+            .find(|t| t.name == tab)?
+            .buttons
+            .iter()
+            .find(|b| b.label == label)?;
+        Some(Press {
+            chunks: parse_send(&button.send),
+            script: (!button.script.trim().is_empty()).then(|| button.script.clone()),
+        })
+    }
+
     pub fn modal(&self) -> bool {
         self.button_edit.is_some() || self.tab_edit.is_some() || self.delete_tab.is_some()
     }

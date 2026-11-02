@@ -310,6 +310,25 @@ changes, PrzmTerm refuses to connect and shows the old and new fingerprints.
 Drag to select, double-click selects a word, triple-click a line. Right-click
 opens Copy / Paste / Select all.
 
+These are the built-in shortcuts. **+** › *Keyboard shortcuts…* changes them
+and adds others: a key can send text (`show ip interface brief\r`), run an app
+command, run a script or press a button. They are kept in
+`<config>/keymap.toml`:
+
+```toml
+[[key]]
+keys = "F5"                    # Cmd is ⌘ on macOS and Ctrl elsewhere
+send = 'show ip interface brief\r'
+
+[[key]]
+keys = "Alt+1"
+script = "cisco-show.rhai"
+
+[[key]]
+keys = "Cmd+Shift+T"
+command = "new_tab"
+```
+
 ## Sessions
 
 PrzmTerm reads its configuration from `$PRZMTERM_HOME`, or by default from:

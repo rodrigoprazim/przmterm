@@ -128,7 +128,7 @@ highlighting, triggers, saved credentials) work in PrzmTerm.
 
 ## 0.7.0 — Scripting
 
-- Keymap editor: assign keyboard shortcuts to sending text, app commands
+- [x] Keymap editor: assign keyboard shortcuts to sending text, app commands
   (new tab, split, send BREAK…), buttons and scripts
 
 - [x] Embedded scripting in Rhai (chosen over Python and Lua: pure Rust,
@@ -136,6 +136,8 @@ highlighting, triggers, saved credentials) work in PrzmTerm.
   several texts and a timeout, `read_until`, `name`, `host`, `username`) and
   `log`/`print`, `prompt`, `prompt_secret`, `sleep`; run from the tab menu,
   from a button or as a session's logon script, and stopped at any time
+
+**Gate:** the maintainer's own scripts and shortcuts work on his devices.
 
 ## 0.8.0 — File transfer
 
