@@ -88,6 +88,8 @@ pub struct Editor {
     log_dir: String,
     save_password: Option<bool>,
     debug: Option<bool>,
+    keepalive: String,
+    auto_reconnect: Option<bool>,
     show_log_help: bool,
     confirm: Option<Confirm>,
     error: Option<String>,
@@ -127,6 +129,8 @@ fn field_label(key: &str) -> &'static str {
         "identity_file" => "key file",
         "save_password" => "save password",
         "debug" => "debug login",
+        "keepalive" => "keepalive",
+        "auto_reconnect" => "auto reconnect",
         "baud_rate" => "baud rate",
         "data_bits" => "data bits",
         "parity" => "parity",
@@ -161,6 +165,8 @@ impl Context<'_> {
             "identity_file" => "agent and ~/.ssh keys".into(),
             "save_password" => "ask".into(),
             "debug" => "no".into(),
+            "keepalive" => format!("{} (0 = off)", przmterm_session::DEFAULT_KEEPALIVE),
+            "auto_reconnect" => "no".into(),
             "serial_port" => "/dev/ttyUSB0 or COM3".into(),
             "baud_rate" => przmterm_session::DEFAULT_BAUD_RATE.to_string(),
             "data_bits" => DEFAULT_DATA_BITS.to_string(),
@@ -268,6 +274,8 @@ impl Editor {
             log_dir: text(&s.log.dir),
             save_password: s.save_password,
             debug: s.debug,
+            keepalive: text(&s.keepalive),
+            auto_reconnect: s.auto_reconnect,
             show_log_help: false,
             confirm: None,
             error: None,
@@ -297,6 +305,8 @@ impl Editor {
             identity_file: opt(&self.identity_file),
             save_password: self.save_password,
             debug: self.debug,
+            keepalive: number("Keepalive", &self.keepalive)?,
+            auto_reconnect: self.auto_reconnect,
             serial_port: if session {
                 opt(&self.serial_port)
             } else {
@@ -592,6 +602,12 @@ impl Editor {
             field(ui, "Host", &mut self.host, "10.0.0.1 or router.example.com");
         }
         field(ui, "Port", &mut self.port, &cx.hint("port"));
+        field(
+            ui,
+            "Keepalive (s)",
+            &mut self.keepalive,
+            &cx.hint("keepalive"),
+        );
         // Telnet logs in inside the terminal; these are SSH settings.
         if self.is_session() && cx.protocol == Protocol::Telnet {
             return;
@@ -731,6 +747,20 @@ impl Editor {
     }
 
     fn terminal_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
+        ui.label("Auto reconnect").on_hover_text(
+            "Reconnect on its own when the connection drops or cannot be made \
+             (not after a normal logout or a failed login)",
+        );
+        bool_pick(
+            ui,
+            &mut self.auto_reconnect,
+            cx.inherited.auto_reconnect.unwrap_or(false),
+            ["yes", "no"],
+            None,
+            &cx.hint("auto_reconnect"),
+        );
+        ui.end_row();
+
         ui.label("Terminal type");
         ui.horizontal(|ui| {
             egui::ComboBox::from_id_salt("term-type")

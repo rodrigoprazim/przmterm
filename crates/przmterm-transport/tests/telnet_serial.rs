@@ -6,7 +6,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use przmterm_transport::telnet::{TelnetConfig, TelnetTransport};
-use przmterm_transport::{Size, Transport, noop_waker};
+use przmterm_transport::{Ending, Size, Transport, noop_waker};
 
 const IAC: u8 = 255;
 const DO: u8 = 253;
@@ -14,6 +14,7 @@ const WILL: u8 = 251;
 const SB: u8 = 250;
 const SE: u8 = 240;
 const BRK: u8 = 243;
+const NOP: u8 = 241;
 
 /// Reads from the transport until `needle` shows up (or panics after 5 s).
 fn wait_for(t: &mut dyn Transport, seen: &mut String, needle: &str) {
@@ -109,6 +110,24 @@ fn telnet_negotiates_and_carries_a_login() {
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(10));
     }
+    assert_eq!(t.ending(), Some(Ending::Clean));
+    server.join().unwrap();
+}
+
+#[test]
+fn telnet_sends_keepalives() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        let (mut s, _) = listener.accept().unwrap();
+        s.set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        let mut got = Vec::new();
+        expect(&mut s, &mut got, &[IAC, NOP]);
+    });
+    let mut config = TelnetConfig::new("127.0.0.1", port);
+    config.keepalive = Some(Duration::from_millis(200));
+    let _t = TelnetTransport::connect(config, Size::default(), noop_waker());
     server.join().unwrap();
 }
 
@@ -127,6 +146,12 @@ fn telnet_reports_a_refused_connection() {
     );
     let mut seen = String::new();
     wait_for(&mut t, &mut seen, "Could not connect to 127.0.0.1");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while t.ending().is_none() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(t.ending(), Some(Ending::Unreachable));
 }
 
 #[cfg(unix)]
@@ -163,6 +188,27 @@ mod serial {
             assert!(Instant::now() < deadline, "serial transport did not close");
             std::thread::sleep(Duration::from_millis(10));
         }
+        assert_eq!(t.ending(), Some(Ending::Cancelled));
+    }
+
+    // Unplugging the adapter: the other end of the line disappears.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn serial_reports_a_lost_line() {
+        let (cable, device) = TTYPort::pair().unwrap();
+        let name = device.name().unwrap();
+        drop(device);
+        let mut t = SerialTransport::open(SerialLine::new(&name), noop_waker());
+        let mut seen = String::new();
+        wait_for(&mut t, &mut seen, "Connected to");
+        drop(cable);
+        wait_for(&mut t, &mut seen, "disconnected");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while t.ending().is_none() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(t.ending(), Some(Ending::Lost));
     }
 
     #[test]

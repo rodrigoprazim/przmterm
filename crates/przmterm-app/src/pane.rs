@@ -13,7 +13,7 @@ use przmterm_term::log::TextLog;
 use przmterm_transport::serial::SerialTransport;
 use przmterm_transport::ssh::{SavePassword, SshConfig, SshTransport, Store};
 use przmterm_transport::telnet::{TelnetConfig, TelnetTransport};
-use przmterm_transport::{Size, Transport, TransportError, Waker};
+use przmterm_transport::{Ending, Size, Transport, TransportError, Waker};
 
 use crate::demo::DemoShell;
 use crate::keychain::Keychain;
@@ -123,7 +123,20 @@ pub struct Pane {
     pub origin: Option<Session>,
     pub log: Option<SessionLog>,
     closed_announced: bool,
+    /// A pending automatic reconnect.
+    retry: Option<Retry>,
+    /// Failed attempts in a row, for the back-off.
+    attempts: usize,
 }
+
+/// When the next automatic reconnect happens.
+#[derive(Debug, Clone, Copy)]
+pub struct Retry {
+    pub at: std::time::Instant,
+}
+
+/// Seconds before each automatic reconnect attempt; the last one repeats.
+const RETRY_DELAYS: [u64; 5] = [2, 5, 10, 20, 30];
 
 impl Pane {
     pub fn demo() -> Self {
@@ -135,45 +148,13 @@ impl Pane {
             origin: None,
             log: None,
             closed_announced: false,
+            retry: None,
+            attempts: 0,
         }
     }
 
     pub fn open(session: &Session, env: &Env, size: Size, waker: Waker) -> Self {
-        let known_hosts: &Path = &env.known_hosts;
-        let transport: Box<dyn Transport> = match (&session.protocol, &session.target) {
-            (
-                Protocol::Ssh,
-                Target::Network {
-                    host,
-                    port,
-                    username,
-                },
-            ) => {
-                let mut config = SshConfig::new(host.clone(), *port, known_hosts);
-                config.username = username.clone();
-                config.term_type = session.term_type.clone();
-                config.identity_files = session.identity_file.iter().cloned().collect();
-                config.debug = session.debug;
-                config.password_store = Some(Store(Arc::new(Keychain)));
-                config.save_password = match session.save_password {
-                    None => SavePassword::Ask,
-                    Some(true) => SavePassword::Always,
-                    Some(false) => SavePassword::Never,
-                };
-                Box::new(SshTransport::connect(config, size, waker))
-            }
-            (Protocol::Telnet, Target::Network { host, port, .. }) => {
-                let mut config = TelnetConfig::new(host.clone(), *port);
-                config.term_type = session.term_type.clone();
-                Box::new(TelnetTransport::connect(config, size, waker))
-            }
-            (Protocol::Serial, Target::Serial(line)) => {
-                Box::new(SerialTransport::open(line.clone(), waker))
-            }
-            (protocol, _) => message(&format!(
-                "\x1b[33m{protocol} sessions arrive in a later version of PrzmTerm.\x1b[0m\r\n"
-            )),
-        };
+        let transport = connect(session, env, size, waker);
         let mut pane = Self {
             term: Terminal::with_scrollback(
                 usize::from(size.cols),
@@ -186,11 +167,70 @@ impl Pane {
             origin: Some(session.clone()),
             log: None,
             closed_announced: false,
+            retry: None,
+            attempts: 0,
         };
         if session.log_enabled {
             pane.start_log(env);
         }
         pane
+    }
+
+    /// Connects again on the same screen, keeping the scrollback and the log.
+    pub fn reconnect(&mut self, env: &Env, waker: Waker) {
+        let Some(session) = self.origin.clone() else {
+            return;
+        };
+        self.retry = None;
+        self.term.feed(b"\r\n");
+        let _ = self.transport.close();
+        self.transport = connect(&session, env, self.size(), waker);
+        self.closed_announced = false;
+    }
+
+    /// The pending automatic reconnect, if any.
+    pub fn retry(&self) -> Option<Retry> {
+        self.retry
+    }
+
+    /// Stops a pending automatic reconnect (Ctrl+C while waiting).
+    pub fn cancel_retry(&mut self) {
+        if self.retry.take().is_some() {
+            self.term
+                .feed(b"\x1b[2mAutomatic reconnect stopped. Press Enter to reconnect.\x1b[0m\r\n");
+        }
+    }
+
+    /// After the connection ended: schedule a reconnect if the session wants
+    /// one and retrying can help, else offer Enter.
+    fn after_close(&mut self) {
+        let Some(session) = &self.origin else {
+            return;
+        };
+        let ending = self.transport.ending();
+        let retry =
+            session.auto_reconnect && matches!(ending, Some(Ending::Lost | Ending::Unreachable));
+        if !retry {
+            self.term
+                .feed(b"\x1b[2mPress Enter to reconnect.\x1b[0m\r\n");
+            return;
+        }
+        // A connection that was up starts the back-off again.
+        if ending == Some(Ending::Lost) {
+            self.attempts = 0;
+        }
+        let delay = RETRY_DELAYS[self.attempts.min(RETRY_DELAYS.len() - 1)];
+        self.attempts += 1;
+        self.retry = Some(Retry {
+            at: std::time::Instant::now() + std::time::Duration::from_secs(delay),
+        });
+        self.term.feed(
+            format!(
+                "\x1b[2mReconnecting in {delay} s (attempt {}). Enter: now, Ctrl+C: stop.\x1b[0m\r\n",
+                self.attempts
+            )
+            .as_bytes(),
+        );
     }
 
     /// Starts logging to the session's log file (or the default one).
@@ -255,10 +295,7 @@ impl Pane {
         }
         if self.transport.is_closed() && !self.closed_announced {
             self.closed_announced = true;
-            if self.origin.is_some() {
-                self.term
-                    .feed(b"\x1b[2mPress Enter to reconnect.\x1b[0m\r\n");
-            }
+            self.after_close();
             got = true;
         }
         got
@@ -269,6 +306,47 @@ impl Pane {
             Ok(()) | Err(TransportError::Closed) => {}
             Err(e) => tracing::warn!("transport write failed: {e}"),
         }
+    }
+}
+
+/// Starts the connection behind a session.
+fn connect(session: &Session, env: &Env, size: Size, waker: Waker) -> Box<dyn Transport> {
+    let known_hosts: &Path = &env.known_hosts;
+    match (&session.protocol, &session.target) {
+        (
+            Protocol::Ssh,
+            Target::Network {
+                host,
+                port,
+                username,
+            },
+        ) => {
+            let mut config = SshConfig::new(host.clone(), *port, known_hosts);
+            config.username = username.clone();
+            config.term_type = session.term_type.clone();
+            config.identity_files = session.identity_file.iter().cloned().collect();
+            config.debug = session.debug;
+            config.keepalive = session.keepalive;
+            config.password_store = Some(Store(Arc::new(Keychain)));
+            config.save_password = match session.save_password {
+                None => SavePassword::Ask,
+                Some(true) => SavePassword::Always,
+                Some(false) => SavePassword::Never,
+            };
+            Box::new(SshTransport::connect(config, size, waker))
+        }
+        (Protocol::Telnet, Target::Network { host, port, .. }) => {
+            let mut config = TelnetConfig::new(host.clone(), *port);
+            config.term_type = session.term_type.clone();
+            config.keepalive = session.keepalive;
+            Box::new(TelnetTransport::connect(config, size, waker))
+        }
+        (Protocol::Serial, Target::Serial(line)) => {
+            Box::new(SerialTransport::open(line.clone(), waker))
+        }
+        (protocol, _) => message(&format!(
+            "\x1b[33m{protocol} sessions arrive in a later version of PrzmTerm.\x1b[0m\r\n"
+        )),
     }
 }
 
@@ -353,6 +431,8 @@ impl Pane {
             origin: Some(session.clone()),
             log: None,
             closed_announced: false,
+            retry: None,
+            attempts: 0,
         };
         if session.log_enabled {
             pane.start_log(env);
@@ -364,6 +444,79 @@ impl Pane {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A transport that has already ended the given way.
+    struct Ended(Ending);
+
+    impl Transport for Ended {
+        fn protocol(&self) -> Protocol {
+            Protocol::Ssh
+        }
+        fn read(&mut self, _: &mut [u8]) -> Result<usize, TransportError> {
+            Ok(0)
+        }
+        fn write(&mut self, _: &[u8]) -> Result<(), TransportError> {
+            Err(TransportError::Closed)
+        }
+        fn resize(&mut self, _: Size) -> Result<(), TransportError> {
+            Ok(())
+        }
+        fn close(&mut self) -> Result<(), TransportError> {
+            Ok(())
+        }
+        fn is_closed(&self) -> bool {
+            true
+        }
+        fn ending(&self) -> Option<Ending> {
+            Some(self.0)
+        }
+    }
+
+    fn ended_pane(ending: Ending, auto_reconnect: bool) -> Pane {
+        let mut session = Session::quick_connect("10.0.0.1").unwrap();
+        session.auto_reconnect = auto_reconnect;
+        let mut pane = Pane::demo();
+        pane.origin = Some(session);
+        pane.transport = Box::new(Ended(ending));
+        pane
+    }
+
+    #[test]
+    fn retries_only_when_it_can_help() {
+        for (ending, auto, retry) in [
+            (Ending::Lost, true, true),
+            (Ending::Unreachable, true, true),
+            (Ending::Clean, true, false),
+            (Ending::Failed, true, false),
+            (Ending::Cancelled, true, false),
+            (Ending::Lost, false, false),
+        ] {
+            let mut pane = ended_pane(ending, auto);
+            pane.pump();
+            assert_eq!(pane.retry().is_some(), retry, "{ending:?} auto={auto}");
+        }
+    }
+
+    #[test]
+    fn back_off_grows_and_ctrl_c_stops_it() {
+        let mut pane = ended_pane(Ending::Unreachable, true);
+        let mut delays = Vec::new();
+        for _ in 0..7 {
+            pane.closed_announced = false;
+            pane.pump();
+            let left = pane.retry().unwrap().at - std::time::Instant::now();
+            delays.push((left.as_secs_f64()).round() as u64);
+        }
+        assert_eq!(delays, [2, 5, 10, 20, 30, 30, 30]);
+        pane.cancel_retry();
+        assert!(pane.retry().is_none());
+        // A connection that was up starts again from the shortest delay.
+        pane.transport = Box::new(Ended(Ending::Lost));
+        pane.closed_announced = false;
+        pane.pump();
+        let left = pane.retry().unwrap().at - std::time::Instant::now();
+        assert_eq!(left.as_secs_f64().round() as u64, 2);
+    }
 
     #[test]
     fn concurrent_logs_get_distinct_files() {

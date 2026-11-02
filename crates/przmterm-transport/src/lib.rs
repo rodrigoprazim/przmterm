@@ -51,6 +51,21 @@ pub enum TransportError {
     Io(#[from] io::Error),
 }
 
+/// Why a session ended, for deciding whether to reconnect on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ending {
+    /// The remote side closed the session normally (`exit`, logout).
+    Clean,
+    /// The user cancelled or closed it.
+    Cancelled,
+    /// The connection dropped after it was up (network, reboot, cable).
+    Lost,
+    /// Could not connect at all (refused, timed out, port missing).
+    Unreachable,
+    /// Refused for a reason retrying will not fix: login, host key.
+    Failed,
+}
+
 /// A bidirectional byte stream behind a terminal session.
 pub trait Transport: Send {
     fn protocol(&self) -> Protocol;
@@ -74,6 +89,11 @@ pub trait Transport: Send {
     /// True once the connection has ended and no more bytes will arrive.
     fn is_closed(&self) -> bool {
         false
+    }
+
+    /// Why the session ended, once it has (and the transport knows).
+    fn ending(&self) -> Option<Ending> {
+        None
     }
 
     /// Another session over the same connection, without logging in again,

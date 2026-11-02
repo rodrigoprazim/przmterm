@@ -36,6 +36,8 @@ pub const KNOWN_HOSTS_FILE: &str = "known_hosts";
 
 pub const DEFAULT_TERM_TYPE: &str = "xterm-256color";
 pub const DEFAULT_SCROLLBACK: usize = 10_000;
+/// Seconds between keepalives.
+pub const DEFAULT_KEEPALIVE: u32 = 30;
 /// Log file name used when logging is on and no `path` is set, relative to `<config>/logs`.
 pub const DEFAULT_LOG_TEMPLATE: &str = "%S-%Y%M%D-%h%m%s.log";
 pub const LOGS_DIR: &str = "logs";
@@ -107,6 +109,12 @@ pub struct SessionSettings {
     /// SSH: show every step of the connection and login (like `ssh -v`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub debug: Option<bool>,
+    /// Seconds between keepalives (SSH keepalive, Telnet NOP); 0 turns them off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keepalive: Option<u32>,
+    /// Reconnect on its own when the connection drops or cannot be made.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_reconnect: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub serial_port: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -132,7 +140,7 @@ pub struct SessionSettings {
 }
 
 /// Keys of the individual settings, used to compare and copy them.
-pub const FIELDS: [&str; 18] = [
+pub const FIELDS: [&str; 20] = [
     "protocol",
     "host",
     "port",
@@ -140,6 +148,8 @@ pub const FIELDS: [&str; 18] = [
     "identity_file",
     "save_password",
     "debug",
+    "keepalive",
+    "auto_reconnect",
     "serial_port",
     "baud_rate",
     "data_bits",
@@ -164,6 +174,8 @@ impl SessionSettings {
             "identity_file" => self.identity_file = from.identity_file.clone(),
             "save_password" => self.save_password = from.save_password,
             "debug" => self.debug = from.debug,
+            "keepalive" => self.keepalive = from.keepalive,
+            "auto_reconnect" => self.auto_reconnect = from.auto_reconnect,
             "serial_port" => self.serial_port = from.serial_port.clone(),
             "baud_rate" => self.baud_rate = from.baud_rate,
             "data_bits" => self.data_bits = from.data_bits,
@@ -190,6 +202,8 @@ impl SessionSettings {
             "identity_file" => self.identity_file.clone(),
             "save_password" => self.save_password.map(yes_no),
             "debug" => self.debug.map(yes_no),
+            "keepalive" => self.keepalive.map(|v| v.to_string()),
+            "auto_reconnect" => self.auto_reconnect.map(yes_no),
             "serial_port" => self.serial_port.clone(),
             "baud_rate" => self.baud_rate.map(|v| v.to_string()),
             "data_bits" => self.data_bits.map(|v| v.to_string()),
@@ -227,6 +241,8 @@ impl SessionSettings {
             identity_file: pick(&self.identity_file, &over.identity_file),
             save_password: pick(&self.save_password, &over.save_password),
             debug: pick(&self.debug, &over.debug),
+            keepalive: pick(&self.keepalive, &over.keepalive),
+            auto_reconnect: pick(&self.auto_reconnect, &over.auto_reconnect),
             serial_port: pick(&self.serial_port, &over.serial_port),
             baud_rate: pick(&self.baud_rate, &over.baud_rate),
             data_bits: pick(&self.data_bits, &over.data_bits),
@@ -262,6 +278,8 @@ impl SessionSettings {
             "terminal.scrollback" => s.terminal.scrollback = Some(DEFAULT_SCROLLBACK),
             "log.enabled" => s.log.enabled = Some(false),
             "debug" => s.debug = Some(false),
+            "keepalive" => s.keepalive = Some(DEFAULT_KEEPALIVE),
+            "auto_reconnect" => s.auto_reconnect = Some(false),
             "log.path" => s.log.path = Some(DEFAULT_LOG_TEMPLATE.into()),
             _ => return None,
         }
@@ -305,6 +323,9 @@ pub struct Session {
     pub save_password: Option<bool>,
     /// See [`SessionSettings::debug`].
     pub debug: bool,
+    /// `None` when keepalives are off.
+    pub keepalive: Option<std::time::Duration>,
+    pub auto_reconnect: bool,
     pub term_type: String,
     pub scrollback: usize,
     pub log_enabled: bool,
@@ -381,6 +402,11 @@ impl Session {
             identity_file: settings.identity_file.as_deref().map(expand_tilde),
             save_password: settings.save_password,
             debug: settings.debug.unwrap_or(false),
+            keepalive: match settings.keepalive.unwrap_or(DEFAULT_KEEPALIVE) {
+                0 => None,
+                secs => Some(std::time::Duration::from_secs(u64::from(secs))),
+            },
+            auto_reconnect: settings.auto_reconnect.unwrap_or(false),
             term_type: settings
                 .terminal
                 .term_type
@@ -1324,6 +1350,14 @@ mod tests {
         .unwrap();
         let s = Session::resolve("con", Vec::new(), "con.toml", &settings).unwrap();
         assert_eq!(s.display_target(), "COM4 19200 7E2 RTS/CTS");
+        assert_eq!(s.keepalive, Some(std::time::Duration::from_secs(30)));
+        assert!(!s.auto_reconnect);
+        let mut off = settings.clone();
+        off.keepalive = Some(0);
+        off.auto_reconnect = Some(true);
+        let s = Session::resolve("con", Vec::new(), "con.toml", &off).unwrap();
+        assert_eq!(s.keepalive, None);
+        assert!(s.auto_reconnect);
         assert_eq!(s.host_label(), "COM4");
         assert_eq!(settings.field_text("parity").as_deref(), Some("even"));
         assert_eq!(

@@ -12,8 +12,8 @@ use std::time::Duration;
 
 pub use przmterm_core::serial::{FlowControl, Parity, SerialLine};
 
-use crate::pipe::{Cmd, Output, Pipe, TaskEnd, finish};
-use crate::{Protocol, Size, Transport, TransportError, Waker};
+use crate::pipe::{Closed, Cmd, Output, Pipe, TaskEnd, finish};
+use crate::{Ending, Protocol, Size, Transport, TransportError, Waker};
 
 const READ_TIMEOUT: Duration = Duration::from_millis(50);
 /// How long the line is held in the break state.
@@ -117,6 +117,10 @@ impl Transport for SerialTransport {
     fn is_closed(&self) -> bool {
         self.pipe.is_closed()
     }
+
+    fn ending(&self) -> Option<Ending> {
+        self.pipe.ending()
+    }
 }
 
 fn open(line: &SerialLine) -> serialport::Result<Box<dyn serialport::SerialPort>> {
@@ -183,7 +187,7 @@ fn writer(line: SerialLine, end: TaskEnd) {
             if let Some(hint) = hint(&e) {
                 out.notice(hint);
             }
-            finish(&closed, &out);
+            finish(&closed, &out, Ending::Unreachable);
             return;
         }
     };
@@ -197,20 +201,20 @@ fn writer(line: SerialLine, end: TaskEnd) {
                 .spawn(move || reader(reading, &name, &out2, &stop2, &closed2));
             if let Err(e) = spawned {
                 out.error(&format!("Could not read from {}: {e}", line.port));
-                finish(&closed, &out);
+                finish(&closed, &out, Ending::Failed);
                 return;
             }
         }
         Err(e) => {
             out.error(&format!("Could not open {}: {e}", line.port));
-            finish(&closed, &out);
+            finish(&closed, &out, Ending::Failed);
             return;
         }
     }
     out.notice(&format!("Connected to {line}."));
 
     while let Some(cmd) = cmds.blocking_recv() {
-        if closed.load(Ordering::Acquire) {
+        if closed.is_closed() {
             break;
         }
         let result = match cmd {
@@ -238,7 +242,7 @@ fn reader(
     name: &str,
     out: &Output,
     stop: &AtomicBool,
-    closed: &AtomicBool,
+    closed: &Closed,
 ) {
     let mut buf = vec![0u8; 4096];
     while !stop.load(Ordering::Acquire) {
@@ -252,8 +256,11 @@ fn reader(
             }
         }
     }
-    if stop.load(Ordering::Acquire) {
+    let ending = if stop.load(Ordering::Acquire) {
         out.notice(&format!("{name} closed."));
-    }
-    finish(closed, out);
+        Ending::Cancelled
+    } else {
+        Ending::Lost
+    };
+    finish(closed, out, ending);
 }

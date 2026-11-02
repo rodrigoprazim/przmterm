@@ -417,6 +417,10 @@ fn connection_refused_is_reported() {
     let mut s = Screen::connect(config(port, &dir.path().join("known_hosts")));
     s.wait_closed();
     assert!(s.text.contains("Cannot connect"), "{}", s.text);
+    assert_eq!(
+        s.transport.ending(),
+        Some(przmterm_transport::Ending::Unreachable)
+    );
 }
 
 #[test]
@@ -437,6 +441,11 @@ fn three_wrong_passwords_end_the_session() {
         s.text.contains("Permission denied (password)."),
         "{}",
         s.text
+    );
+    assert_eq!(
+        s.transport.ending(),
+        Some(przmterm_transport::Ending::Failed),
+        "a failed login is not worth retrying"
     );
 }
 

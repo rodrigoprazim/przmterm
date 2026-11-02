@@ -297,17 +297,31 @@ impl PrzmApp {
                     pane.start_log(&env);
                 }
             }
-            Action::Reconnect => {
-                let tab = self.tab_mut();
-                let old = tab.pane();
-                if let Some(session) = old.origin.clone() {
-                    let size = old.size();
-                    tab.panes[tab.active] = Pane::open(&session, &env, size, waker);
-                }
-            }
+            Action::Reconnect => self.tab_mut().pane_mut().reconnect(&env, waker),
         }
         let tab = self.tab_mut();
         tab.pane_mut().view.focus();
+    }
+
+    /// Reconnects the panes whose automatic reconnect is due, and wakes up
+    /// in time for the next one.
+    fn run_retries(&mut self, ctx: &egui::Context) {
+        let now = std::time::Instant::now();
+        let env = self.env();
+        let mut next: Option<std::time::Instant> = None;
+        for pane in self.tabs.iter_mut().flat_map(|t| &mut t.panes) {
+            let Some(retry) = pane.retry() else { continue };
+            if retry.at <= now {
+                let ctx2 = ctx.clone();
+                pane.reconnect(&env, Arc::new(move || ctx2.request_repaint()));
+                ctx.request_repaint();
+            } else {
+                next = Some(next.map_or(retry.at, |n| n.min(retry.at)));
+            }
+        }
+        if let Some(at) = next {
+            ctx.request_repaint_after(at - now);
+        }
     }
 
     /// Window-level shortcuts, taken before the terminal sees the keys.
@@ -592,6 +606,7 @@ impl eframe::App for PrzmApp {
         if got {
             ctx.request_repaint();
         }
+        self.run_retries(&ctx);
 
         let title = format!("{} — PrzmTerm", self.tab().pane().title());
         if title != self.title {
@@ -965,6 +980,8 @@ impl eframe::App for PrzmApp {
                     if pane.transport.is_closed() {
                         if active && out.input.contains(&b'\r') {
                             actions.push(Action::Reconnect);
+                        } else if out.input.contains(&3) {
+                            pane.cancel_retry();
                         }
                     } else {
                         pane.send(&out.input);

@@ -11,7 +11,6 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use russh::client::{self, KeyboardInteractiveAuthResponse};
@@ -22,8 +21,8 @@ use russh::{ChannelMsg, Disconnect, MethodKind, MethodSet};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{Mutex, mpsc};
 
-use crate::pipe::{Cmd, Output, Pipe, runtime};
-use crate::{Protocol, Size, Transport, TransportError, Waker};
+use crate::pipe::{Closed, Cmd, Output, Pipe, runtime};
+use crate::{Ending, Protocol, Size, Transport, TransportError, Waker};
 
 /// Default key files tried after the agent, in this order (like OpenSSH).
 const DEFAULT_IDENTITIES: [&str; 3] = ["id_ed25519", "id_ecdsa", "id_rsa"];
@@ -127,7 +126,7 @@ impl SshTransport {
         waker: Waker,
         shared: Shared,
         config: SshConfig,
-        task: impl FnOnce(Arc<Mutex<Input>>, Output, Arc<AtomicBool>) -> TaskFuture,
+        task: impl FnOnce(Arc<Mutex<Input>>, Output, Closed) -> TaskFuture,
     ) -> Self {
         let (pipe, end) = Pipe::new(waker);
         let input = Arc::new(Mutex::new(Input { rx: end.cmds, size }));
@@ -197,6 +196,10 @@ impl Transport for SshTransport {
 
     fn is_closed(&self) -> bool {
         self.pipe.is_closed()
+    }
+
+    fn ending(&self) -> Option<Ending> {
+        self.pipe.ending()
     }
 
     fn duplicate(&self, size: Size, waker: Waker) -> Option<Box<dyn Transport>> {
@@ -589,6 +592,10 @@ enum End {
     Closed(Option<u32>),
     Cancelled,
     Failed(String),
+    /// Could not reach the server or finish the handshake.
+    Unreachable(String),
+    /// The connection dropped while the session was up.
+    Lost,
     /// The server would not open another session on this connection.
     Refused(String),
 }
@@ -603,24 +610,44 @@ fn failed(context: &str) -> impl Fn(russh::Error) -> End + '_ {
     move |e| End::Failed(format!("{context}: {e}"))
 }
 
-fn report(end: End, host: &str, out: &Output, closed: &AtomicBool) {
-    match end {
-        End::Closed(Some(code)) if code != 0 => out.notice(&format!(
-            "Connection to {host} closed (exit status {code})."
-        )),
-        End::Closed(_) => out.notice(&format!("Connection to {host} closed.")),
-        End::Cancelled => out.notice("Connection cancelled."),
-        End::Failed(msg) | End::Refused(msg) => out.error(&msg),
-    }
-    closed.store(true, Ordering::Release);
-    (out.waker)();
+fn report(end: End, host: &str, out: &Output, closed: &Closed) {
+    let ending = match end {
+        End::Closed(Some(code)) if code != 0 => {
+            out.notice(&format!(
+                "Connection to {host} closed (exit status {code})."
+            ));
+            Ending::Clean
+        }
+        End::Closed(_) => {
+            out.notice(&format!("Connection to {host} closed."));
+            Ending::Clean
+        }
+        End::Cancelled => {
+            out.notice("Connection cancelled.");
+            Ending::Cancelled
+        }
+        End::Lost => {
+            // The prompt is usually still on the line.
+            out.error(&format!("\r\nConnection to {host} lost."));
+            Ending::Lost
+        }
+        End::Unreachable(msg) => {
+            out.error(&msg);
+            Ending::Unreachable
+        }
+        End::Failed(msg) | End::Refused(msg) => {
+            out.error(&msg);
+            Ending::Failed
+        }
+    };
+    crate::pipe::finish(closed, out, ending);
 }
 
 async fn session_task(
     config: SshConfig,
     input: Arc<Mutex<Input>>,
     out: Output,
-    closed: Arc<AtomicBool>,
+    closed: Closed,
     shared: Shared,
 ) {
     let out = out.with_debug(config.debug);
@@ -638,7 +665,7 @@ async fn channel_task(
     config: SshConfig,
     input: Arc<Mutex<Input>>,
     out: Output,
-    closed: Arc<AtomicBool>,
+    closed: Closed,
     shared: Shared,
 ) {
     let out = out.with_debug(config.debug);
@@ -738,7 +765,7 @@ async fn run_session(
         Err(russh::Error::UnknownKey) => {
             return Err(End::Failed("Host key verification failed.".into()));
         }
-        Err(e) => return Err(End::Failed(format!("SSH handshake failed: {e}"))),
+        Err(e) => return Err(End::Unreachable(format!("SSH handshake failed: {e}"))),
     };
 
     let user = match config.username.as_deref().filter(|u| !u.is_empty()) {
@@ -765,7 +792,7 @@ async fn run_session(
 /// Resolves the host and connects to its addresses in turn.
 async fn connect_tcp(config: &SshConfig, out: &Output) -> Result<tokio::net::TcpStream, End> {
     let timed_out = || {
-        End::Failed(format!(
+        End::Unreachable(format!(
             "Connection to {}:{} timed out after {} s.",
             config.host,
             config.port,
@@ -780,7 +807,7 @@ async fn connect_tcp(config: &SshConfig, out: &Output) -> Result<tokio::net::Tcp
     .await
     {
         Err(_) => return Err(timed_out()),
-        Ok(Err(e)) => return Err(End::Failed(format!("Cannot connect: {e}"))),
+        Ok(Err(e)) => return Err(End::Unreachable(format!("Cannot connect: {e}"))),
         Ok(Ok(addrs)) => addrs.collect(),
     };
     out.debug(&format!(
@@ -813,7 +840,7 @@ async fn connect_tcp(config: &SshConfig, out: &Output) -> Result<tokio::net::Tcp
             }
         }
     }
-    Err(End::Failed(match last_error {
+    Err(End::Unreachable(match last_error {
         Some(e) => format!("Cannot connect: {e}"),
         None => format!("Cannot connect: no address for {}", config.host),
     }))
@@ -871,13 +898,16 @@ async fn run_channel(
                 Some(ChannelMsg::Data { data }) => out.bytes(&data),
                 Some(ChannelMsg::ExtendedData { data, .. }) => out.bytes(&data),
                 Some(ChannelMsg::ExitStatus { exit_status: code }) => exit_status = Some(code),
-                Some(ChannelMsg::Close) | None => break,
+                Some(ChannelMsg::Close) => break,
+                // The connection went away under the channel.
+                None if exit_status.is_none() => return Err(End::Lost),
+                None => break,
                 Some(_) => {}
             },
             cmd = input.rx.recv() => match cmd {
                 Some(Cmd::Data(bytes)) => {
                     if channel.data(&bytes[..]).await.is_err() {
-                        break;
+                        return Err(End::Lost);
                     }
                 }
                 Some(Cmd::Resize(size)) => {

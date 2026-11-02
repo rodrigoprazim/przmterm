@@ -80,7 +80,7 @@ equipment; the serial console has only been checked against a virtual cable.
   (XQuartz on macOS, VcXsrv or similar on Windows)
 - Legacy SSH algorithms enabled per session, with a visible "legacy" badge;
   libssh2 fallback where `russh` lacks an algorithm
-- Keepalive and automatic reconnect
+- [x] Keepalive and automatic reconnect
 
 **Gate:** connects to every device in the reference lab.
 

@@ -5,11 +5,35 @@
 //! [`Transport`]: crate::Transport
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock, mpsc as std_mpsc};
+use std::sync::{Arc, Mutex, OnceLock, mpsc as std_mpsc};
 
 use tokio::sync::mpsc;
 
-use crate::{Size, TransportError, Waker};
+use crate::{Ending, Size, TransportError, Waker};
+
+/// Set once by the task when the session ends, read by the GUI.
+#[derive(Clone, Default)]
+pub(crate) struct Closed(Arc<(AtomicBool, Mutex<Option<Ending>>)>);
+
+impl Closed {
+    pub(crate) fn is_closed(&self) -> bool {
+        self.0.0.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn ending(&self) -> Option<Ending> {
+        self.0.1.lock().ok().and_then(|e| *e)
+    }
+
+    /// Records the first ending; later calls keep it.
+    pub(crate) fn set(&self, ending: Ending) {
+        if let Ok(mut slot) = self.0.1.lock()
+            && slot.is_none()
+        {
+            *slot = Some(ending);
+        }
+        self.0.0.store(true, Ordering::Release);
+    }
+}
 
 /// The Tokio runtime shared by every network session.
 pub(crate) fn runtime() -> &'static tokio::runtime::Runtime {
@@ -89,7 +113,7 @@ pub(crate) struct Pipe {
     output: std_mpsc::Receiver<Vec<u8>>,
     pending: Vec<u8>,
     pending_pos: usize,
-    pub(crate) closed: Arc<AtomicBool>,
+    pub(crate) closed: Closed,
 }
 
 /// The task's end: commands in, terminal bytes out, and the closed flag to
@@ -97,12 +121,12 @@ pub(crate) struct Pipe {
 pub(crate) struct TaskEnd {
     pub(crate) cmds: mpsc::UnboundedReceiver<Cmd>,
     pub(crate) out: Output,
-    pub(crate) closed: Arc<AtomicBool>,
+    pub(crate) closed: Closed,
 }
 
 /// Marks the session as ended and wakes the GUI to notice.
-pub(crate) fn finish(closed: &AtomicBool, out: &Output) {
-    closed.store(true, Ordering::Release);
+pub(crate) fn finish(closed: &Closed, out: &Output, ending: Ending) {
+    closed.set(ending);
     (out.waker)();
 }
 
@@ -110,7 +134,7 @@ impl Pipe {
     pub(crate) fn new(waker: Waker) -> (Pipe, TaskEnd) {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (out_tx, out_rx) = std_mpsc::channel();
-        let closed = Arc::new(AtomicBool::new(false));
+        let closed = Closed::default();
         let pipe = Pipe {
             cmds: cmd_tx,
             output: out_rx,
@@ -152,7 +176,11 @@ impl Pipe {
     }
 
     pub(crate) fn is_closed(&self) -> bool {
-        self.closed.load(Ordering::Acquire)
+        self.closed.is_closed()
+    }
+
+    pub(crate) fn ending(&self) -> Option<Ending> {
+        self.closed.ending()
     }
 }
 

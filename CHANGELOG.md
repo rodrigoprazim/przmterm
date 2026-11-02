@@ -7,6 +7,20 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Keepalive interval per session (`keepalive`, seconds; 0 turns it off):
+  SSH keepalives, Telnet NOPs. Default 30 s.
+- Automatic reconnect (`auto_reconnect`): when a connection drops or cannot
+  be made, the pane reconnects after 2, 5, 10, 20, then every 30 s. Enter
+  reconnects at once, Ctrl+C stops it. Not after a normal logout or a failed
+  login. Unplugging and replugging a USB serial adapter reconnects too.
+
+### Changed
+
+- Reconnecting (Enter, or automatically) keeps the screen, scrollback and log
+  instead of starting a blank pane.
+
 ## [0.4.0] - 2026-11-01
 
 ### Added

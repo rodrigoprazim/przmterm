@@ -23,7 +23,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use crate::pipe::{Cmd, Output, Pipe, TaskEnd, runtime};
-use crate::{Protocol, Size, Transport, TransportError, Waker};
+use crate::{Ending, Protocol, Size, Transport, TransportError, Waker};
 
 const IAC: u8 = 255;
 const DONT: u8 = 254;
@@ -31,6 +31,7 @@ const DO: u8 = 253;
 const WONT: u8 = 252;
 const WILL: u8 = 251;
 const SB: u8 = 250;
+const NOP: u8 = 241;
 const BRK: u8 = 243;
 const SE: u8 = 240;
 
@@ -54,6 +55,8 @@ pub struct TelnetConfig {
     /// Sent when the server asks (TTYPE).
     pub term_type: String,
     pub connect_timeout: Duration,
+    /// Send a Telnet NOP this often so idle sessions are not dropped.
+    pub keepalive: Option<Duration>,
 }
 
 impl TelnetConfig {
@@ -63,6 +66,7 @@ impl TelnetConfig {
             port,
             term_type: "xterm-256color".into(),
             connect_timeout: Duration::from_secs(15),
+            keepalive: Some(Duration::from_secs(30)),
         }
     }
 }
@@ -326,6 +330,11 @@ impl Telnet {
     pub fn brk() -> [u8; 2] {
         [IAC, BRK]
     }
+
+    /// The Telnet no-operation command, used as a keepalive.
+    pub fn nop() -> [u8; 2] {
+        [IAC, NOP]
+    }
 }
 
 fn push_escaped(out: &mut Vec<u8>, data: &[u8]) {
@@ -380,6 +389,10 @@ impl Transport for TelnetTransport {
     fn is_closed(&self) -> bool {
         self.pipe.is_closed()
     }
+
+    fn ending(&self) -> Option<Ending> {
+        self.pipe.ending()
+    }
 }
 
 async fn session_task(config: TelnetConfig, size: Size, end: TaskEnd) {
@@ -390,23 +403,37 @@ async fn session_task(config: TelnetConfig, size: Size, end: TaskEnd) {
     } = end;
     let host = format!("{}:{}", config.host, config.port);
     out.notice(&format!("Connecting to {host}…"));
-    match tokio::time::timeout(
+    let connected = tokio::time::timeout(
         config.connect_timeout,
         TcpStream::connect((config.host.as_str(), config.port)),
     )
-    .await
-    {
-        Err(_) => out.error(&format!("Could not connect to {host}: timed out")),
-        Ok(Err(e)) => out.error(&format!("Could not connect to {host}: {e}")),
+    .await;
+    let ending = match connected {
+        Err(_) => {
+            out.error(&format!("Could not connect to {host}: timed out"));
+            Ending::Unreachable
+        }
+        Ok(Err(e)) => {
+            out.error(&format!("Could not connect to {host}: {e}"));
+            Ending::Unreachable
+        }
         Ok(Ok(stream)) => {
             let _ = stream.set_nodelay(true);
             match run(stream, &config, size, &mut cmds, &out).await {
-                Ok(()) => out.notice(&format!("Connection to {} closed.", config.host)),
-                Err(e) => out.error(&format!("Connection to {} lost: {e}", config.host)),
+                Ok(ending) => {
+                    if ending == Ending::Clean {
+                        out.notice(&format!("Connection to {} closed.", config.host));
+                    }
+                    ending
+                }
+                Err(e) => {
+                    out.error(&format!("\r\nConnection to {} lost: {e}", config.host));
+                    Ending::Lost
+                }
             }
         }
-    }
-    crate::pipe::finish(&closed, &out);
+    };
+    crate::pipe::finish(&closed, &out, ending);
 }
 
 async fn run(
@@ -415,16 +442,24 @@ async fn run(
     size: Size,
     cmds: &mut tokio::sync::mpsc::UnboundedReceiver<Cmd>,
     out: &Output,
-) -> std::io::Result<()> {
+) -> std::io::Result<Ending> {
     let mut telnet = Telnet::new(config.term_type.clone(), size);
     stream.write_all(&telnet.start()).await?;
     let mut buf = vec![0u8; 16 * 1024];
+    // Without a keepalive the timer never fires.
+    let period = config
+        .keepalive
+        .unwrap_or(Duration::from_secs(86_400 * 365));
+    let mut keepalive = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
     loop {
         tokio::select! {
+            _ = keepalive.tick(), if config.keepalive.is_some() => {
+                stream.write_all(&Telnet::nop()).await?;
+            }
             n = stream.read(&mut buf) => {
                 let n = n?;
                 if n == 0 {
-                    return Ok(());
+                    return Ok(Ending::Clean);
                 }
                 let r = telnet.receive(&buf[..n]);
                 out.bytes(&r.data);
@@ -443,7 +478,7 @@ async fn run(
                 Some(Cmd::Break) => stream.write_all(&Telnet::brk()).await?,
                 Some(Cmd::Close) | None => {
                     let _ = stream.shutdown().await;
-                    return Ok(());
+                    return Ok(Ending::Cancelled);
                 }
             },
         }

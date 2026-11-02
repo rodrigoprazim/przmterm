@@ -55,6 +55,14 @@ and the known_hosts file it was found in, every key, password and
 keyboard-interactive attempt with the server's answer and the methods it still
 allows, and the reason the server gave if it disconnected.
 
+### Keepalive and reconnect
+
+Sessions send a keepalive every 30 s (`keepalive`, 0 turns it off). With
+**Auto reconnect** on (`auto_reconnect = true`), a pane whose connection drops,
+or cannot be made, tries again after 2, 5, 10, 20 and then every 30 seconds,
+on the same screen. Enter reconnects at once; Ctrl+C stops the retries. A
+normal logout or a rejected login never triggers it.
+
 ### Telnet and serial
 
 Quick connect also takes `telnet://host[:port]` and `serial://PORT[@BAUD]`,
@@ -122,6 +130,8 @@ username = "admin"
 identity_file = "~/.ssh/id_lab"
 save_password = true       # keychain: unset asks, true always, false never
 debug = true               # show each step of the SSH login (like ssh -v)
+keepalive = 30             # seconds between keepalives, 0 = off
+auto_reconnect = true      # reconnect when the connection drops
 serial_port = "/dev/ttyUSB0"   # COM3 on Windows, /dev/cu.usbserial-… on macOS
 baud_rate = 9600
 data_bits = 8              # 5-8
