@@ -8,7 +8,11 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui;
 use przmterm_core::Protocol;
-use przmterm_session::{Folder, LogSettings, Session, SessionSettings, TerminalSettings};
+use przmterm_session::{
+    COMMON_BAUD_RATES, DEFAULT_DATA_BITS, DEFAULT_STOP_BITS, FlowControl, Folder, LogSettings,
+    Parity, Session, SessionSettings, TerminalSettings,
+};
+use przmterm_transport::serial::{PortInfo, available_ports};
 
 /// Terminal types offered in the list. Any other value can still be typed in
 /// the session file.
@@ -71,6 +75,12 @@ pub struct Editor {
     identity_file: String,
     serial_port: String,
     baud_rate: String,
+    data_bits: Option<u8>,
+    parity: Option<Parity>,
+    stop_bits: Option<u8>,
+    flow_control: Option<FlowControl>,
+    /// Serial ports found, listed when the port menu opens.
+    ports: Option<Vec<PortInfo>>,
     term_type: Option<String>,
     scrollback: String,
     log: Option<bool>,
@@ -116,6 +126,10 @@ fn field_label(key: &str) -> &'static str {
         "identity_file" => "key file",
         "save_password" => "save password",
         "baud_rate" => "baud rate",
+        "data_bits" => "data bits",
+        "parity" => "parity",
+        "stop_bits" => "stop bits",
+        "flow_control" => "flow control",
         "terminal.term_type" => "terminal type",
         "terminal.scrollback" => "scrollback",
         "log.enabled" => "log to file",
@@ -145,7 +159,11 @@ impl Context<'_> {
             "identity_file" => "agent and ~/.ssh keys".into(),
             "save_password" => "ask".into(),
             "serial_port" => "/dev/ttyUSB0 or COM3".into(),
-            "baud_rate" => "9600".into(),
+            "baud_rate" => przmterm_session::DEFAULT_BAUD_RATE.to_string(),
+            "data_bits" => DEFAULT_DATA_BITS.to_string(),
+            "parity" => "none".into(),
+            "stop_bits" => DEFAULT_STOP_BITS.to_string(),
+            "flow_control" => "none".into(),
             "terminal.term_type" => "xterm-256color".into(),
             "terminal.scrollback" => "10000".into(),
             "log.enabled" => "no".into(),
@@ -235,6 +253,11 @@ impl Editor {
             identity_file: text(&s.identity_file),
             serial_port: text(&s.serial_port),
             baud_rate: text(&s.baud_rate),
+            data_bits: s.data_bits,
+            parity: s.parity,
+            stop_bits: s.stop_bits,
+            flow_control: s.flow_control,
+            ports: None,
             term_type: s.terminal.term_type.clone(),
             scrollback: text(&s.terminal.scrollback),
             log: s.log.enabled,
@@ -275,6 +298,10 @@ impl Editor {
                 None
             },
             baud_rate: number("Baud rate", &self.baud_rate)?,
+            data_bits: self.data_bits,
+            parity: self.parity,
+            stop_bits: self.stop_bits,
+            flow_control: self.flow_control,
             terminal: TerminalSettings {
                 term_type: self.term_type.clone(),
                 scrollback: number("Scrollback", &self.scrollback)?,
@@ -430,10 +457,7 @@ impl Editor {
                 });
                 ui.weak("Enter saves, Esc cancels.");
                 ui.add_space(6.0);
-                egui::Grid::new("editor-grid")
-                    .num_columns(2)
-                    .spacing([12.0, 6.0])
-                    .show(ui, |ui| self.form(ui, &cx, root));
+                self.form(ui, &cx, root);
 
                 if self.show_log_help {
                     ui.add_space(4.0);
@@ -496,82 +520,201 @@ impl Editor {
     }
 
     fn form(&mut self, ui: &mut egui::Ui, cx: &Context, root: &Folder) {
-        if self.target != Target::Global {
-            ui.label(if self.is_session() {
-                "Name"
-            } else {
-                "Folder name"
+        let session = self.is_session();
+        grid(ui, "editor-main", |ui| {
+            if self.target != Target::Global {
+                ui.label(if session { "Name" } else { "Folder name" });
+                ui.add(egui::TextEdit::singleline(&mut self.name).desired_width(280.0));
+                ui.end_row();
+            }
+            if let Target::Session { trail, .. } = &mut self.target {
+                ui.label("Folder");
+                folder_picker(ui, root, trail);
+                ui.end_row();
+            }
+
+            ui.label("Protocol");
+            ui.horizontal(|ui| {
+                egui::ComboBox::from_id_salt("protocol")
+                    .width(250.0)
+                    .selected_text(shown(
+                        self.protocol.map(|p| p.to_string()),
+                        cx.hint("protocol"),
+                    ))
+                    .show_ui(ui, |ui| {
+                        for p in [Protocol::Ssh, Protocol::Telnet, Protocol::Serial] {
+                            ui.selectable_value(&mut self.protocol, Some(p), p.to_string());
+                        }
+                    });
+                reset(ui, &mut self.protocol, &cx.hint("protocol"));
             });
-            ui.add(egui::TextEdit::singleline(&mut self.name).desired_width(280.0));
             ui.end_row();
+
+            if cx.protocol == Protocol::Serial {
+                self.serial_fields(ui, cx);
+            } else {
+                self.network_fields(ui, cx);
+            }
+        });
+
+        // Folders and the global defaults also carry the other protocols'
+        // settings, out of the way until wanted.
+        if !session {
+            let (title, serial) = if cx.protocol == Protocol::Serial {
+                ("SSH and Telnet", false)
+            } else {
+                ("Serial ports", true)
+            };
+            egui::CollapsingHeader::new(title)
+                .id_salt("editor-other")
+                .show(ui, |ui| {
+                    grid(ui, "editor-other-grid", |ui| {
+                        if serial {
+                            self.serial_fields(ui, cx);
+                        } else {
+                            self.network_fields(ui, cx);
+                        }
+                    });
+                });
         }
-        if let Target::Session { trail, .. } = &mut self.target {
-            ui.label("Folder");
-            folder_picker(ui, root, trail);
+
+        grid(ui, "editor-terminal", |ui| self.terminal_fields(ui, cx));
+    }
+
+    /// Host, port and login, for SSH and Telnet.
+    fn network_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
+        if self.is_session() {
+            field(ui, "Host", &mut self.host, "10.0.0.1 or router.example.com");
+        }
+        field(ui, "Port", &mut self.port, &cx.hint("port"));
+        // Telnet logs in inside the terminal; these are SSH settings.
+        if self.is_session() && cx.protocol == Protocol::Telnet {
+            return;
+        }
+        // A user name for every session makes no sense globally.
+        if self.target != Target::Global {
+            field(ui, "User name", &mut self.username, &cx.hint("username"));
+        }
+        ui.label("Key file");
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.identity_file)
+                    .hint_text(cx.hint("identity_file"))
+                    .desired_width(200.0),
+            );
+            if ui.button("Browse…").clicked()
+                && let Some(path) = pick_key_file()
+            {
+                self.identity_file = tilde(&path);
+            }
+        });
+        ui.end_row();
+        ui.label("Save password");
+        save_pick(
+            ui,
+            &mut self.save_password,
+            cx.inherited.save_password,
+            None,
+        );
+        ui.end_row();
+    }
+
+    /// Port and line settings for serial consoles.
+    fn serial_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
+        if self.is_session() {
+            ui.label("Serial port");
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.serial_port)
+                        .hint_text(cx.hint("serial_port"))
+                        .desired_width(200.0),
+                );
+                ui.menu_button("Ports ▾", |ui| {
+                    let ports = self.ports.get_or_insert_with(available_ports);
+                    if ports.is_empty() {
+                        ui.weak("No serial ports found.");
+                    }
+                    for p in ports.iter() {
+                        let text = if p.description.is_empty() {
+                            p.name.clone()
+                        } else {
+                            format!("{}  —  {}", p.name, p.description)
+                        };
+                        if ui
+                            .selectable_label(self.serial_port == p.name, text)
+                            .clicked()
+                        {
+                            self.serial_port = p.name.clone();
+                            ui.close();
+                        }
+                    }
+                    ui.separator();
+                    if ui.button("↻ Refresh").clicked() {
+                        self.ports = None;
+                    }
+                });
+            });
             ui.end_row();
         }
 
-        ui.label("Protocol");
+        ui.label("Baud rate");
         ui.horizontal(|ui| {
-            egui::ComboBox::from_id_salt("protocol")
-                .width(250.0)
-                .selected_text(shown(
-                    self.protocol.map(|p| p.to_string()),
-                    cx.hint("protocol"),
-                ))
-                .show_ui(ui, |ui| {
-                    for p in [Protocol::Ssh, Protocol::Telnet, Protocol::Serial] {
-                        ui.selectable_value(&mut self.protocol, Some(p), p.to_string());
+            ui.add(
+                egui::TextEdit::singleline(&mut self.baud_rate)
+                    .hint_text(cx.hint("baud_rate"))
+                    .desired_width(200.0),
+            );
+            ui.menu_button("Rates ▾", |ui| {
+                for rate in COMMON_BAUD_RATES {
+                    let rate = rate.to_string();
+                    if ui.selectable_label(self.baud_rate == rate, &rate).clicked() {
+                        self.baud_rate = rate;
+                        ui.close();
                     }
-                });
-            reset(ui, &mut self.protocol, &cx.hint("protocol"));
+                }
+            });
         });
         ui.end_row();
 
-        let session = self.is_session();
-        if cx.protocol == Protocol::Serial {
-            if session {
-                field(
-                    ui,
-                    "Serial port",
-                    &mut self.serial_port,
-                    &cx.hint("serial_port"),
-                );
-            }
-            field(ui, "Baud rate", &mut self.baud_rate, &cx.hint("baud_rate"));
-        } else {
-            if session {
-                field(ui, "Host", &mut self.host, "10.0.0.1 or router.example.com");
-            }
-            field(ui, "Port", &mut self.port, &cx.hint("port"));
-            // A user name for every session makes no sense globally.
-            if self.target != Target::Global {
-                field(ui, "User name", &mut self.username, &cx.hint("username"));
-            }
-            ui.label("Key file");
-            ui.horizontal(|ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.identity_file)
-                        .hint_text(cx.hint("identity_file"))
-                        .desired_width(200.0),
-                );
-                if ui.button("Browse…").clicked()
-                    && let Some(path) = pick_key_file()
-                {
-                    self.identity_file = tilde(&path);
-                }
-            });
-            ui.end_row();
-            ui.label("Save password");
-            save_pick(
-                ui,
-                &mut self.save_password,
-                cx.inherited.save_password,
-                None,
-            );
-            ui.end_row();
-        }
+        ui.label("Data bits");
+        choice_pick(
+            ui,
+            &mut self.data_bits,
+            cx.inherited.data_bits.unwrap_or(DEFAULT_DATA_BITS),
+            &[(5, "5"), (6, "6"), (7, "7"), (8, "8")],
+            &cx.hint("data_bits"),
+        );
+        ui.end_row();
+        ui.label("Parity");
+        choice_pick(
+            ui,
+            &mut self.parity,
+            cx.inherited.parity.unwrap_or_default(),
+            &Parity::ALL.map(|p| (p, p.name())),
+            &cx.hint("parity"),
+        );
+        ui.end_row();
+        ui.label("Stop bits");
+        choice_pick(
+            ui,
+            &mut self.stop_bits,
+            cx.inherited.stop_bits.unwrap_or(DEFAULT_STOP_BITS),
+            &[(1, "1"), (2, "2")],
+            &cx.hint("stop_bits"),
+        );
+        ui.end_row();
+        ui.label("Flow control");
+        choice_pick(
+            ui,
+            &mut self.flow_control,
+            cx.inherited.flow_control.unwrap_or_default(),
+            &FlowControl::ALL.map(|f| (f, f.label())),
+            &cx.hint("flow_control"),
+        );
+        ui.end_row();
+    }
 
+    fn terminal_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
         ui.label("Terminal type");
         ui.horizontal(|ui| {
             egui::ComboBox::from_id_salt("term-type")
@@ -642,6 +785,36 @@ impl Editor {
         });
         ui.end_row();
     }
+}
+
+/// A two-column form grid; every grid uses the same label width so that
+/// consecutive grids line up.
+fn grid(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui)) {
+    egui::Grid::new(id)
+        .num_columns(2)
+        .min_col_width(110.0)
+        .spacing([12.0, 6.0])
+        .show(ui, add);
+}
+
+/// One button per option with the effective value selected, plus ↺ when
+/// the value is set here.
+fn choice_pick<T: Copy + PartialEq>(
+    ui: &mut egui::Ui,
+    value: &mut Option<T>,
+    inherited: T,
+    options: &[(T, &str)],
+    hint: &str,
+) {
+    ui.horizontal(|ui| {
+        let effective = value.unwrap_or(inherited);
+        for &(v, text) in options {
+            if ui.selectable_label(effective == v, text).clicked() {
+                *value = Some(v);
+            }
+        }
+        reset(ui, value, hint);
+    });
 }
 
 fn field(ui: &mut egui::Ui, label: &str, value: &mut String, hint: &str) {
@@ -791,6 +964,34 @@ fn save_pick(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn serial_settings_survive_an_edit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut e = Editor::new_session(&[]);
+        e.name = "console".into();
+        e.protocol = Some(Protocol::Serial);
+        e.serial_port = "/dev/ttyUSB0".into();
+        e.baud_rate = "115200".into();
+        e.parity = Some(Parity::Even);
+        e.flow_control = Some(FlowControl::Software);
+        e.save(tmp.path(), true).unwrap();
+
+        let tree = przmterm_session::SessionTree::load(tmp.path());
+        let console = tree.root.all_sessions()[0];
+        assert_eq!(console.display_target(), "/dev/ttyUSB0 115200 8E1 XON/XOFF");
+        // Editing something else keeps the line settings.
+        let mut e = Editor::edit(console);
+        e.scrollback = "500".into();
+        e.save(tmp.path(), true).unwrap();
+        let toml = std::fs::read_to_string(tmp.path().join("sessions/console.toml")).unwrap();
+        assert!(toml.contains("parity = \"even\""), "{toml}");
+        assert!(toml.contains("flow_control = \"software\""), "{toml}");
+        assert!(
+            !toml.contains("data_bits"),
+            "unset values stay unset: {toml}"
+        );
+    }
 
     #[test]
     fn sessions_and_folders_round_trip() {

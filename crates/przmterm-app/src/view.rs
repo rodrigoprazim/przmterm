@@ -172,10 +172,14 @@ pub struct ViewOutput {
     pub resized: Option<(usize, usize)>,
     /// The terminal was clicked (focus moves to this pane).
     pub clicked: bool,
+    /// "Send BREAK" was chosen in the context menu.
+    pub send_break: bool,
 }
 
 pub struct TerminalView {
     pub font_size: f32,
+    /// Offer "Send BREAK" (serial and Telnet sessions).
+    pub offer_break: bool,
     focus_requested: bool,
     selection: Option<Selection>,
     scroll_accum: f32,
@@ -185,9 +189,20 @@ impl Default for TerminalView {
     fn default() -> Self {
         Self {
             font_size: 14.0,
+            offer_break: false,
             focus_requested: false,
             selection: None,
             scroll_accum: 0.0,
+        }
+    }
+}
+
+impl TerminalView {
+    pub fn for_protocol(protocol: przmterm_core::Protocol) -> Self {
+        use przmterm_core::Protocol::{Serial, Telnet};
+        Self {
+            offer_break: matches!(protocol, Serial | Telnet),
+            ..Self::default()
         }
     }
 }
@@ -286,7 +301,7 @@ impl TerminalView {
         if focused && active {
             self.handle_keys(ui, response.id, term, &mut input);
         }
-        self.context_menu(&response, term, &mut input);
+        let send_break = self.context_menu(&response, term, &mut input);
 
         if !input.is_empty() {
             term.screen_mut().reset_display();
@@ -296,6 +311,7 @@ impl TerminalView {
             input,
             resized,
             clicked,
+            send_break,
         }
     }
 
@@ -467,9 +483,10 @@ impl TerminalView {
         response: &egui::Response,
         term: &mut Terminal,
         input: &mut Vec<u8>,
-    ) {
+    ) -> bool {
         let text = self.selection.and_then(|s| s.text(term.screen()));
         let bracketed = term.screen().bracketed_paste();
+        let mut send_break = false;
         response.context_menu(|ui| {
             if ui
                 .add_enabled(text.is_some(), egui::Button::new("Copy"))
@@ -500,7 +517,19 @@ impl TerminalView {
                 });
                 ui.close();
             }
+            if self.offer_break {
+                ui.separator();
+                if ui
+                    .button("Send BREAK")
+                    .on_hover_text("Ctrl+Shift+B (⌘⇧B on macOS)")
+                    .clicked()
+                {
+                    send_break = true;
+                    ui.close();
+                }
+            }
         });
+        send_break
     }
 }
 

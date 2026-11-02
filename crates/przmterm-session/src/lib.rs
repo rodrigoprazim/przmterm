@@ -15,13 +15,17 @@
 //!
 //! Settings resolve in three levels: global defaults, then each `folder.toml`
 //! from the root down, then the session file. Passwords never live here; they
-//! go to the OS keychain (a later version).
+//! go to the OS keychain.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::{Datelike, Timelike};
 use przmterm_core::Protocol;
+pub use przmterm_core::serial::{
+    COMMON_BAUD_RATES, DEFAULT_BAUD_RATE, DEFAULT_DATA_BITS, DEFAULT_STOP_BITS, FlowControl,
+    Parity, SerialLine,
+};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULTS_FILE: &str = "defaults.toml";
@@ -32,7 +36,6 @@ pub const KNOWN_HOSTS_FILE: &str = "known_hosts";
 
 pub const DEFAULT_TERM_TYPE: &str = "xterm-256color";
 pub const DEFAULT_SCROLLBACK: usize = 10_000;
-pub const DEFAULT_BAUD_RATE: u32 = 9600;
 /// Log file name used when logging is on and no `path` is set, relative to `<config>/logs`.
 pub const DEFAULT_LOG_TEMPLATE: &str = "%S-%Y%M%D-%h%m%s.log";
 pub const LOGS_DIR: &str = "logs";
@@ -105,6 +108,16 @@ pub struct SessionSettings {
     pub serial_port: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub baud_rate: Option<u32>,
+    /// 5 to 8.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_bits: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parity: Option<Parity>,
+    /// 1 or 2.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_bits: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flow_control: Option<FlowControl>,
     #[serde(skip_serializing_if = "is_default")]
     pub terminal: TerminalSettings,
     #[serde(skip_serializing_if = "is_default")]
@@ -116,7 +129,7 @@ pub struct SessionSettings {
 }
 
 /// Keys of the individual settings, used to compare and copy them.
-pub const FIELDS: [&str; 13] = [
+pub const FIELDS: [&str; 17] = [
     "protocol",
     "host",
     "port",
@@ -125,6 +138,10 @@ pub const FIELDS: [&str; 13] = [
     "save_password",
     "serial_port",
     "baud_rate",
+    "data_bits",
+    "parity",
+    "stop_bits",
+    "flow_control",
     "terminal.term_type",
     "terminal.scrollback",
     "log.enabled",
@@ -144,6 +161,10 @@ impl SessionSettings {
             "save_password" => self.save_password = from.save_password,
             "serial_port" => self.serial_port = from.serial_port.clone(),
             "baud_rate" => self.baud_rate = from.baud_rate,
+            "data_bits" => self.data_bits = from.data_bits,
+            "parity" => self.parity = from.parity,
+            "stop_bits" => self.stop_bits = from.stop_bits,
+            "flow_control" => self.flow_control = from.flow_control,
             "terminal.term_type" => self.terminal.term_type = from.terminal.term_type.clone(),
             "terminal.scrollback" => self.terminal.scrollback = from.terminal.scrollback,
             "log.enabled" => self.log.enabled = from.log.enabled,
@@ -165,6 +186,10 @@ impl SessionSettings {
             "save_password" => self.save_password.map(yes_no),
             "serial_port" => self.serial_port.clone(),
             "baud_rate" => self.baud_rate.map(|v| v.to_string()),
+            "data_bits" => self.data_bits.map(|v| v.to_string()),
+            "parity" => self.parity.map(|v| v.name().to_string()),
+            "stop_bits" => self.stop_bits.map(|v| v.to_string()),
+            "flow_control" => self.flow_control.map(|v| v.name().to_string()),
             "terminal.term_type" => self.terminal.term_type.clone(),
             "terminal.scrollback" => self.terminal.scrollback.map(|v| v.to_string()),
             "log.enabled" => self.log.enabled.map(yes_no),
@@ -197,6 +222,10 @@ impl SessionSettings {
             save_password: pick(&self.save_password, &over.save_password),
             serial_port: pick(&self.serial_port, &over.serial_port),
             baud_rate: pick(&self.baud_rate, &over.baud_rate),
+            data_bits: pick(&self.data_bits, &over.data_bits),
+            parity: pick(&self.parity, &over.parity),
+            stop_bits: pick(&self.stop_bits, &over.stop_bits),
+            flow_control: pick(&self.flow_control, &over.flow_control),
             terminal: TerminalSettings {
                 term_type: pick(&self.terminal.term_type, &over.terminal.term_type),
                 scrollback: pick(&self.terminal.scrollback, &over.terminal.scrollback),
@@ -218,6 +247,10 @@ impl SessionSettings {
             "protocol" => s.protocol = Some(Protocol::Ssh),
             "port" => s.port = protocol.default_port(),
             "baud_rate" => s.baud_rate = Some(DEFAULT_BAUD_RATE),
+            "data_bits" => s.data_bits = Some(DEFAULT_DATA_BITS),
+            "parity" => s.parity = Some(Parity::None),
+            "stop_bits" => s.stop_bits = Some(DEFAULT_STOP_BITS),
+            "flow_control" => s.flow_control = Some(FlowControl::None),
             "terminal.term_type" => s.terminal.term_type = Some(DEFAULT_TERM_TYPE.into()),
             "terminal.scrollback" => s.terminal.scrollback = Some(DEFAULT_SCROLLBACK),
             "log.enabled" => s.log.enabled = Some(false),
@@ -245,10 +278,7 @@ pub enum Target {
         port: u16,
         username: Option<String>,
     },
-    Serial {
-        port: String,
-        baud_rate: u32,
-    },
+    Serial(SerialLine),
     Local,
 }
 
@@ -304,13 +334,33 @@ impl Session {
                     username: settings.username.clone(),
                 }
             }
-            Protocol::Serial => Target::Serial {
-                port: settings
+            Protocol::Serial => {
+                let port = settings
                     .serial_port
                     .clone()
-                    .ok_or_else(|| invalid("`serial_port` is required for serial"))?,
-                baud_rate: settings.baud_rate.unwrap_or(DEFAULT_BAUD_RATE),
-            },
+                    .filter(|p| !p.trim().is_empty())
+                    .ok_or_else(|| invalid("`serial_port` is required for serial"))?;
+                let data_bits = settings.data_bits.unwrap_or(DEFAULT_DATA_BITS);
+                if !(5..=8).contains(&data_bits) {
+                    return Err(invalid("`data_bits` must be 5, 6, 7 or 8"));
+                }
+                let stop_bits = settings.stop_bits.unwrap_or(DEFAULT_STOP_BITS);
+                if !(1..=2).contains(&stop_bits) {
+                    return Err(invalid("`stop_bits` must be 1 or 2"));
+                }
+                let baud_rate = settings.baud_rate.unwrap_or(DEFAULT_BAUD_RATE);
+                if baud_rate == 0 {
+                    return Err(invalid("`baud_rate` must be above 0"));
+                }
+                Target::Serial(SerialLine {
+                    port,
+                    baud_rate,
+                    data_bits,
+                    parity: settings.parity.unwrap_or_default(),
+                    stop_bits,
+                    flow_control: settings.flow_control.unwrap_or_default(),
+                })
+            }
             Protocol::Local => Target::Local,
         };
         Ok(Session {
@@ -334,12 +384,14 @@ impl Session {
     }
 
     /// Builds a session from a quick-connect string:
-    /// `host`, `user@host`, `host:port`, `user@[::1]:2222`, or `telnet://host`.
+    /// `host`, `user@host`, `host:port`, `user@[::1]:2222`, `telnet://host`,
+    /// or `serial://PORT[@BAUD]` (`serial:///dev/ttyUSB0@115200`, `serial://COM3`).
     pub fn quick_connect(target: &str) -> Result<Session, String> {
         let target = target.trim();
         let (protocol, rest) = match target.split_once("://") {
             Some(("ssh", rest)) => (Protocol::Ssh, rest),
             Some(("telnet", rest)) => (Protocol::Telnet, rest),
+            Some(("serial", rest)) => return Self::quick_serial(target, rest),
             Some((scheme, _)) => return Err(format!("unsupported protocol `{scheme}`")),
             None => (Protocol::Ssh, target),
         };
@@ -384,6 +436,28 @@ impl Session {
         Session::resolve(target, Vec::new(), PathBuf::new(), &settings).map_err(|e| e.to_string())
     }
 
+    fn quick_serial(target: &str, rest: &str) -> Result<Session, String> {
+        let (port, baud) = match rest.rsplit_once('@') {
+            Some((port, baud)) => {
+                let baud = baud
+                    .parse::<u32>()
+                    .map_err(|_| format!("invalid baud rate `{baud}`"))?;
+                (port, Some(baud))
+            }
+            None => (rest, None),
+        };
+        if port.is_empty() {
+            return Err("enter a port, e.g. serial:///dev/ttyUSB0@9600 or serial://COM3".into());
+        }
+        let settings = SessionSettings {
+            protocol: Some(Protocol::Serial),
+            serial_port: Some(port.to_string()),
+            baud_rate: baud,
+            ..SessionSettings::default()
+        };
+        Session::resolve(target, Vec::new(), PathBuf::new(), &settings).map_err(|e| e.to_string())
+    }
+
     /// Keychain account for saved passwords (`user@host:port`), when the user is known.
     pub fn password_account(&self) -> Option<String> {
         match &self.target {
@@ -400,7 +474,7 @@ impl Session {
     pub fn host_label(&self) -> &str {
         match &self.target {
             Target::Network { host, .. } => host,
-            Target::Serial { port, .. } => port,
+            Target::Serial(line) => &line.port,
             Target::Local => "local",
         }
     }
@@ -420,7 +494,7 @@ impl Session {
         dir.join(path)
     }
 
-    /// Short description such as `admin@10.0.0.1:22` or `/dev/ttyUSB0 @ 9600`.
+    /// Short description such as `admin@10.0.0.1:22` or `/dev/ttyUSB0 9600 8N1`.
     pub fn display_target(&self) -> String {
         match &self.target {
             Target::Network {
@@ -434,7 +508,7 @@ impl Session {
                     .unwrap_or_default();
                 format!("{user}{host}:{port}")
             }
-            Target::Serial { port, baud_rate } => format!("{port} @ {baud_rate}"),
+            Target::Serial(line) => line.to_string(),
             Target::Local => "local shell".to_string(),
         }
     }
@@ -980,6 +1054,16 @@ mod tests {
         assert_eq!(t("u@[::1]:2200"), Ok((Protocol::Ssh, "u@::1:2200".into())));
         assert_eq!(t("fe80::1"), Ok((Protocol::Ssh, "fe80::1:22".into())));
         assert_eq!(t("telnet://rtr"), Ok((Protocol::Telnet, "rtr:23".into())));
+        assert_eq!(
+            t("serial:///dev/ttyUSB0@115200"),
+            Ok((Protocol::Serial, "/dev/ttyUSB0 115200 8N1".into()))
+        );
+        assert_eq!(
+            t("serial://COM3"),
+            Ok((Protocol::Serial, "COM3 9600 8N1".into()))
+        );
+        assert!(t("serial://COM3@fast").is_err());
+        assert!(t("serial://").is_err());
         assert!(t("host:99999").is_err());
         assert!(t("").is_err());
         assert!(t("ftp://x").is_err());
@@ -1203,8 +1287,34 @@ mod tests {
         assert_eq!(edge.display_target(), "netadmin@10.0.1.1:23");
 
         let lab = &tree.root.folders[1].sessions[0];
-        assert_eq!(lab.display_target(), "/dev/ttyUSB0 @ 115200");
+        assert_eq!(lab.display_target(), "/dev/ttyUSB0 115200 8N1");
         assert_eq!(tree.root.all_sessions().len(), 3);
+    }
+
+    #[test]
+    fn serial_line_settings_resolve_and_validate() {
+        let settings = SessionSettings::from_toml(
+            "protocol = 'serial'\nserial_port = 'COM4'\nbaud_rate = 19200\n\
+             data_bits = 7\nparity = 'even'\nstop_bits = 2\nflow_control = 'hardware'",
+        )
+        .unwrap();
+        let s = Session::resolve("con", Vec::new(), "con.toml", &settings).unwrap();
+        assert_eq!(s.display_target(), "COM4 19200 7E2 RTS/CTS");
+        assert_eq!(s.host_label(), "COM4");
+        assert_eq!(settings.field_text("parity").as_deref(), Some("even"));
+        assert_eq!(
+            settings.field_text("flow_control").as_deref(),
+            Some("hardware")
+        );
+        assert!(settings.to_toml().contains("flow_control = \"hardware\""));
+
+        let mut bad = settings.clone();
+        bad.data_bits = Some(9);
+        assert!(Session::resolve("con", Vec::new(), "con.toml", &bad).is_err());
+        bad = settings.clone();
+        bad.stop_bits = Some(3);
+        assert!(Session::resolve("con", Vec::new(), "con.toml", &bad).is_err());
+        assert!(SessionSettings::from_toml("parity = 'mark'").is_err());
     }
 
     #[test]

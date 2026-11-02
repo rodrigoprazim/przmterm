@@ -7,6 +7,26 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Telnet sessions with option negotiation: the server echoes (ECHO),
+  character mode (SGA), 8-bit (BINARY), terminal type (TTYPE) and window size
+  (NAWS, sent again on resize). Unknown options are refused without loops.
+- Serial console sessions: baud rate, data bits, parity, stop bits and flow
+  control (XON/XOFF or RTS/CTS). The session editor lists the serial ports
+  found on the machine (USB adapter name included) and common baud rates.
+- Send BREAK on serial (300 ms line break) and Telnet sessions:
+  Ctrl+Shift+B / ⌘⇧B, the *Break* button in the status bar, or the right-click menu.
+- Quick connect accepts `serial://PORT[@BAUD]`, e.g. `serial:///dev/ttyUSB0@115200`.
+- New session settings `data_bits`, `parity`, `stop_bits` and `flow_control`.
+
+### Changed
+
+- The session editor shows only the fields of the chosen protocol. Folder and
+  global settings keep the other protocols' fields under a collapsed section.
+- A split or new tab of a serial session explains that the port is already
+  open instead of failing to open it twice.
+
 ## [0.3.0] - 2026-11-01
 
 ### Added

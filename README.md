@@ -5,8 +5,8 @@ serial consoles, a session tree with inherited settings, logging and automation.
 Written in Rust, one binary per platform for macOS, Windows and Linux. No
 Electron, no web view.
 
-> **Status:** early development. 0.1.0 is out; 0.2.0 adds SSH. Telnet and
-> serial arrive in 0.4.0. See the [roadmap](ROADMAP.md).
+> **Status:** early development. 0.3.0 is out (SSH, tabs, logging, keychain);
+> 0.4.0 adds Telnet and serial consoles. See the [roadmap](ROADMAP.md).
 
 ## Goals
 
@@ -45,6 +45,22 @@ On macOS, unsigned development builds make the system ask for your login
 keychain password (your Mac account password) after each rebuild; choose
 *Always Allow*.
 
+### Telnet and serial
+
+Quick connect also takes `telnet://host[:port]` and `serial://PORT[@BAUD]`,
+for example `serial:///dev/ttyUSB0@115200` or `serial://COM3`. Telnet
+negotiates echo, window size (updated on resize) and terminal type; the login
+happens in the terminal. Serial sessions set baud rate, data bits, parity,
+stop bits and flow control; the session editor lists the ports it finds
+(on macOS the `/dev/cu.*` devices). On Linux your user needs to be in the
+`dialout` group to open serial ports.
+
+**Send BREAK** (Ctrl+Shift+B, ⌘⇧B, the *Break* button in the status bar, or
+the right-click menu) holds the serial line in break for 300 ms, or sends
+Telnet's BREAK command, e.g. for ROMMON password recovery.
+
+### Host keys
+
 Accepted host keys go to `known_hosts` in the configuration directory (OpenSSH
 format). `~/.ssh/known_hosts` is also consulted, read-only. If a host's key
 changes, PrzmTerm refuses to connect and shows the old and new fingerprints.
@@ -60,6 +76,7 @@ changes, PrzmTerm refuses to connect and shows the old and new fingerprints.
 | Copy | Ctrl+Shift+C, or Ctrl+C with a selection | ⌘C |
 | Paste | Ctrl+Shift+V or Ctrl+V | ⌘V |
 | Scroll back | wheel, Shift+PageUp/PageDown, Shift+Home/End | same |
+| Send BREAK (serial, Telnet) | Ctrl+Shift+B | ⌘⇧B |
 
 Drag to select, double-click selects a word, triple-click a line. Right-click
 opens Copy / Paste / Select all.
@@ -94,8 +111,12 @@ port = 22
 username = "admin"
 identity_file = "~/.ssh/id_lab"
 save_password = true       # keychain: unset asks, true always, false never
-serial_port = "/dev/ttyUSB0"
+serial_port = "/dev/ttyUSB0"   # COM3 on Windows, /dev/cu.usbserial-… on macOS
 baud_rate = 9600
+data_bits = 8              # 5-8
+parity = "none"            # none | odd | even
+stop_bits = 1              # 1 | 2
+flow_control = "none"      # none | software (XON/XOFF) | hardware (RTS/CTS)
 
 [terminal]
 term_type = "xterm-256color"

@@ -10,8 +10,8 @@
 //! That keeps the transport usable from the GUI, the CLI and scripts alike.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock, mpsc as std_mpsc};
 use std::time::Duration;
 
 use russh::client::{self, KeyboardInteractiveAuthResponse};
@@ -22,6 +22,7 @@ use russh::{ChannelMsg, Disconnect, MethodKind, MethodSet};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{Mutex, mpsc};
 
+use crate::pipe::{Cmd, Output, Pipe, runtime};
 use crate::{Protocol, Size, Transport, TransportError, Waker};
 
 /// Default key files tried after the agent, in this order (like OpenSSH).
@@ -111,11 +112,7 @@ type Shared = Arc<std::sync::Mutex<Option<std::sync::Weak<Handle>>>>;
 
 /// An SSH session seen from the GUI: non-blocking reads and writes.
 pub struct SshTransport {
-    cmds: mpsc::UnboundedSender<Cmd>,
-    output: std_mpsc::Receiver<Vec<u8>>,
-    pending: Vec<u8>,
-    pending_pos: usize,
-    closed: Arc<AtomicBool>,
+    pipe: Pipe,
     shared: Shared,
     config: SshConfig,
 }
@@ -128,18 +125,11 @@ impl SshTransport {
         config: SshConfig,
         task: impl FnOnce(Arc<Mutex<Input>>, Output, Arc<AtomicBool>) -> TaskFuture,
     ) -> Self {
-        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-        let (out_tx, out_rx) = std_mpsc::channel();
-        let closed = Arc::new(AtomicBool::new(false));
-        let input = Arc::new(Mutex::new(Input { rx: cmd_rx, size }));
-        let out = Output { tx: out_tx, waker };
-        runtime().spawn(task(input, out, closed.clone()));
+        let (pipe, end) = Pipe::new(waker);
+        let input = Arc::new(Mutex::new(Input { rx: end.cmds, size }));
+        runtime().spawn(task(input, end.out, end.closed));
         Self {
-            cmds: cmd_tx,
-            output: out_rx,
-            pending: Vec::new(),
-            pending_pos: 0,
-            closed,
+            pipe,
             shared,
             config,
         }
@@ -185,103 +175,29 @@ impl Transport for SshTransport {
     }
 
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, TransportError> {
-        if self.pending_pos >= self.pending.len() {
-            match self.output.try_recv() {
-                Ok(chunk) => {
-                    self.pending = chunk;
-                    self.pending_pos = 0;
-                }
-                Err(_) => return Ok(0),
-            }
-        }
-        let rest = &self.pending[self.pending_pos..];
-        let n = rest.len().min(buf.len());
-        buf[..n].copy_from_slice(&rest[..n]);
-        self.pending_pos += n;
-        Ok(n)
+        self.pipe.read(buf)
     }
 
     fn write(&mut self, data: &[u8]) -> Result<(), TransportError> {
-        self.cmds
-            .send(Cmd::Data(data.to_vec()))
-            .map_err(|_| TransportError::Closed)
+        self.pipe.send(Cmd::Data(data.to_vec()))
     }
 
     fn resize(&mut self, size: Size) -> Result<(), TransportError> {
-        self.cmds
-            .send(Cmd::Resize(size))
-            .map_err(|_| TransportError::Closed)
+        self.pipe.send(Cmd::Resize(size))
     }
 
     fn close(&mut self) -> Result<(), TransportError> {
-        let _ = self.cmds.send(Cmd::Close);
+        let _ = self.pipe.send(Cmd::Close);
         Ok(())
     }
 
     fn is_closed(&self) -> bool {
-        self.closed.load(Ordering::Acquire)
+        self.pipe.is_closed()
     }
 
     fn duplicate(&self, size: Size, waker: Waker) -> Option<Box<dyn Transport>> {
         self.share_connection(size, waker)
             .map(|t| Box::new(t) as Box<dyn Transport>)
-    }
-}
-
-impl Drop for SshTransport {
-    fn drop(&mut self) {
-        let _ = self.cmds.send(Cmd::Close);
-    }
-}
-
-fn runtime() -> &'static tokio::runtime::Runtime {
-    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-    RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .thread_name("przmterm-net")
-            .enable_all()
-            .build()
-            .expect("failed to start the network runtime")
-    })
-}
-
-enum Cmd {
-    Data(Vec<u8>),
-    Resize(Size),
-    Close,
-}
-
-/// Terminal-bound side of the task.
-#[derive(Clone)]
-struct Output {
-    tx: std_mpsc::Sender<Vec<u8>>,
-    waker: Waker,
-}
-
-impl Output {
-    fn bytes(&self, data: &[u8]) {
-        if !data.is_empty() && self.tx.send(data.to_vec()).is_ok() {
-            (self.waker)();
-        }
-    }
-
-    fn text(&self, text: &str) {
-        self.bytes(text.as_bytes());
-    }
-
-    /// Normalises bare `\n` to `\r\n` for text that comes from the server.
-    fn lines(&self, text: &str) {
-        let normalised = text.replace("\r\n", "\n").replace('\n', "\r\n");
-        self.text(&normalised);
-    }
-
-    fn notice(&self, text: &str) {
-        self.text(&format!("\x1b[2m{text}\x1b[0m\r\n"));
-    }
-
-    fn error(&self, text: &str) {
-        self.text(&format!("\x1b[31m{text}\x1b[0m\r\n"));
     }
 }
 
@@ -308,6 +224,7 @@ impl Input {
                     self.size = size;
                     continue;
                 }
+                Some(Cmd::Break) => continue,
                 Some(Cmd::Close) | None => return Err(Cancelled),
             };
             for b in bytes {
@@ -782,6 +699,8 @@ async fn run_channel(
                         .window_change(u32::from(size.cols), u32::from(size.rows), 0, 0)
                         .await;
                 }
+                // russh has no client "break" request; nothing to send.
+                Some(Cmd::Break) => {}
                 Some(Cmd::Close) | None => {
                     let _ = channel.close().await;
                     break;

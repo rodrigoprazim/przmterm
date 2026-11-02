@@ -95,6 +95,7 @@ enum Action {
     FocusPane(usize),
     Reconnect,
     ToggleLog,
+    SendBreak,
 }
 
 struct PrzmApp {
@@ -272,6 +273,15 @@ impl PrzmApp {
                 tab.active = tab.active.min(tab.panes.len() - 1);
             }
             Action::FocusPane(index) => self.tab_mut().active = index,
+            Action::SendBreak => {
+                let pane = self.tab_mut().pane_mut();
+                if pane.view.offer_break && !pane.transport.is_closed() {
+                    match pane.transport.send_break() {
+                        Ok(()) => self.notice = Some("BREAK sent.".into()),
+                        Err(e) => self.notice = Some(format!("Could not send BREAK: {e}")),
+                    }
+                }
+            }
             Action::ToggleLog => {
                 let pane = self.tab_mut().pane_mut();
                 if pane.log.is_some() {
@@ -307,6 +317,8 @@ impl PrzmApp {
                 Some(Action::Split(Layout::Columns))
             } else if i.consume_key(cmd_shift, Key::E) {
                 Some(Action::Split(Layout::Rows))
+            } else if i.consume_key(cmd_shift, Key::B) {
+                Some(Action::SendBreak)
             } else if i.consume_key(Modifiers::CTRL | Modifiers::SHIFT, Key::Tab) {
                 let n = self.tabs.len();
                 Some(Action::SelectTab((self.active_tab + n - 1) % n))
@@ -694,6 +706,17 @@ impl eframe::App for PrzmApp {
                     if ui.add(button).on_hover_text(hover).clicked() {
                         actions.push(Action::ToggleLog);
                     }
+                    if pane.view.offer_break
+                        && ui
+                            .add_enabled(
+                                !pane.transport.is_closed(),
+                                egui::Button::new("Break").small(),
+                            )
+                            .on_hover_text("Send BREAK (Ctrl+Shift+B, ⌘⇧B on macOS)")
+                            .clicked()
+                    {
+                        actions.push(Action::SendBreak);
+                    }
                 });
             });
         });
@@ -906,6 +929,12 @@ impl eframe::App for PrzmApp {
                 }
                 if out.clicked && !active {
                     actions.push(Action::FocusPane(i));
+                }
+                if out.send_break {
+                    if !active {
+                        actions.push(Action::FocusPane(i));
+                    }
+                    actions.push(Action::SendBreak);
                 }
                 if out.resized.is_some() {
                     match pane.transport.resize(pane.size()) {

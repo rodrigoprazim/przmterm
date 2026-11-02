@@ -4,6 +4,8 @@
 //! invoke the same named commands through a [`CommandBus`], so nothing is
 //! reachable only from the GUI.
 
+pub mod serial;
+
 use std::collections::BTreeMap;
 use std::fmt;
 

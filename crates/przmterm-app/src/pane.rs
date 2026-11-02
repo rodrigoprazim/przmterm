@@ -10,7 +10,9 @@ use przmterm_core::Protocol;
 use przmterm_session::{Session, Target};
 use przmterm_term::Terminal;
 use przmterm_term::log::TextLog;
+use przmterm_transport::serial::SerialTransport;
 use przmterm_transport::ssh::{SavePassword, SshConfig, SshTransport, Store};
+use przmterm_transport::telnet::{TelnetConfig, TelnetTransport};
 use przmterm_transport::{Size, Transport, TransportError, Waker};
 
 use crate::demo::DemoShell;
@@ -159,15 +161,17 @@ impl Pane {
                 };
                 Box::new(SshTransport::connect(config, size, waker))
             }
-            (protocol, _) => {
-                let version = match protocol {
-                    Protocol::Telnet | Protocol::Serial => "0.4.0",
-                    _ => "a later version",
-                };
-                message(&format!(
-                    "\x1b[33m{protocol} sessions arrive in PrzmTerm {version}.\x1b[0m\r\n"
-                ))
+            (Protocol::Telnet, Target::Network { host, port, .. }) => {
+                let mut config = TelnetConfig::new(host.clone(), *port);
+                config.term_type = session.term_type.clone();
+                Box::new(TelnetTransport::connect(config, size, waker))
             }
+            (Protocol::Serial, Target::Serial(line)) => {
+                Box::new(SerialTransport::open(line.clone(), waker))
+            }
+            (protocol, _) => message(&format!(
+                "\x1b[33m{protocol} sessions arrive in a later version of PrzmTerm.\x1b[0m\r\n"
+            )),
         };
         let mut pane = Self {
             term: Terminal::with_scrollback(
@@ -176,7 +180,7 @@ impl Pane {
                 session.scrollback,
             ),
             transport,
-            view: TerminalView::default(),
+            view: TerminalView::for_protocol(session.protocol),
             label: format!("{} {}", session.protocol, session.display_target()),
             origin: Some(session.clone()),
             log: None,
@@ -320,6 +324,16 @@ impl Pane {
             return Pane::demo();
         };
         let size = self.size();
+        if let (Target::Serial(line), false) = (&session.target, self.transport.is_closed()) {
+            // A port opens once: a second pane would only get "busy".
+            let mut pane = Pane::demo();
+            pane.transport = message(&format!(
+                "\x1b[33m{}\r\nis open in another pane.\x1b[0m\r\n",
+                line.port
+            ));
+            pane.label = self.label.clone();
+            return pane;
+        }
         let Some(transport) = (!self.transport.is_closed())
             .then(|| self.transport.duplicate(size, waker.clone()))
             .flatten()
@@ -333,7 +347,7 @@ impl Pane {
                 session.scrollback,
             ),
             transport,
-            view: TerminalView::default(),
+            view: TerminalView::for_protocol(session.protocol),
             label: self.label.clone(),
             origin: Some(session.clone()),
             log: None,

@@ -8,7 +8,10 @@
 //! frame. Network transports ([`ssh::SshTransport`]) run as a Tokio task and
 //! call a [`Waker`] when bytes arrive, so the GUI repaints only when needed.
 
+mod pipe;
+pub mod serial;
 pub mod ssh;
+pub mod telnet;
 
 use std::collections::VecDeque;
 use std::io;

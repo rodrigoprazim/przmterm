@@ -62,8 +62,12 @@ Checked by the maintainer on macOS against his own servers, including 2FA logins
 
 ## 0.4.0 — Telnet and serial
 
-- Telnet with option negotiation (NAWS, TTYPE, ECHO, SGA)
-- Serial console: baud rate, parity, stop bits, flow control, BREAK; port enumeration
+- [x] Telnet with option negotiation (NAWS, TTYPE, ECHO, SGA)
+- [x] Serial console: baud rate, parity, stop bits, flow control, BREAK; port enumeration
+- [ ] Gate checked on real equipment
+
+**Gate:** a Telnet login and a serial console (USB adapter) to network
+equipment work for a full session, including BREAK.
 
 ## 0.5.0 — Network gear
 
