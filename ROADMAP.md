@@ -136,6 +136,8 @@ highlighting, triggers, saved credentials) work in PrzmTerm.
   several texts and a timeout, `read_until`, `name`, `host`, `username`) and
   `log`/`print`, `prompt`, `prompt_secret`, `sleep`; run from the tab menu,
   from a button or as a session's logon script, and stopped at any time
+- [x] Gate checked on macOS by the maintainer: scripts (Linux samples) and
+      keyboard shortcuts
 
 **Gate:** the maintainer's own scripts and shortcuts work on his devices.
 
