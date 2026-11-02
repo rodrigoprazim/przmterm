@@ -715,6 +715,18 @@ pub fn read_session_settings(path: &Path) -> Result<SessionSettings, SessionErro
 }
 
 /// Checks a session or folder name for use as a file name.
+/// Characters that cannot appear in session and folder names (they are file
+/// names on every OS).
+pub const FORBIDDEN_NAME_CHARS: &str = "/\\:*?\"<>|";
+
+/// Removes the characters a name cannot have, e.g. while it is typed.
+/// Returns true if anything was removed.
+pub fn strip_forbidden(name: &mut String) -> bool {
+    let before = name.len();
+    name.retain(|c| !c.is_control() && !FORBIDDEN_NAME_CHARS.contains(c));
+    name.len() != before
+}
+
 pub fn validate_name(name: &str) -> Result<(), String> {
     let name = name.trim();
     if name.is_empty() {
@@ -723,7 +735,7 @@ pub fn validate_name(name: &str) -> Result<(), String> {
     if name.starts_with('.')
         || name
             .chars()
-            .any(|c| c.is_control() || "/\\:*?\"<>|".contains(c))
+            .any(|c| c.is_control() || FORBIDDEN_NAME_CHARS.contains(c))
     {
         return Err(format!("`{name}` cannot be used as a file name"));
     }
@@ -797,7 +809,9 @@ pub fn rename_folder(dir: &Path, new_name: &str) -> Result<PathBuf, SessionError
     if path == dir {
         return Ok(path);
     }
-    if path.exists() {
+    // On macOS and Windows `GeoFibra` "exists" when `GeOFibra` does: that is
+    // the same folder, and renaming it only changes the case.
+    if path.exists() && !is_case_change(dir, &path) {
         return Err(SessionError::Invalid {
             path,
             reason: "a folder with this name already exists".into(),
@@ -808,6 +822,76 @@ pub fn rename_folder(dir: &Path, new_name: &str) -> Result<PathBuf, SessionError
         source,
     })?;
     Ok(path)
+}
+
+/// True if `to` names `from` with different letter case only, and no other
+/// entry has exactly that name (so on a case-insensitive file system, `to`
+/// "existing" is `from` itself).
+fn is_case_change(from: &Path, to: &Path) -> bool {
+    let (Some(a), Some(b)) = (from.file_name(), to.file_name()) else {
+        return false;
+    };
+    if from.parent() != to.parent()
+        || a == b
+        || a.to_string_lossy().to_lowercase() != b.to_string_lossy().to_lowercase()
+    {
+        return false;
+    }
+    let Some(parent) = to.parent() else {
+        return false;
+    };
+    // The real names on disk: is there an entry spelled exactly like `to`?
+    !fs::read_dir(parent)
+        .map(|entries| entries.flatten().any(|e| e.file_name() == b))
+        .unwrap_or(false)
+}
+
+/// Saves a session edited in the GUI: `original` is its file before the
+/// edit (`None` for a new session). Refuses to overwrite another session,
+/// handles renames that only change letter case, and removes the old file
+/// when the name or folder changed.
+pub fn save_session(
+    config_dir: &Path,
+    folder: &str,
+    name: &str,
+    settings: &SessionSettings,
+    original: Option<&Path>,
+) -> Result<PathBuf, SessionError> {
+    let name = name.trim();
+    let mut dir = config_dir.join(SESSIONS_DIR);
+    for part in folder.split('/').map(str::trim).filter(|p| !p.is_empty()) {
+        dir.push(part);
+    }
+    let path = dir.join(format!("{name}.toml"));
+    // Whether the old file is now the new one (same path, or renamed).
+    let kept = match original {
+        Some(original) if original == path => true,
+        Some(original) if is_case_change(original, &path) => {
+            fs::rename(original, &path).map_err(|source| SessionError::Io {
+                path: original.to_path_buf(),
+                source,
+            })?;
+            true
+        }
+        _ if path.exists() => {
+            return Err(SessionError::Invalid {
+                path,
+                reason: "a session with this name already exists in that folder".into(),
+            });
+        }
+        _ => false,
+    };
+    let written = write_session(config_dir, folder, name, settings)?;
+    if let Some(original) = original
+        && !kept
+        && original.exists()
+    {
+        fs::remove_file(original).map_err(|source| SessionError::Io {
+            path: original.to_path_buf(),
+            source,
+        })?;
+    }
+    Ok(written)
 }
 
 /// Deletes the folder at `dir` with everything in it.
@@ -1415,6 +1499,69 @@ mod tests {
         bad.stop_bits = Some(3);
         assert!(Session::resolve("con", Vec::new(), "con.toml", &bad).is_err());
         assert!(SessionSettings::from_toml("parity = 'mark'").is_err());
+    }
+
+    fn names_in(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    // Runs on case-insensitive file systems too (macOS CI), where these
+    // renames used to fail or lose the file.
+    #[test]
+    fn renames_that_only_change_case() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sessions = tmp.path().join(SESSIONS_DIR);
+        let folder = create_folder(&sessions, "GeOFibra").unwrap();
+        let folder = rename_folder(&folder, "GeoFibra").unwrap();
+        assert_eq!(names_in(&sessions), ["GeoFibra"]);
+
+        let host = |h: &str| SessionSettings {
+            host: Some(h.into()),
+            ..SessionSettings::default()
+        };
+        let vm = save_session(tmp.path(), "GeoFibra", "VM", &host("a"), None).unwrap();
+        let vm = save_session(tmp.path(), "GeoFibra", "vm", &host("b"), Some(&vm)).unwrap();
+        assert_eq!(names_in(&folder), ["vm.toml"]);
+        assert_eq!(
+            read_session_settings(&vm).unwrap().host.as_deref(),
+            Some("b")
+        );
+    }
+
+    #[test]
+    fn saving_never_overwrites_another_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let host = |h: &str| SessionSettings {
+            host: Some(h.into()),
+            ..SessionSettings::default()
+        };
+        let a = save_session(tmp.path(), "", "a", &host("1"), None).unwrap();
+        let b = save_session(tmp.path(), "", "b", &host("2"), None).unwrap();
+        assert!(save_session(tmp.path(), "", "a", &host("x"), None).is_err());
+        assert!(save_session(tmp.path(), "", "a", &host("x"), Some(&b)).is_err());
+        assert_eq!(
+            read_session_settings(&a).unwrap().host.as_deref(),
+            Some("1")
+        );
+        assert!(b.exists());
+        // Renaming and moving remove the old file.
+        let c = save_session(tmp.path(), "Lab", "c", &host("2"), Some(&b)).unwrap();
+        assert!(c.exists() && !b.exists());
+    }
+
+    #[test]
+    fn forbidden_characters_are_stripped() {
+        let mut name = "FiBrasil/Nada: a*b?".to_string();
+        assert!(strip_forbidden(&mut name));
+        assert_eq!(name, "FiBrasilNada ab");
+        assert!(validate_name(&name).is_ok());
+        assert!(!strip_forbidden(&mut name));
     }
 
     #[test]

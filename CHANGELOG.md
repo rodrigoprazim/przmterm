@@ -64,9 +64,19 @@ All notable changes to PrzmTerm are recorded here. The format follows
   open instead of failing to open it twice.
 - Messages such as "Saved …" or "BREAK sent." appear in the status bar for a
   few seconds instead of under *Sessions*.
+- Long session names stay on one line; the session list scrolls sideways
+  instead of wrapping them.
+- The session list can be hidden for a wider terminal: ◀ next to *Sessions*,
+  ▶ to bring it back, or Ctrl+Shift+S / ⌘⇧S.
 
 ### Fixed
 
+- Renaming a folder or session by changing only letter case (`GeOFibra` →
+  `GeoFibra`) failed with "already exists" on macOS and Windows; renaming a
+  session that way could lose its file. Saving a session never overwrites
+  another one.
+- Characters a file name cannot have (`/ \ : * ? " < > |`) are dropped while
+  a session or folder name is typed, with a note, instead of failing on save.
 - A key file set to the public key (`.pub`) uses the private key next to it;
   without one, the error says to choose the private key. The file dialog
   does the same.

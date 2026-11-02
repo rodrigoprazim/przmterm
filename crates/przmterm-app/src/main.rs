@@ -96,6 +96,7 @@ enum Action {
     Reconnect,
     ToggleLog,
     SendBreak,
+    ToggleSessions,
 }
 
 struct PrzmApp {
@@ -111,6 +112,8 @@ struct PrzmApp {
     name_dialog: Option<NameDialog>,
     /// Sessions can be dragged between folders only while unlocked.
     drag_unlocked: bool,
+    /// The session list is folded away for more terminal room.
+    sessions_hidden: bool,
     /// A message for the status bar, set anywhere during a frame.
     notice: Option<String>,
     /// The message the status bar shows, and since when.
@@ -187,6 +190,7 @@ impl PrzmApp {
             confirm_delete: None,
             name_dialog: None,
             drag_unlocked: false,
+            sessions_hidden: false,
             notice: None,
             status: None,
             import_result: None,
@@ -293,6 +297,7 @@ impl PrzmApp {
                 tab.active = tab.active.min(tab.panes.len() - 1);
             }
             Action::FocusPane(index) => self.tab_mut().active = index,
+            Action::ToggleSessions => self.sessions_hidden = !self.sessions_hidden,
             Action::SendBreak => {
                 let pane = self.tab_mut().pane_mut();
                 if pane.view.offer_break && !pane.transport.is_closed() {
@@ -353,6 +358,8 @@ impl PrzmApp {
                 Some(Action::Split(Layout::Rows))
             } else if i.consume_key(cmd_shift, Key::B) {
                 Some(Action::SendBreak)
+            } else if i.consume_key(cmd_shift, Key::S) {
+                Some(Action::ToggleSessions)
             } else if i.consume_key(Modifiers::CTRL | Modifiers::SHIFT, Key::Tab) {
                 let n = self.tabs.len();
                 Some(Action::SelectTab((self.active_tab + n - 1) % n))
@@ -452,11 +459,7 @@ impl PrzmApp {
                 .collapsible(false)
                 .resizable(false)
                 .show(ctx, |ui| {
-                    let edit = ui.add(
-                        egui::TextEdit::singleline(&mut dialog.value)
-                            .hint_text("Folder name")
-                            .desired_width(240.0),
-                    );
+                    let edit = editor::name_field(ui, &mut dialog.value, "Folder name");
                     edit.request_focus();
                     let enter = ui.input(|i| i.key_pressed(Key::Enter));
                     if let Some(err) = &dialog.error {
@@ -830,11 +833,33 @@ impl eframe::App for PrzmApp {
             });
         });
 
+        if self.sessions_hidden {
+            egui::Panel::left("sessions-folded")
+                .resizable(false)
+                .exact_size(30.0)
+                .show(ui, |ui| {
+                    if ui
+                        .small_button("▶")
+                        .on_hover_text("Show the sessions (Ctrl+Shift+S, ⌘⇧S)")
+                        .clicked()
+                    {
+                        actions.push(Action::ToggleSessions);
+                    }
+                });
+        }
+        let mut sessions_open = !self.sessions_hidden;
         egui::Panel::left("sessions")
             .resizable(true)
             .default_size(220.0)
-            .show(ui, |ui| {
+            .show_collapsible(ui, &mut sessions_open, |ui| {
                 ui.horizontal(|ui| {
+                    if ui
+                        .small_button("◀")
+                        .on_hover_text("Hide the sessions (Ctrl+Shift+S, ⌘⇧S)")
+                        .clicked()
+                    {
+                        actions.push(Action::ToggleSessions);
+                    }
                     ui.strong("Sessions");
                     if ui.small_button("⟳").on_hover_text("Reload").clicked() {
                         self.reload_sessions();
@@ -912,7 +937,9 @@ impl eframe::App for PrzmApp {
                     }
                 });
                 ui.separator();
-                egui::ScrollArea::vertical().show(ui, |ui| {
+                // Long names stay on one line; the list scrolls sideways.
+                egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                     if self.sessions.root.all_sessions().is_empty() {
                         let hint = match &self.config_dir {
                             Some(d) => format!(

@@ -136,6 +136,7 @@ changes, PrzmTerm refuses to connect and shows the old and new fingerprints.
 | Paste | Ctrl+Shift+V or Ctrl+V | ⌘V |
 | Scroll back | wheel, Shift+PageUp/PageDown, Shift+Home/End | same |
 | Send BREAK (serial, Telnet) | Ctrl+Shift+B | ⌘⇧B |
+| Hide / show the session list | Ctrl+Shift+S | ⌘⇧S |
 
 Drag to select, double-click selects a word, triple-click a line. Right-click
 opens Copy / Paste / Select all.

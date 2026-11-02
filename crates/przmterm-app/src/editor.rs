@@ -380,15 +380,14 @@ impl Editor {
             Target::Session { original, trail } => {
                 przmterm_session::validate_name(&self.name)?;
                 let name = self.name.trim().to_string();
-                let path =
-                    przmterm_session::write_session(config_dir, &trail.join("/"), &name, &settings)
-                        .map_err(|e| e.to_string())?;
-                if let Some(original) = original
-                    && *original != path
-                {
-                    std::fs::remove_file(original)
-                        .map_err(|e| format!("saved, but could not remove the old file: {e}"))?;
-                }
+                przmterm_session::save_session(
+                    config_dir,
+                    &trail.join("/"),
+                    &name,
+                    &settings,
+                    original.as_deref(),
+                )
+                .map_err(|e| e.to_string())?;
                 Ok(name)
             }
             Target::Folder { dir, .. } => {
@@ -575,7 +574,7 @@ impl Editor {
         grid(ui, "editor-main", |ui| {
             if self.target != Target::Global {
                 ui.label(if session { "Name" } else { "Folder name" });
-                ui.add(egui::TextEdit::singleline(&mut self.name).desired_width(280.0));
+                ui.vertical(|ui| name_field(ui, &mut self.name, ""));
                 ui.end_row();
             }
             if let Target::Session { trail, .. } = &mut self.target {
@@ -982,6 +981,34 @@ impl Editor {
         });
         ui.end_row();
     }
+}
+
+/// A text field for a session or folder name. Characters a file name cannot
+/// have (`/ \ : * ? " < > |`) are dropped as they are typed, with a note.
+pub fn name_field(ui: &mut egui::Ui, value: &mut String, hint: &str) -> egui::Response {
+    let id = ui.make_persistent_id(("name-field-dropped", hint));
+    let response = ui
+        .add(
+            egui::TextEdit::singleline(value)
+                .hint_text(hint)
+                .desired_width(280.0),
+        )
+        .on_hover_text("Not allowed: / \\ : * ? \" < > |");
+    if response.changed() && przmterm_session::strip_forbidden(value) {
+        ui.data_mut(|d| d.insert_temp(id, std::time::Instant::now()));
+    }
+    let recent = ui
+        .data(|d| d.get_temp::<std::time::Instant>(id))
+        .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(4));
+    if recent {
+        ui.colored_label(
+            ui.visuals().warn_fg_color,
+            "/ \\ : * ? \" < > | cannot be used in names",
+        );
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(500));
+    }
+    response
 }
 
 /// A two-column form grid; every grid uses the same label width so that

@@ -90,7 +90,10 @@ equipment; the serial console has only been checked against a virtual cable.
   project, etc.): a button sends text or a command sequence to the current
   session, to several sessions at once, or runs a script
 - Send input to several tabs at once
-- Keyword highlighting and regex triggers
+- Keyword highlighting: named keyword sets (words or regular expressions, each
+  with its colours), chosen per session or folder; SecureCRT keyword lists
+  (`Keywords/*.ini`, e.g. a `CORES` set) can be imported
+- Regex triggers
 - Password vault: an encrypted file (master password, Argon2id +
   XChaCha20-Poly1305) holding user names, passwords and key passphrases.
   Sessions and folders refer to a vault entry instead of storing a user name,
