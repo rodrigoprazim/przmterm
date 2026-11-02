@@ -73,6 +73,32 @@ Passwords are not imported: SecureCRT keeps them encrypted, and PrzmTerm asks
 at the first login and can save them in the system keychain. Logon scripts,
 port forwards and RDP or local-shell sessions are listed in the summary.
 
+### Keyword highlighting
+
+A keyword set colours words and patterns in the output: `up` green, `down`
+red, IP addresses, MAC addresses… Choose one under **Keywords** in the
+session, folder or global settings (`keywords = "CORES"`). Sets live in
+`<config>/keywords/<name>.toml`:
+
+```toml
+[[rule]]
+text = "down"                 # whole word: also "link-down", not "downtime"
+color = "#ff0000"
+
+[[rule]]
+text = "admin-down"           # longer matches win over "down"
+color = "#ffff00"
+
+[[rule]]
+regex = '\b\d{1,3}(\.\d{1,3}){3}\b'
+color = "#ff55ff"
+bold = true
+```
+
+SecureCRT keyword lists (`Config/Keywords/*.ini`) come in with
+*Import from SecureCRT…*. Only text the remote side left uncoloured is
+recoloured, so `ls --color` or `vim` keep their own colours.
+
 ### Tunnels and jump hosts
 
 ```toml
@@ -194,6 +220,7 @@ keepalive = 30             # seconds between keepalives, 0 = off
 auto_reconnect = true      # reconnect when the connection drops
 legacy_algorithms = true   # also offer old SSH algorithms (old switches)
 x11_forwarding = true      # remote graphical programs on this screen (ssh -X)
+keywords = "CORES"         # keyword set for highlighting (<config>/keywords/)
 serial_port = "/dev/ttyUSB0"   # COM3 on Windows, /dev/cu.usbserial-… on macOS
 baud_rate = 9600
 data_bits = 8              # 5-8

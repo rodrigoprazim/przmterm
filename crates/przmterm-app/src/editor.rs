@@ -93,6 +93,7 @@ pub struct Editor {
     jump_host: String,
     legacy_algorithms: Option<bool>,
     x11_forwarding: Option<bool>,
+    keywords: Option<String>,
     /// Tunnels set here; `None` inherits the list from above.
     forwards: Option<Vec<Forward>>,
     show_log_help: bool,
@@ -139,6 +140,7 @@ fn field_label(key: &str) -> &'static str {
         "jump_host" => "jump host",
         "legacy_algorithms" => "legacy algorithms",
         "x11_forwarding" => "X11 forwarding",
+        "keywords" => "keyword highlighting",
         "forward" => "tunnels",
         "baud_rate" => "baud rate",
         "data_bits" => "data bits",
@@ -162,6 +164,8 @@ struct Context<'a> {
     inherited: &'a SessionSettings,
     /// Names of the saved SSH sessions, for the jump host list.
     ssh_sessions: Vec<String>,
+    /// Keyword sets in `<config>/keywords`.
+    keyword_sets: Vec<String>,
     protocol: Protocol,
     /// Default log folder, `<config>/logs`.
     logs_dir: String,
@@ -181,6 +185,7 @@ impl Context<'_> {
             "jump_host" => "none (direct), or a session name or user@host".into(),
             "legacy_algorithms" => "no".into(),
             "x11_forwarding" => "no".into(),
+            "keywords" => "none".into(),
             "forward" => "none".into(),
             "serial_port" => "/dev/ttyUSB0 or COM3".into(),
             "baud_rate" => przmterm_session::DEFAULT_BAUD_RATE.to_string(),
@@ -294,6 +299,7 @@ impl Editor {
             jump_host: text(&s.jump_host),
             legacy_algorithms: s.legacy_algorithms,
             x11_forwarding: s.x11_forwarding,
+            keywords: s.keywords.clone(),
             forwards: s.forwards.clone(),
             show_log_help: false,
             confirm: None,
@@ -329,6 +335,7 @@ impl Editor {
             jump_host: opt(&self.jump_host),
             legacy_algorithms: self.legacy_algorithms,
             x11_forwarding: self.x11_forwarding,
+            keywords: self.keywords.clone(),
             forwards: match &self.forwards {
                 None => None,
                 Some(list) => {
@@ -450,6 +457,7 @@ impl Editor {
                 .filter(|s| s.protocol == Protocol::Ssh)
                 .map(|s| s.name.clone())
                 .collect(),
+            keyword_sets: przmterm_session::keyword_sets(config_dir),
             protocol,
             logs_dir,
         };
@@ -937,6 +945,32 @@ impl Editor {
     }
 
     fn terminal_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
+        ui.label("Keywords").on_hover_text(
+            "Highlight words and patterns in the output with a keyword set \
+             (<config>/keywords/*.toml; SecureCRT keyword lists can be imported)",
+        );
+        ui.horizontal(|ui| {
+            let shown_name = self.keywords.as_ref().map(|k| {
+                if k.is_empty() {
+                    "none".to_string()
+                } else {
+                    k.clone()
+                }
+            });
+            egui::ComboBox::from_id_salt("keywords")
+                .width(250.0)
+                .selected_text(shown(shown_name, cx.hint("keywords")))
+                .show_ui(ui, |ui| {
+                    // "" turns off a set inherited from above.
+                    ui.selectable_value(&mut self.keywords, Some(String::new()), "none");
+                    for name in &cx.keyword_sets {
+                        ui.selectable_value(&mut self.keywords, Some(name.clone()), name);
+                    }
+                });
+            reset(ui, &mut self.keywords, &cx.hint("keywords"));
+        });
+        ui.end_row();
+
         ui.label("Auto reconnect").on_hover_text(
             "Reconnect on its own when the connection drops or cannot be made \
              (not after a normal logout or a failed login)",

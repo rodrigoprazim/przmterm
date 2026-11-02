@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 use chrono::{Datelike, Timelike};
 use przmterm_core::Protocol;
 pub use przmterm_core::forward::{Forward, ForwardKind, Tunnel};
+pub use przmterm_core::keywords::{Keyword, KeywordSet};
 pub use przmterm_core::serial::{
     COMMON_BAUD_RATES, DEFAULT_BAUD_RATE, DEFAULT_DATA_BITS, DEFAULT_STOP_BITS, FlowControl,
     Parity, SerialLine,
@@ -44,6 +45,8 @@ pub const DEFAULT_KEEPALIVE: u32 = 30;
 /// Log file name used when logging is on and no `path` is set, relative to `<config>/logs`.
 pub const DEFAULT_LOG_TEMPLATE: &str = "%S-%Y%M%D-%h%m%s.log";
 pub const LOGS_DIR: &str = "logs";
+/// Keyword highlighting sets, one `<name>.toml` each.
+pub const KEYWORDS_DIR: &str = "keywords";
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
@@ -129,6 +132,10 @@ pub struct SessionSettings {
     /// SSH: forward X11 to the local display (`ssh -X`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub x11_forwarding: Option<bool>,
+    /// Keyword set used to highlight the output (`<config>/keywords/<name>.toml`);
+    /// `""` turns an inherited one off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keywords: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub serial_port: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -158,7 +165,7 @@ pub struct SessionSettings {
 }
 
 /// Keys of the individual settings, used to compare and copy them.
-pub const FIELDS: [&str; 24] = [
+pub const FIELDS: [&str; 25] = [
     "protocol",
     "host",
     "port",
@@ -171,6 +178,7 @@ pub const FIELDS: [&str; 24] = [
     "jump_host",
     "legacy_algorithms",
     "x11_forwarding",
+    "keywords",
     "forward",
     "serial_port",
     "baud_rate",
@@ -201,6 +209,7 @@ impl SessionSettings {
             "jump_host" => self.jump_host = from.jump_host.clone(),
             "legacy_algorithms" => self.legacy_algorithms = from.legacy_algorithms,
             "x11_forwarding" => self.x11_forwarding = from.x11_forwarding,
+            "keywords" => self.keywords = from.keywords.clone(),
             "forward" => self.forwards = from.forwards.clone(),
             "serial_port" => self.serial_port = from.serial_port.clone(),
             "baud_rate" => self.baud_rate = from.baud_rate,
@@ -233,6 +242,7 @@ impl SessionSettings {
             "jump_host" => self.jump_host.clone(),
             "legacy_algorithms" => self.legacy_algorithms.map(yes_no),
             "x11_forwarding" => self.x11_forwarding.map(yes_no),
+            "keywords" => self.keywords.clone(),
             "forward" => self.forwards.as_ref().map(|f| {
                 if f.is_empty() {
                     "none".to_string()
@@ -285,6 +295,7 @@ impl SessionSettings {
             jump_host: pick(&self.jump_host, &over.jump_host),
             legacy_algorithms: pick(&self.legacy_algorithms, &over.legacy_algorithms),
             x11_forwarding: pick(&self.x11_forwarding, &over.x11_forwarding),
+            keywords: pick(&self.keywords, &over.keywords),
             forwards: pick(&self.forwards, &over.forwards),
             serial_port: pick(&self.serial_port, &over.serial_port),
             baud_rate: pick(&self.baud_rate, &over.baud_rate),
@@ -376,6 +387,8 @@ pub struct Session {
     pub tunnels: Vec<Tunnel>,
     pub legacy_algorithms: bool,
     pub x11_forwarding: bool,
+    /// Name of the keyword set for highlighting, if any.
+    pub keywords: Option<String>,
     pub term_type: String,
     pub scrollback: usize,
     pub log_enabled: bool,
@@ -459,6 +472,7 @@ impl Session {
             auto_reconnect: settings.auto_reconnect.unwrap_or(false),
             legacy_algorithms: settings.legacy_algorithms.unwrap_or(false),
             x11_forwarding: settings.x11_forwarding.unwrap_or(false),
+            keywords: settings.keywords.clone().filter(|k| !k.trim().is_empty()),
             jump_host: settings.jump_host.clone().filter(|j| !j.trim().is_empty()),
             tunnels: settings
                 .forwards
@@ -913,6 +927,54 @@ pub fn save_session(
         })?;
     }
     Ok(written)
+}
+
+/// Names of the keyword sets in `<config>/keywords`, sorted.
+pub fn keyword_sets(config_dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(config_dir.join(KEYWORDS_DIR))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let path = e.path();
+            (path.extension()? == "toml").then(|| path.file_stem()?.to_str().map(str::to_string))?
+        })
+        .collect();
+    names.sort_by_key(|n| n.to_lowercase());
+    names
+}
+
+pub fn read_keyword_set(config_dir: &Path, name: &str) -> Result<KeywordSet, SessionError> {
+    let path = config_dir.join(KEYWORDS_DIR).join(format!("{name}.toml"));
+    let text = fs::read_to_string(&path).map_err(|source| SessionError::Io {
+        path: path.clone(),
+        source,
+    })?;
+    toml::from_str(&text).map_err(|source| SessionError::Parse { path, source })
+}
+
+/// Writes `<config>/keywords/<name>.toml`, replacing a set of that name.
+pub fn write_keyword_set(
+    config_dir: &Path,
+    name: &str,
+    set: &KeywordSet,
+) -> Result<PathBuf, SessionError> {
+    let dir = config_dir.join(KEYWORDS_DIR);
+    let path = dir.join(format!("{}.toml", name.trim()));
+    validate_name(name).map_err(|reason| SessionError::Invalid {
+        path: path.clone(),
+        reason,
+    })?;
+    fs::create_dir_all(&dir).map_err(|source| SessionError::Io {
+        path: dir.clone(),
+        source,
+    })?;
+    let text = toml::to_string(set).unwrap_or_default();
+    fs::write(&path, text).map_err(|source| SessionError::Io {
+        path: path.clone(),
+        source,
+    })?;
+    Ok(path)
 }
 
 /// Deletes the folder at `dir` with everything in it.

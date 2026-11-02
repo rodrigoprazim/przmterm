@@ -248,10 +248,32 @@ impl Pane {
             retry: None,
             attempts: 0,
         };
+        pane.load_keywords(session, env);
         if session.log_enabled {
             pane.start_log(env);
         }
         pane
+    }
+
+    /// Sets up highlighting with the session's keyword set; problems with
+    /// the set are shown in the terminal.
+    fn load_keywords(&mut self, session: &Session, env: &Env) {
+        let (Some(name), Some(dir)) = (&session.keywords, &env.config_dir) else {
+            return;
+        };
+        match przmterm_session::read_keyword_set(dir, name) {
+            Ok(set) => {
+                let (h, problems) = przmterm_term::highlight::Highlighter::new(&set);
+                for p in problems {
+                    self.term
+                        .feed(format!("\x1b[33m[Keywords {name}: {p}]\x1b[0m\r\n").as_bytes());
+                }
+                self.view.highlighter = Some(std::rc::Rc::new(h));
+            }
+            Err(e) => self
+                .term
+                .feed(format!("\x1b[33m[Keywords {name}: {e}]\x1b[0m\r\n").as_bytes()),
+        }
     }
 
     /// Connects again on the same screen, keeping the scrollback and the log.
@@ -493,6 +515,7 @@ impl Pane {
             retry: None,
             attempts: 0,
         };
+        pane.view.highlighter = self.view.highlighter.clone();
         if session.log_enabled {
             pane.start_log(env);
         }

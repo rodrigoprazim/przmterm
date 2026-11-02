@@ -88,6 +88,9 @@ fn import_securecrt(
             .unwrap_or_default();
         println!("{folder}/{}  {target}{via}", s.name);
     }
+    for (name, set) in &report.keyword_sets {
+        println!("keyword set {name}: {} rule(s)", set.rules.len());
+    }
     for (name, why) in &report.skipped {
         println!("skipped {name}: {why}");
     }

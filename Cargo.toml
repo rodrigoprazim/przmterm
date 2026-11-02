@@ -40,6 +40,8 @@ rand = "0.10"
 # No libudev: Linux port listing reads /sys, so no system library is needed.
 serialport = { version = "4.10", default-features = false }
 roxmltree = "0.21"
+# Lookaround in keyword patterns (e.g. IPv6 addresses) needs a backtracking engine.
+fancy-regex = "0.20"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

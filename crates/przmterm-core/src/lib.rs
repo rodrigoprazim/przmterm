@@ -5,6 +5,7 @@
 //! reachable only from the GUI.
 
 pub mod forward;
+pub mod keywords;
 pub mod serial;
 
 use std::collections::BTreeMap;

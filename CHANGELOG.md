@@ -7,6 +7,17 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Keyword highlighting: named keyword sets in `<config>/keywords/*.toml`,
+  each a list of whole words or regular expressions (lookaround allowed)
+  with a text colour, optional background and bold. Chosen per session,
+  folder or globally (*Keywords* in the editor, `keywords = "NAME"`). Where
+  matches overlap the longest wins; only text the remote side left in the
+  default colour is recoloured.
+- SecureCRT keyword lists (`Config/Keywords/*.ini`) import with the other
+  SecureCRT files, and imported sessions keep their keyword set.
+
 ## [0.5.0] - 2026-11-02
 
 ### Added

@@ -19,6 +19,8 @@ use std::path::{Path, PathBuf};
 use przmterm_core::Protocol;
 use przmterm_core::serial::{FlowControl, Parity};
 
+use przmterm_core::keywords::{Keyword, KeywordSet, format_color};
+
 use crate::{DEFAULT_KEEPALIVE, LogSettings, SessionSettings, TerminalSettings};
 
 /// Scrollback above this many lines is capped on import (SecureCRT allows
@@ -49,6 +51,8 @@ pub struct Imported {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Report {
     pub sessions: Vec<Imported>,
+    /// Keyword highlighting lists (`Keywords/*.ini`), by name.
+    pub keyword_sets: Vec<(String, KeywordSet)>,
     /// Sessions left out, with the reason.
     pub skipped: Vec<(String, String)>,
     /// Things worth telling, e.g. "12 saved passwords were not imported".
@@ -237,6 +241,9 @@ fn convert(name: &str, f: &Fields, report: &mut Report) -> Option<SessionSetting
     if number(f, "Idle NO-OP Check") == Some(1) {
         s.keepalive = number(f, "Idle NO-OP Timeout").filter(|&t| t != DEFAULT_KEEPALIVE);
     }
+    if let Some(set) = text(f, "Keyword Set") {
+        s.keywords = Some(clean_name(set));
+    }
     if number(f, "Auto Reconnect") == Some(1) {
         s.auto_reconnect = Some(true);
     }
@@ -395,9 +402,63 @@ fn ini_fields(text: &str) -> Fields {
     fields
 }
 
+/// Reads a SecureCRT keyword list (`Keywords/<name>.ini`): entries
+/// `"text",COLORREF,style,flags` where the colour is `00BBGGRR` and flag
+/// bit 1 marks a regular expression. Returns the list's name and rules.
+pub fn parse_keyword_ini(file_name: &str, text: &str) -> Option<(String, KeywordSet)> {
+    let fields = ini_fields(text);
+    let Some(Value::List(entries)) = fields.get("Keyword List V3") else {
+        return None;
+    };
+    let name = text_field(&fields, "List Name")
+        .unwrap_or(file_name)
+        .to_string();
+    let rules = entries
+        .iter()
+        .filter_map(|line| {
+            // The text may contain commas, so take the numbers from the right.
+            let mut parts = line.trim().rsplitn(4, ',');
+            let flags = u32::from_str_radix(parts.next()?.trim(), 16).ok()?;
+            let _style = parts.next()?;
+            let color = u32::from_str_radix(parts.next()?.trim(), 16).ok()?;
+            let quoted = parts.next()?.trim();
+            let word = quoted.strip_prefix('"')?.strip_suffix('"')?.to_string();
+            if word.is_empty() {
+                return None;
+            }
+            let [r, g, b, _] = color.to_le_bytes();
+            // Entries flagged as expressions that are plain words (`on`,
+            // `permit`) would match inside other words ("connection"):
+            // they are kept as whole words.
+            let regex = flags & 2 != 0 && word.contains(|c| "\\^$.|?*+()[]{}".contains(c));
+            Some(Keyword {
+                text: if regex { String::new() } else { word.clone() },
+                regex: if regex { word } else { String::new() },
+                color: Some(format_color([r, g, b])),
+                ..Keyword::default()
+            })
+        })
+        .collect();
+    Some((
+        clean_name(&name),
+        KeywordSet {
+            match_case: number(&fields, "Match Case") == Some(1),
+            rules,
+        },
+    ))
+}
+
+fn text_field<'a>(f: &'a Fields, key: &str) -> Option<&'a str> {
+    text(f, key)
+}
+
 /// Reads one session `.ini`. `None` for files that are not sessions
 /// (folder data, the default session).
 pub fn parse_ini(name: &str, text: &str, folder: Vec<String>, report: &mut Report) {
+    if let Some(set) = parse_keyword_ini(name, text) {
+        report.keyword_sets.push(set);
+        return;
+    }
     let fields = ini_fields(text);
     if number(&fields, "Is Session") != Some(1) {
         return;
@@ -521,6 +582,9 @@ pub fn write(config_dir: &Path, into: &str, report: &Report) -> Result<usize, St
             settings.jump_host = Some(new.clone());
         }
         crate::write_session(config_dir, &folder, &name, &settings).map_err(|e| e.to_string())?;
+    }
+    for (name, set) in &report.keyword_sets {
+        crate::write_keyword_set(config_dir, name, set).map_err(|e| e.to_string())?;
     }
     Ok(report.sessions.len())
 }
@@ -660,6 +724,40 @@ Z:\"Port Forward Table V3\"=00000000\r\n";
         assert_eq!(c.parity, Some(Parity::Even));
         assert_eq!(c.stop_bits, Some(2));
         assert_eq!(c.flow_control, Some(FlowControl::Hardware));
+    }
+
+    #[test]
+    fn reads_keyword_lists() {
+        let ini = "D:\"Match Case\"=00000000\r\nS:\"List Name\"=CORES\r\n\
+Z:\"Keyword List V3\"=00000004\r\n \"no-\",00ffffff,00000000,00000001\r\n \
+\"up\",0000ff00,00000000,00000001\r\n \
+\"([0-9]{1,3})\\.([0-9]{1,3})\",00ff55ff,00000005,00000007\r\n \
+\"permit\",00ffff00,00000000,00000003\r\n";
+        let (name, set) = parse_keyword_ini("file", ini).unwrap();
+        assert_eq!(name, "CORES");
+        assert!(!set.match_case);
+        assert_eq!(set.rules.len(), 4);
+        assert_eq!(set.rules[3].text, "permit", "a plain word stays a word");
+        assert_eq!(set.rules[0].text, "no-");
+        assert_eq!(set.rules[0].color.as_deref(), Some("#ffffff"));
+        assert_eq!(
+            set.rules[1].color.as_deref(),
+            Some("#00ff00"),
+            "COLORREF is BGR"
+        );
+        assert_eq!(
+            set.rules[2].regex, r"([0-9]{1,3})\.([0-9]{1,3})",
+            "commas kept"
+        );
+        assert_eq!(set.rules[2].color.as_deref(), Some("#ff55ff"));
+        // Through the normal import, written next to the sessions.
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = Report::default();
+        parse_ini("CORES", ini, vec![], &mut r);
+        assert!(r.sessions.is_empty());
+        write(dir.path(), "SecureCRT", &r).unwrap();
+        assert_eq!(crate::keyword_sets(dir.path()), ["CORES"]);
+        assert_eq!(crate::read_keyword_set(dir.path(), "CORES").unwrap(), set);
     }
 
     #[test]

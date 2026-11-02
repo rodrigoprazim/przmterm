@@ -389,11 +389,25 @@ impl PrzmApp {
         };
         let result = securecrt::parse_any(paths).and_then(|report| {
             let n = securecrt::write(&dir, IMPORT_FOLDER, &report)?;
-            let mut lines = vec![if n == 0 {
+            let mut lines = vec![if n == 0 && !report.keyword_sets.is_empty() {
+                "Keywords imported.".to_string()
+            } else if n == 0 {
                 "No sessions found.".to_string()
             } else {
                 format!("Imported {n} session(s) into the folder {IMPORT_FOLDER}.")
             }];
+            if !report.keyword_sets.is_empty() {
+                let names: Vec<&str> = report
+                    .keyword_sets
+                    .iter()
+                    .map(|(n, _)| n.as_str())
+                    .collect();
+                lines.push(format!(
+                    "Imported keyword set(s): {}. Sessions that used them in SecureCRT \
+                     highlight with them here too.",
+                    names.join(", ")
+                ));
+            }
             lines.extend(
                 report
                     .skipped
@@ -921,7 +935,9 @@ impl eframe::App for PrzmApp {
                             ui.separator();
                             if ui
                                 .button("Import from SecureCRT…")
-                                .on_hover_text("An XML export or session .ini files")
+                                .on_hover_text(
+                                    "An XML export, session .ini files or keyword lists (.ini)",
+                                )
                                 .clicked()
                             {
                                 ui.close();

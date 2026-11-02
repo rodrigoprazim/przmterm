@@ -180,6 +180,8 @@ pub struct TerminalView {
     pub font_size: f32,
     /// Offer "Send BREAK" (serial and Telnet sessions).
     pub offer_break: bool,
+    /// Keyword highlighting for what is shown.
+    pub highlighter: Option<std::rc::Rc<przmterm_term::highlight::Highlighter>>,
     focus_requested: bool,
     selection: Option<Selection>,
     scroll_accum: f32,
@@ -190,6 +192,7 @@ impl Default for TerminalView {
         Self {
             font_size: 14.0,
             offer_break: false,
+            highlighter: None,
             focus_requested: false,
             selection: None,
             scroll_accum: 0.0,
@@ -258,9 +261,13 @@ impl TerminalView {
                 })
             });
             let origin = Pos2::new(inner.left(), inner.top() + row as f32 * cell_h);
+            let mut line = std::borrow::Cow::Borrowed(screen.view_line(row));
+            if let Some(h) = &self.highlighter {
+                h.apply(line.to_mut());
+            }
             paint_row(
                 &painter,
-                screen.view_line(row),
+                &line,
                 origin,
                 (cell_w, cell_h),
                 &font_id,

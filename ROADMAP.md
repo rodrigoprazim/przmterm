@@ -96,7 +96,7 @@ maintainer's servers; legacy algorithms only against a test server.
   project, etc.): a button sends text or a command sequence to the current
   session, to several sessions at once, or runs a script
 - Send input to several tabs at once
-- Keyword highlighting: named keyword sets (words or regular expressions, each
+- [x] Keyword highlighting: named keyword sets (words or regular expressions, each
   with its colours), chosen per session or folder; SecureCRT keyword lists
   (`Keywords/*.ini`, e.g. a `CORES` set) can be imported
 - Regex triggers
