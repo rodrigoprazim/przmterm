@@ -17,6 +17,7 @@
 
 pub mod highlight;
 pub mod log;
+pub mod triggers;
 
 use std::collections::VecDeque;
 

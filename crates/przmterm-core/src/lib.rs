@@ -7,6 +7,7 @@
 pub mod forward;
 pub mod keywords;
 pub mod serial;
+pub mod triggers;
 
 use std::collections::BTreeMap;
 use std::fmt;

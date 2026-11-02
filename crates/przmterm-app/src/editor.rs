@@ -10,7 +10,7 @@ use eframe::egui;
 use przmterm_core::Protocol;
 use przmterm_session::{
     COMMON_BAUD_RATES, DEFAULT_DATA_BITS, DEFAULT_STOP_BITS, FlowControl, Folder, Forward,
-    ForwardKind, LogSettings, Parity, Session, SessionSettings, TerminalSettings,
+    ForwardKind, LogSettings, Parity, Session, SessionSettings, TerminalSettings, Trigger,
 };
 use przmterm_transport::serial::{PortInfo, available_ports};
 
@@ -98,6 +98,8 @@ pub struct Editor {
     keyword_request: Option<Option<String>>,
     /// Tunnels set here; `None` inherits the list from above.
     forwards: Option<Vec<Forward>>,
+    /// Triggers set here; `None` inherits the list from above.
+    triggers: Option<Vec<Trigger>>,
     show_log_help: bool,
     confirm: Option<Confirm>,
     error: Option<String>,
@@ -144,6 +146,7 @@ fn field_label(key: &str) -> &'static str {
         "x11_forwarding" => "X11 forwarding",
         "keywords" => "keyword highlighting",
         "forward" => "tunnels",
+        "trigger" => "triggers",
         "baud_rate" => "baud rate",
         "data_bits" => "data bits",
         "parity" => "parity",
@@ -189,6 +192,7 @@ impl Context<'_> {
             "x11_forwarding" => "no".into(),
             "keywords" => "none".into(),
             "forward" => "none".into(),
+            "trigger" => "none".into(),
             "serial_port" => "/dev/ttyUSB0 or COM3".into(),
             "baud_rate" => przmterm_session::DEFAULT_BAUD_RATE.to_string(),
             "data_bits" => DEFAULT_DATA_BITS.to_string(),
@@ -346,6 +350,7 @@ impl Editor {
             keywords: s.keywords.clone(),
             keyword_request: None,
             forwards: s.forwards.clone(),
+            triggers: s.triggers.clone(),
             show_log_help: false,
             confirm: None,
             error: None,
@@ -386,6 +391,21 @@ impl Editor {
             legacy_algorithms: self.legacy_algorithms,
             x11_forwarding: self.x11_forwarding,
             keywords: self.keywords.clone(),
+            triggers: match &self.triggers {
+                None => None,
+                Some(list) => {
+                    let list: Vec<Trigger> = list
+                        .iter()
+                        .filter(|t| !t.pattern.is_empty())
+                        .cloned()
+                        .collect();
+                    let (_, problems) = przmterm_term::triggers::TriggerEngine::new(&list);
+                    if let Some(p) = problems.first() {
+                        return Err(format!("Triggers: {p}"));
+                    }
+                    Some(list)
+                }
+            },
             forwards: match &self.forwards {
                 None => None,
                 Some(list) => {
@@ -822,6 +842,72 @@ impl Editor {
         ui.end_row();
     }
 
+    fn triggers_ui(&mut self, ui: &mut egui::Ui, cx: &Context) {
+        ui.vertical(|ui| {
+            let Some(list) = &mut self.triggers else {
+                ui.horizontal(|ui| {
+                    ui.weak(cx.hint("trigger"));
+                    if ui
+                        .small_button("+ Add")
+                        .on_hover_text("Set the triggers here")
+                        .clicked()
+                    {
+                        let mut list = cx.inherited.triggers.clone().unwrap_or_default();
+                        list.push(Trigger::default());
+                        self.triggers = Some(list);
+                    }
+                });
+                return;
+            };
+            let mut remove = None;
+            for (i, t) in list.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut t.pattern)
+                            .hint_text("--More--")
+                            .font(egui::TextStyle::Monospace)
+                            .desired_width(96.0),
+                    );
+                    ui.checkbox(&mut t.regex, "regex")
+                        .on_hover_text("The text is a regular expression");
+                    ui.label("→");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut t.send)
+                            .hint_text("\\r or text")
+                            .font(egui::TextStyle::Monospace)
+                            .desired_width(80.0),
+                    )
+                    .on_hover_text("\\r Enter, \\t Tab, \\e Esc, \\p pause 1 s");
+                    ui.checkbox(&mut t.once, "once")
+                        .on_hover_text("Only the first time per connection");
+                    if ui.small_button("×").on_hover_text("Remove").clicked() {
+                        remove = Some(i);
+                    }
+                });
+            }
+            if let Some(i) = remove {
+                list.remove(i);
+            }
+            let mut inherit = false;
+            ui.horizontal(|ui| {
+                if ui.small_button("+ Add trigger").clicked() {
+                    list.push(Trigger::default());
+                }
+                inherit = ui
+                    .small_button("↺")
+                    .on_hover_text(format!(
+                        "Back to the inherited triggers ({})",
+                        cx.hint("trigger")
+                    ))
+                    .clicked();
+            });
+            ui.weak("Saved as plain text: keep passwords in the keychain, not here.");
+            if inherit {
+                self.triggers = None;
+            }
+        });
+    }
+
     fn tunnels_ui(&mut self, ui: &mut egui::Ui, cx: &Context) {
         ui.vertical(|ui| {
             let Some(list) = &mut self.forwards else {
@@ -1031,6 +1117,13 @@ impl Editor {
                 self.keyword_request = Some(current);
             }
         });
+        ui.end_row();
+
+        ui.label("Triggers").on_hover_text(
+            "When this text appears in the output, type the answer: \
+             --More-- → space, [confirm] → Enter…",
+        );
+        self.triggers_ui(ui, cx);
         ui.end_row();
 
         ui.label("Auto reconnect").on_hover_text(

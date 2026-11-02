@@ -206,6 +206,8 @@ pub struct Pane {
     retry: Option<Retry>,
     /// Failed attempts in a row, for the back-off.
     attempts: usize,
+    /// Watches the output for the session's triggers.
+    triggers: Option<przmterm_term::triggers::TriggerEngine>,
     /// Macro text still to send, and when the next piece is due (`\p`).
     queue: VecDeque<Chunk>,
     queue_at: Option<std::time::Instant>,
@@ -232,6 +234,7 @@ impl Pane {
             closed_announced: false,
             retry: None,
             attempts: 0,
+            triggers: None,
             queue: VecDeque::new(),
             queue_at: None,
         }
@@ -253,14 +256,30 @@ impl Pane {
             closed_announced: false,
             retry: None,
             attempts: 0,
+            triggers: None,
             queue: VecDeque::new(),
             queue_at: None,
         };
         pane.load_keywords(session, env);
+        pane.load_triggers(session);
         if session.log_enabled {
             pane.start_log(env);
         }
         pane
+    }
+
+    /// Arms the session's triggers; problems are shown in the terminal.
+    fn load_triggers(&mut self, session: &Session) {
+        if session.triggers.is_empty() {
+            self.triggers = None;
+            return;
+        }
+        let (engine, problems) = przmterm_term::triggers::TriggerEngine::new(&session.triggers);
+        for p in problems {
+            self.term
+                .feed(format!("\x1b[33m[Triggers: {p}]\x1b[0m\r\n").as_bytes());
+        }
+        self.triggers = (!engine.is_empty()).then_some(engine);
     }
 
     /// Reads the session's keyword set again, after it was edited.
@@ -332,6 +351,9 @@ impl Pane {
         let _ = self.transport.close();
         self.transport = connect(&session, env, self.size(), waker);
         self.closed_announced = false;
+        if let Some(engine) = &mut self.triggers {
+            engine.reset();
+        }
     }
 
     /// The pending automatic reconnect, if any.
@@ -426,6 +448,12 @@ impl Pane {
                     self.term.feed(&buf[..n]);
                     if let Some(log) = &mut self.log {
                         log.write(&buf[..n]);
+                    }
+                    if let Some(engine) = &mut self.triggers {
+                        for send in engine.feed(&buf[..n]) {
+                            self.queue
+                                .extend(przmterm_session::buttons::parse_send(&send));
+                        }
                     }
                     got = true;
                 }
@@ -560,9 +588,11 @@ impl Pane {
             closed_announced: false,
             retry: None,
             attempts: 0,
+            triggers: None,
             queue: VecDeque::new(),
             queue_at: None,
         };
+        pane.load_triggers(session);
         pane.view.highlighter = self.view.highlighter.clone();
         if session.log_enabled {
             pane.start_log(env);

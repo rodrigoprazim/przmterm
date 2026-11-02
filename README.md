@@ -95,6 +95,26 @@ description = "Saves the running configuration"
 In a split tab, **⇶ Send to all** in the status bar sends what you type to
 every pane of the tab (after a warning) until you turn it off.
 
+### Triggers
+
+A trigger types an answer when some text shows up: `--More--` → space,
+`[confirm]` → Enter, a second device's prompt → a command. Set them under
+**Triggers** in the session, folder or global settings, or in the file:
+
+```toml
+[[trigger]]
+match = "--More--"
+send = ' '
+
+[[trigger]]
+match = '\[confirm\]$'     # a regular expression
+regex = true
+send = '\r'
+once = true                # only the first time per connection
+```
+
+Triggers are saved as plain text, so leave passwords to the keychain.
+
 ### Keyword highlighting
 
 A keyword set colours words and patterns in the output: `up` green, `down`

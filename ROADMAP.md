@@ -106,7 +106,8 @@ maintainer's servers; legacy algorithms only against a test server.
   (`Keywords/*.ini`, e.g. a `CORES` set) can be imported
 - [x] Keyword set editor in the app: create, rename and delete sets; add, reorder
   and remove rules with colour pickers and a live preview
-- Regex triggers
+- [x] Triggers: text or regular expressions in the output answered
+  automatically (`--More--` → space, `[confirm]` → Enter), once or every time
 - Password vault: an encrypted file (master password, Argon2id +
   XChaCha20-Poly1305) holding user names, passwords and key passphrases.
   Sessions and folders refer to a vault entry instead of storing a user name,

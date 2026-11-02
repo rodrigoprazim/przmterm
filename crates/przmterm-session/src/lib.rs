@@ -31,6 +31,7 @@ pub use przmterm_core::serial::{
     COMMON_BAUD_RATES, DEFAULT_BAUD_RATE, DEFAULT_DATA_BITS, DEFAULT_STOP_BITS, FlowControl,
     Parity, SerialLine,
 };
+pub use przmterm_core::triggers::Trigger;
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULTS_FILE: &str = "defaults.toml";
@@ -155,6 +156,10 @@ pub struct SessionSettings {
     /// the inherited list.
     #[serde(rename = "forward", skip_serializing_if = "Option::is_none")]
     pub forwards: Option<Vec<Forward>>,
+    /// Automatic answers to text in the output, `[[trigger]]` tables. A layer
+    /// that sets any replaces the inherited list.
+    #[serde(rename = "trigger", skip_serializing_if = "Option::is_none")]
+    pub triggers: Option<Vec<Trigger>>,
     #[serde(skip_serializing_if = "is_default")]
     pub terminal: TerminalSettings,
     #[serde(skip_serializing_if = "is_default")]
@@ -166,7 +171,7 @@ pub struct SessionSettings {
 }
 
 /// Keys of the individual settings, used to compare and copy them.
-pub const FIELDS: [&str; 25] = [
+pub const FIELDS: [&str; 26] = [
     "protocol",
     "host",
     "port",
@@ -181,6 +186,7 @@ pub const FIELDS: [&str; 25] = [
     "x11_forwarding",
     "keywords",
     "forward",
+    "trigger",
     "serial_port",
     "baud_rate",
     "data_bits",
@@ -212,6 +218,7 @@ impl SessionSettings {
             "x11_forwarding" => self.x11_forwarding = from.x11_forwarding,
             "keywords" => self.keywords = from.keywords.clone(),
             "forward" => self.forwards = from.forwards.clone(),
+            "trigger" => self.triggers = from.triggers.clone(),
             "serial_port" => self.serial_port = from.serial_port.clone(),
             "baud_rate" => self.baud_rate = from.baud_rate,
             "data_bits" => self.data_bits = from.data_bits,
@@ -250,6 +257,16 @@ impl SessionSettings {
                 } else {
                     f.iter()
                         .map(|f| f.to_string())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                }
+            }),
+            "trigger" => self.triggers.as_ref().map(|t| {
+                if t.is_empty() {
+                    "none".to_string()
+                } else {
+                    t.iter()
+                        .map(|t| format!("{} → {}", t.pattern, t.send))
                         .collect::<Vec<_>>()
                         .join("; ")
                 }
@@ -298,6 +315,7 @@ impl SessionSettings {
             x11_forwarding: pick(&self.x11_forwarding, &over.x11_forwarding),
             keywords: pick(&self.keywords, &over.keywords),
             forwards: pick(&self.forwards, &over.forwards),
+            triggers: pick(&self.triggers, &over.triggers),
             serial_port: pick(&self.serial_port, &over.serial_port),
             baud_rate: pick(&self.baud_rate, &over.baud_rate),
             data_bits: pick(&self.data_bits, &over.data_bits),
@@ -386,6 +404,7 @@ pub struct Session {
     /// See [`SessionSettings::jump_host`].
     pub jump_host: Option<String>,
     pub tunnels: Vec<Tunnel>,
+    pub triggers: Vec<Trigger>,
     pub legacy_algorithms: bool,
     pub x11_forwarding: bool,
     /// Name of the keyword set for highlighting, if any.
@@ -475,6 +494,7 @@ impl Session {
             x11_forwarding: settings.x11_forwarding.unwrap_or(false),
             keywords: settings.keywords.clone().filter(|k| !k.trim().is_empty()),
             jump_host: settings.jump_host.clone().filter(|j| !j.trim().is_empty()),
+            triggers: settings.triggers.clone().unwrap_or_default(),
             tunnels: settings
                 .forwards
                 .iter()
@@ -1652,6 +1672,32 @@ mod tests {
         assert_eq!(name, "FiBrasilNada ab");
         assert!(validate_name(&name).is_ok());
         assert!(!strip_forbidden(&mut name));
+    }
+
+    #[test]
+    fn triggers_are_inherited_as_a_list() {
+        let folder =
+            SessionSettings::from_toml("[[trigger]]\nmatch = '--More--'\nsend = ' '").unwrap();
+        let own = SessionSettings::from_toml(
+            "host = 'sw'\n[[trigger]]\nmatch = '\\[confirm\\]$'\nregex = true\nsend = '\\r'",
+        )
+        .unwrap();
+        let none = SessionSettings::from_toml("host = 'sw'").unwrap();
+        let inherited = Session::resolve("a", vec![], "a.toml", &folder.overlay(&none)).unwrap();
+        assert_eq!(inherited.triggers.len(), 1);
+        let replaced = Session::resolve("b", vec![], "b.toml", &folder.overlay(&own)).unwrap();
+        assert_eq!(replaced.triggers.len(), 1);
+        assert!(replaced.triggers[0].regex);
+        assert_eq!(
+            folder.field_text("trigger").as_deref(),
+            Some("--More-- →  ")
+        );
+        let toml = own.to_toml();
+        assert!(
+            toml.contains("[[trigger]]") && toml.contains("match = "),
+            "{toml}"
+        );
+        assert_eq!(SessionSettings::from_toml(&toml).unwrap(), own);
     }
 
     #[test]

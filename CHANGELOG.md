@@ -25,6 +25,12 @@ All notable changes to PrzmTerm are recorded here. The format follows
   typed goes to every pane of that tab until turned off (or the tab changes).
 - Search in the session list: filters by name, host or IP; Enter connects
   to the first match, Esc clears it.
+- Triggers (*Triggers* in the session editor, `[[trigger]]` in session files):
+  when text or a regular expression shows up in the output, PrzmTerm types
+  the answer, with the button escapes (`\r`, `\p`…). Matches ignore colours
+  and cursor moves, work across reads, never answer the same text twice, and
+  can be limited to once per connection. Inherited from folders and globals
+  like tunnels.
 - Quitting with sessions connected asks first; so does closing a tab or pane
   whose session is connected.
 - Tab menu (right-click a tab): *Rename…* (only the tab, until it closes),
