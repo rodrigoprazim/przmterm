@@ -16,6 +16,12 @@ All notable changes to PrzmTerm are recorded here. The format follows
   tab menu, from a button (*Script* in the button dialog) or as a session's
   *Logon script*, run each time it connects. The status bar shows the running
   script with **■ Stop**. Scripts are included in backups.
+- Script guide (**+** › *Script guide…*, or *Script Guide…* in the tab menu):
+  how to write scripts, topic by topic, with a snippet for each and six
+  ready examples (Linux health check, run a list of commands, watch a host
+  with ping, Cisco and Huawei show commands, a generic logon script). The
+  snippet can be edited, checked for mistakes and saved as a new script.
+  The examples are also in `examples/scripts/`.
 
 ## [0.6.0] - 2026-11-02
 

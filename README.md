@@ -193,6 +193,10 @@ Waits see the output as plain text (colours and cursor moves removed), and
 each match consumes the output up to it, so the same prompt is not matched
 twice.
 
+**+** › *Script guide…* explains all of this in the app, with a snippet per
+topic and ready examples ([`examples/scripts/`](examples/scripts/)) that can
+be edited, checked and saved as your own scripts.
+
 ### Keyword highlighting
 
 A keyword set colours words and patterns in the output: `up` green, `down`

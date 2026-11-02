@@ -7,6 +7,7 @@ mod input;
 mod keychain;
 mod keywords;
 mod pane;
+mod scriptguide;
 mod vault;
 mod view;
 
@@ -266,6 +267,8 @@ enum Action {
     RunScript(usize),
     /// Stops the script of the active pane of this tab.
     StopScript(usize),
+    /// Opens the script guide.
+    ScriptGuide,
     ClosePane,
     FocusPane(usize),
     Reconnect,
@@ -333,6 +336,8 @@ struct PrzmApp {
     font_dialog: Option<usize>,
     /// The "Split" dialog.
     split_dialog: Option<SplitDialog>,
+    /// The script guide, when open.
+    script_guide: Option<scriptguide::ScriptGuide>,
     /// Questions from scripts, asked one at a time.
     script_prompts: std::collections::VecDeque<ScriptPrompt>,
     /// A backup or export being restored or imported, and the folder name
@@ -437,6 +442,7 @@ impl PrzmApp {
             font_dialog: None,
             split_dialog: None,
             script_prompts: Default::default(),
+            script_guide: None,
             bundle_dialog: None,
             quitting: false,
         }
@@ -696,6 +702,10 @@ impl PrzmApp {
                 }
             }
             Action::StopScript(t) => self.tabs[t].pane_mut().stop_script(),
+            Action::ScriptGuide => {
+                self.script_guide
+                    .get_or_insert_with(scriptguide::ScriptGuide::new);
+            }
             Action::Macro(press) => {
                 let pane = self.tab_mut().pane_mut();
                 if pane.transport.is_closed() {
@@ -835,6 +845,7 @@ impl PrzmApp {
             || self.font_dialog.is_some()
             || self.split_dialog.is_some()
             || !self.script_prompts.is_empty()
+            || self.script_guide.is_some()
             || self.bundle_dialog.is_some()
             || self.vault.modal()
     }
@@ -1205,6 +1216,15 @@ impl PrzmApp {
                         ctx,
                     );
                 }
+            }
+        }
+        if let (Some(guide), Some(dir)) = (&mut self.script_guide, self.config_dir.clone()) {
+            let open = guide.show(ctx, &dir);
+            if let Some(n) = guide.notice.take() {
+                self.notice = Some(n);
+            }
+            if !open {
+                self.script_guide = None;
             }
         }
         if let Some(prompt) = self.script_prompts.front_mut() {
@@ -1627,6 +1647,7 @@ fn tab_menu(
         ),
         None => item(ui, true, "Run Script…", Action::RunScript(i)),
     }
+    item(ui, true, "Script Guide…", Action::ScriptGuide);
     ui.separator();
     // Typing into every pane of this tab: only for split tabs.
     let split = tab.panes.len() > 1;
@@ -2179,6 +2200,15 @@ impl eframe::App for PrzmApp {
                                 .clicked()
                             {
                                 self.vault.open_window();
+                                ui.close();
+                            }
+                            if ui
+                                .button("Script guide…")
+                                .on_hover_text("How to write scripts, with examples")
+                                .clicked()
+                            {
+                                self.script_guide
+                                    .get_or_insert_with(scriptguide::ScriptGuide::new);
                                 ui.close();
                             }
                             ui.separator();

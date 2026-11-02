@@ -454,6 +454,49 @@ impl Drop for Script {
     }
 }
 
+/// A sample script shipped with the app.
+pub struct Example {
+    /// File name without `.rhai`.
+    pub name: &'static str,
+    /// One line on what it does.
+    pub about: &'static str,
+    pub source: &'static str,
+}
+
+/// The samples in `examples/scripts`.
+pub const EXAMPLES: [Example; 6] = [
+    Example {
+        name: "linux-health",
+        about: "Linux: uptime, disk and memory, with a summary line",
+        source: include_str!("../../../examples/scripts/linux-health.rhai"),
+    },
+    Example {
+        name: "ask-and-run",
+        about: "Any device: asks for commands separated by ; and runs them",
+        source: include_str!("../../../examples/scripts/ask-and-run.rhai"),
+    },
+    Example {
+        name: "ping-watch",
+        about: "Linux/macOS: logs when a host goes up or down, until stopped",
+        source: include_str!("../../../examples/scripts/ping-watch.rhai"),
+    },
+    Example {
+        name: "cisco-show",
+        about: "Cisco: enable if needed, paging off, show commands",
+        source: include_str!("../../../examples/scripts/cisco-show.rhai"),
+    },
+    Example {
+        name: "huawei-show",
+        about: "Huawei VRP: paging off and display commands",
+        source: include_str!("../../../examples/scripts/huawei-show.rhai"),
+    },
+    Example {
+        name: "logon-generic",
+        about: "Logon script: answers the user name and password prompts",
+        source: include_str!("../../../examples/scripts/logon-generic.rhai"),
+    },
+];
+
 /// Checks a script for syntax errors without running it.
 pub fn check(source: &str) -> Result<(), String> {
     Engine::new()
@@ -604,6 +647,26 @@ mod tests {
         let (log, outcome) = drive(&mut s, |_, _| {});
         assert_eq!(outcome, Outcome::Finished);
         assert_eq!(log, ["log two prompts"]);
+    }
+
+    #[test]
+    fn functions_get_the_session_as_a_parameter() {
+        let mut s = start(
+            r##"
+            fn run(s, command) { s.send(command + "\r"); }
+            run(session, "show clock");
+            "##,
+        );
+        let (log, outcome) = drive(&mut s, |_, _| {});
+        assert_eq!(outcome, Outcome::Finished, "{log:?}");
+        assert_eq!(log, ["send show clock\r"]);
+    }
+
+    #[test]
+    fn the_examples_compile() {
+        for e in &EXAMPLES {
+            assert_eq!(check(e.source), Ok(()), "{}", e.name);
+        }
     }
 
     #[test]
