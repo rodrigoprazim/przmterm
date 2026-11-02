@@ -19,6 +19,11 @@ All notable changes to PrzmTerm are recorded here. The format follows
   Ctrl+Shift+B / ⌘⇧B, the *Break* button in the status bar, or the right-click menu.
 - Quick connect accepts `serial://PORT[@BAUD]`, e.g. `serial:///dev/ttyUSB0@115200`.
 - New session settings `data_bits`, `parity`, `stop_bits` and `flow_control`.
+- SSH login debugging, like `ssh -v`: the **Debug login** setting (`debug`)
+  or `-v` in Quick connect shows each step in the terminal — addresses,
+  server version, negotiated algorithms, host key and known_hosts file, every
+  key, password and keyboard-interactive attempt with the server's answer and
+  remaining methods, and the server's disconnect reason.
 
 ### Changed
 

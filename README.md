@@ -45,6 +45,16 @@ On macOS, unsigned development builds make the system ask for your login
 keychain password (your Mac account password) after each rebuild; choose
 *Always Allow*.
 
+### Why did the login fail?
+
+Turn on **Debug login** in the session editor (or `debug = true` in the
+session file), or type `-v` before the target in Quick connect
+(`-v admin@10.0.0.1`). Each step then shows in the terminal in cyan, like
+`ssh -v`: the addresses tried, the server version and algorithms, the host key
+and the known_hosts file it was found in, every key, password and
+keyboard-interactive attempt with the server's answer and the methods it still
+allows, and the reason the server gave if it disconnected.
+
 ### Telnet and serial
 
 Quick connect also takes `telnet://host[:port]` and `serial://PORT[@BAUD]`,
@@ -111,6 +121,7 @@ port = 22
 username = "admin"
 identity_file = "~/.ssh/id_lab"
 save_password = true       # keychain: unset asks, true always, false never
+debug = true               # show each step of the SSH login (like ssh -v)
 serial_port = "/dev/ttyUSB0"   # COM3 on Windows, /dev/cu.usbserial-… on macOS
 baud_rate = 9600
 data_bits = 8              # 5-8

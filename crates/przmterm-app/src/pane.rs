@@ -153,6 +153,7 @@ impl Pane {
                 config.username = username.clone();
                 config.term_type = session.term_type.clone();
                 config.identity_files = session.identity_file.iter().cloned().collect();
+                config.debug = session.debug;
                 config.password_store = Some(Store(Arc::new(Keychain)));
                 config.save_password = match session.save_password {
                     None => SavePassword::Ask,

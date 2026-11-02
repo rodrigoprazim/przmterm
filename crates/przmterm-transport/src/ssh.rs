@@ -80,6 +80,9 @@ pub struct SshConfig {
     /// Where saved passwords live; `None` disables saving.
     pub password_store: Option<Store>,
     pub save_password: SavePassword,
+    /// Show every step of the connection and login in the terminal, like
+    /// `ssh -v`, to find out why a login fails.
+    pub debug: bool,
 }
 
 impl SshConfig {
@@ -102,6 +105,7 @@ impl SshConfig {
             keepalive: Some(Duration::from_secs(30)),
             password_store: None,
             save_password: SavePassword::Ask,
+            debug: false,
         }
     }
 }
@@ -322,19 +326,69 @@ pub fn check_host_key(
     own: &Path,
     extra: &[PathBuf],
 ) -> HostKeyStatus {
+    lookup_host_key(host, port, key, own, extra).0
+}
+
+/// [`check_host_key`], plus the file where the key was found.
+fn lookup_host_key(
+    host: &str,
+    port: u16,
+    key: &PublicKey,
+    own: &Path,
+    extra: &[PathBuf],
+) -> (HostKeyStatus, Option<PathBuf>) {
     for path in std::iter::once(own).chain(extra.iter().map(PathBuf::as_path)) {
         match keys::check_known_hosts_path(host, port, key, path) {
-            Ok(true) => return HostKeyStatus::Known,
+            Ok(true) => return (HostKeyStatus::Known, Some(path.to_path_buf())),
             Err(keys::Error::KeyChanged { line }) => {
-                return HostKeyStatus::Changed {
-                    path: path.to_path_buf(),
-                    line,
-                };
+                let path = path.to_path_buf();
+                return (
+                    HostKeyStatus::Changed {
+                        path: path.clone(),
+                        line,
+                    },
+                    Some(path),
+                );
             }
             _ => {}
         }
     }
-    HostKeyStatus::Unknown
+    (HostKeyStatus::Unknown, None)
+}
+
+/// `publickey,password` for the debug output.
+fn method_list(methods: &MethodSet) -> String {
+    let names: Vec<&str> = methods.iter().map(<&str>::from).collect();
+    if names.is_empty() {
+        "none".into()
+    } else {
+        names.join(",")
+    }
+}
+
+/// Converts an authentication result, describing it when debugging.
+fn step(out: &Output, what: &str, result: client::AuthResult) -> Step {
+    match result {
+        client::AuthResult::Success => {
+            out.debug(&format!("{what}: accepted"));
+            Step::Done
+        }
+        client::AuthResult::Failure {
+            remaining_methods,
+            partial_success,
+        } => {
+            out.debug(&format!(
+                "{what}: {}; server now allows: {}",
+                if partial_success {
+                    "partial success, more is needed (two-factor)"
+                } else {
+                    "rejected"
+                },
+                method_list(&remaining_methods)
+            ));
+            Step::Next(remaining_methods)
+        }
+    }
 }
 
 fn fingerprint(key: &PublicKey) -> String {
@@ -425,13 +479,33 @@ impl client::Handler for ClientHandler {
         server_public_key: &keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
         let key = server_public_key.public_key();
-        match check_host_key(
+        self.out
+            .debug(&format!("Server host key: {}", fingerprint(&key)));
+        let (status, found_in) = lookup_host_key(
             &self.host,
             self.port,
             &key,
             &self.known_hosts,
             &self.extra_known_hosts,
-        ) {
+        );
+        match &found_in {
+            Some(path) => self.out.debug(&format!(
+                "Host key for {} is recorded in {}",
+                self.host,
+                path.display()
+            )),
+            None => self.out.debug(&format!(
+                "Host key for {} is not in {} or {}",
+                self.host,
+                self.known_hosts.display(),
+                self.extra_known_hosts
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        }
+        match status {
             HostKeyStatus::Known => Ok(true),
             HostKeyStatus::Changed { path, line } => {
                 self.warn_changed(&key, &path, line);
@@ -448,6 +522,65 @@ impl client::Handler for ClientHandler {
     ) -> Result<(), Self::Error> {
         self.out.lines(banner);
         Ok(())
+    }
+
+    async fn kex_done(
+        &mut self,
+        _shared_secret: Option<&[u8]>,
+        names: &russh::Names,
+        session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        if self.out.debugging() {
+            self.out.debug(&format!(
+                "Server version: {}",
+                String::from_utf8_lossy(session.remote_sshid()).trim()
+            ));
+            self.out.debug(&format!(
+                "Key exchange: {}, host key: {}",
+                names.kex.as_ref(),
+                names.key.as_str()
+            ));
+            let cipher = names.cipher.as_ref();
+            // AEAD ciphers authenticate on their own; the MAC is unused.
+            let mac = if cipher.contains("poly1305") || cipher.contains("gcm") {
+                "built into the cipher".to_string()
+            } else {
+                format!(
+                    "{} / {}",
+                    names.client_mac.as_ref(),
+                    names.server_mac.as_ref()
+                )
+            };
+            self.out.debug(&format!(
+                "Cipher: {cipher}, MAC: {mac}, compression: {:?}",
+                names.client_compression,
+            ));
+        }
+        Ok(())
+    }
+
+    async fn disconnected(
+        &mut self,
+        reason: client::DisconnectReason<Self::Error>,
+    ) -> Result<(), Self::Error> {
+        match reason {
+            client::DisconnectReason::ReceivedDisconnect(info) => {
+                self.out.debug(&format!(
+                    "Server disconnected: {} ({:?})",
+                    if info.message.is_empty() {
+                        "no message"
+                    } else {
+                        info.message.as_str()
+                    },
+                    info.reason_code
+                ));
+                Ok(())
+            }
+            client::DisconnectReason::Error(e) => {
+                self.out.debug(&format!("Connection error: {e}"));
+                Err(e)
+            }
+        }
     }
 }
 
@@ -490,6 +623,7 @@ async fn session_task(
     closed: Arc<AtomicBool>,
     shared: Shared,
 ) {
+    let out = out.with_debug(config.debug);
     let end = match run_session(&config, &input, &out, &shared).await {
         Ok(status) => End::Closed(status),
         Err(end) => end,
@@ -507,6 +641,7 @@ async fn channel_task(
     closed: Arc<AtomicBool>,
     shared: Shared,
 ) {
+    let out = out.with_debug(config.debug);
     let host = config.host.clone();
     out.notice(&format!(
         "New session on the existing connection to {host} (no new login)."
@@ -575,25 +710,13 @@ async fn run_session(
 ) -> Result<Option<u32>, End> {
     out.notice(&format!("Connecting to {}:{}…", config.host, config.port));
 
-    // Only the TCP connect is timed: the host key question may take a while.
-    let stream = match tokio::time::timeout(
-        config.connect_timeout,
-        tokio::net::TcpStream::connect((config.host.as_str(), config.port)),
-    )
-    .await
-    {
-        Err(_) => {
-            return Err(End::Failed(format!(
-                "Connection to {}:{} timed out after {} s.",
-                config.host,
-                config.port,
-                config.connect_timeout.as_secs()
-            )));
-        }
-        Ok(Err(e)) => return Err(End::Failed(format!("Cannot connect: {e}"))),
-        Ok(Ok(s)) => s,
-    };
+    // Only resolving and the TCP connect are timed: the host key question
+    // may take a while.
+    let stream = connect_tcp(config, out).await?;
     let _ = stream.set_nodelay(true);
+    if let Some(every) = config.keepalive {
+        out.debug(&format!("Keepalive every {} s", every.as_secs()));
+    }
 
     let ssh_config = Arc::new(client::Config {
         keepalive_interval: config.keepalive,
@@ -626,6 +749,7 @@ async fn run_session(
             input.read_line(out, true).await?.trim().to_string()
         }
     };
+    out.debug(&format!("Authenticating as '{user}'"));
 
     authenticate(&mut handle, config, &user, input, out).await?;
 
@@ -638,6 +762,63 @@ async fn run_session(
     result
 }
 
+/// Resolves the host and connects to its addresses in turn.
+async fn connect_tcp(config: &SshConfig, out: &Output) -> Result<tokio::net::TcpStream, End> {
+    let timed_out = || {
+        End::Failed(format!(
+            "Connection to {}:{} timed out after {} s.",
+            config.host,
+            config.port,
+            config.connect_timeout.as_secs()
+        ))
+    };
+    let deadline = tokio::time::Instant::now() + config.connect_timeout;
+    let addrs: Vec<std::net::SocketAddr> = match tokio::time::timeout_at(
+        deadline,
+        tokio::net::lookup_host((config.host.as_str(), config.port)),
+    )
+    .await
+    {
+        Err(_) => return Err(timed_out()),
+        Ok(Err(e)) => return Err(End::Failed(format!("Cannot connect: {e}"))),
+        Ok(Ok(addrs)) => addrs.collect(),
+    };
+    out.debug(&format!(
+        "{} resolves to {}",
+        config.host,
+        addrs
+            .iter()
+            .map(|a| a.ip().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
+    let mut last_error = None;
+    for addr in addrs {
+        out.debug(&format!(
+            "Connecting to {} port {}…",
+            addr.ip(),
+            addr.port()
+        ));
+        match tokio::time::timeout_at(deadline, tokio::net::TcpStream::connect(addr)).await {
+            Err(_) => return Err(timed_out()),
+            Ok(Ok(stream)) => {
+                if let Ok(local) = stream.local_addr() {
+                    out.debug(&format!("Connected from {local}"));
+                }
+                return Ok(stream);
+            }
+            Ok(Err(e)) => {
+                out.debug(&format!("{addr}: {e}"));
+                last_error = Some(e);
+            }
+        }
+    }
+    Err(End::Failed(match last_error {
+        Some(e) => format!("Cannot connect: {e}"),
+        None => format!("Cannot connect: no address for {}", config.host),
+    }))
+}
+
 /// Opens a shell channel with a PTY and relays it until it closes. With
 /// `confirm`, refusals are reported as [`End::Refused`] (shared connections).
 async fn run_channel(
@@ -647,6 +828,7 @@ async fn run_channel(
     out: &Output,
     confirm: bool,
 ) -> Result<Option<u32>, End> {
+    out.debug("Opening a session channel");
     let mut channel = match handle.channel_open_session().await {
         Ok(c) => c,
         Err(e) if confirm => return Err(End::Refused(e.to_string())),
@@ -654,6 +836,10 @@ async fn run_channel(
     };
     let mut input = input.lock().await;
     let size = input.size;
+    out.debug(&format!(
+        "Requesting a {term_type} terminal, {}x{}",
+        size.cols, size.rows
+    ));
     channel
         .request_pty(
             confirm,
@@ -669,6 +855,7 @@ async fn run_channel(
     if confirm {
         confirmed(&mut channel, "terminal", out).await?;
     }
+    out.debug("Starting the shell");
     channel
         .request_shell(confirm)
         .await
@@ -738,12 +925,14 @@ async fn authenticate(
     input: &Arc<Mutex<Input>>,
     out: &Output,
 ) -> Result<(), End> {
-    let mut methods = match handle
-        .authenticate_none(user)
-        .await
-        .map_err(failed("Authentication failed"))?
-        .into()
-    {
+    let mut methods = match step(
+        out,
+        "Login without credentials (method none)",
+        handle
+            .authenticate_none(user)
+            .await
+            .map_err(failed("Authentication failed"))?,
+    ) {
         Step::Done => return Ok(()),
         Step::Next(m) => m,
     };
@@ -752,25 +941,43 @@ async fn authenticate(
         // The server did not say; every current OpenSSH accepts SHA-256.
         _ => Some(HashAlg::Sha256),
     };
+    out.debug(&format!(
+        "RSA keys sign with {}",
+        match rsa_hash {
+            Some(HashAlg::Sha512) => "rsa-sha2-512",
+            Some(HashAlg::Sha256) => "rsa-sha2-256",
+            None => "ssh-rsa (SHA-1)",
+            Some(_) => "another hash",
+        }
+    ));
 
     if methods.contains(&MethodKind::PublicKey) {
         if config.use_agent {
-            match agent_auth(handle, user, rsa_hash).await {
+            match agent_auth(handle, user, rsa_hash, out).await {
                 Some(Step::Done) => return Ok(()),
                 Some(Step::Next(m)) => methods = m,
                 None => {}
             }
+        } else {
+            out.debug("SSH agent not used for this session");
         }
         match key_file_auth(handle, config, user, rsa_hash, input, out).await? {
             Some(Step::Done) => return Ok(()),
             Some(Step::Next(m)) => methods = m,
             None => {}
         }
+    } else {
+        out.debug("Server does not accept public keys; skipping the agent and key files");
     }
 
     let account = format!("{user}@{}:{}", config.host, config.port);
     let mut saved = SavedPassword::load(config, &account).await;
 
+    if !methods.contains(&MethodKind::KeyboardInteractive)
+        && !methods.contains(&MethodKind::Password)
+    {
+        out.debug("Server accepts neither keyboard-interactive nor password");
+    }
     if methods.contains(&MethodKind::KeyboardInteractive) {
         match keyboard_interactive_auth(handle, user, &mut saved, input, out).await? {
             Step::Done => return Ok(()),
@@ -791,12 +998,19 @@ async fn authenticate(
                     (input.read_line(out, false).await?, false)
                 }
             };
-            match handle
-                .authenticate_password(user, password.clone())
-                .await
-                .map_err(failed("Authentication failed"))?
-                .into()
-            {
+            let what = if from_store {
+                "Password (saved in the keychain)"
+            } else {
+                "Password (typed)"
+            };
+            match step(
+                out,
+                what,
+                handle
+                    .authenticate_password(user, password.clone())
+                    .await
+                    .map_err(failed("Authentication failed"))?,
+            ) {
                 Step::Done => {
                     if !from_store {
                         saved.offer_save(&password, input, out).await;
@@ -831,32 +1045,51 @@ async fn authenticate(
 }
 
 #[cfg(unix)]
-async fn agent_auth(handle: &mut Handle, user: &str, rsa_hash: Option<HashAlg>) -> Option<Step> {
-    let agent = AgentClient::connect_env().await.ok()?;
-    agent_try_all(handle, user, rsa_hash, agent).await
+async fn agent_auth(
+    handle: &mut Handle,
+    user: &str,
+    rsa_hash: Option<HashAlg>,
+    out: &Output,
+) -> Option<Step> {
+    match AgentClient::connect_env().await {
+        Ok(agent) => agent_try_all(handle, user, rsa_hash, agent, "ssh-agent", out).await,
+        Err(e) => {
+            out.debug(&format!("No SSH agent (SSH_AUTH_SOCK): {e}"));
+            None
+        }
+    }
 }
 
 #[cfg(windows)]
-async fn agent_auth(handle: &mut Handle, user: &str, rsa_hash: Option<HashAlg>) -> Option<Step> {
+async fn agent_auth(
+    handle: &mut Handle,
+    user: &str,
+    rsa_hash: Option<HashAlg>,
+    out: &Output,
+) -> Option<Step> {
     let mut last = None;
-    if let Ok(agent) = AgentClient::connect_pageant().await {
-        match agent_try_all(handle, user, rsa_hash, agent).await {
+    match AgentClient::connect_pageant().await {
+        Ok(agent) => match agent_try_all(handle, user, rsa_hash, agent, "Pageant", out).await {
             Some(Step::Done) => return Some(Step::Done),
             other => last = other,
-        }
+        },
+        Err(e) => out.debug(&format!("No Pageant: {e}")),
     }
-    if let Ok(agent) = AgentClient::connect_named_pipe(r"\\.\pipe\openssh-ssh-agent").await {
-        match agent_try_all(handle, user, rsa_hash, agent).await {
-            Some(Step::Done) => return Some(Step::Done),
-            Some(other) => last = Some(other),
-            None => {}
+    match AgentClient::connect_named_pipe(r"\\.\pipe\openssh-ssh-agent").await {
+        Ok(agent) => {
+            match agent_try_all(handle, user, rsa_hash, agent, "OpenSSH agent", out).await {
+                Some(Step::Done) => return Some(Step::Done),
+                Some(other) => last = Some(other),
+                None => {}
+            }
         }
+        Err(e) => out.debug(&format!("No OpenSSH agent: {e}")),
     }
     last
 }
 
 #[cfg(not(any(unix, windows)))]
-async fn agent_auth(_: &mut Handle, _: &str, _: Option<HashAlg>) -> Option<Step> {
+async fn agent_auth(_: &mut Handle, _: &str, _: Option<HashAlg>, _: &Output) -> Option<Step> {
     None
 }
 
@@ -866,16 +1099,28 @@ async fn agent_try_all<S>(
     user: &str,
     rsa_hash: Option<HashAlg>,
     mut agent: AgentClient<S>,
+    agent_name: &str,
+    out: &Output,
 ) -> Option<Step>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let identities = agent.request_identities().await.ok()?;
+    let identities = match agent.request_identities().await {
+        Ok(ids) => ids,
+        Err(e) => {
+            out.debug(&format!("{agent_name}: cannot list keys: {e}"));
+            return None;
+        }
+    };
+    out.debug(&format!("{agent_name} holds {} key(s)", identities.len()));
     let mut last = None;
     for identity in identities {
-        let AgentIdentity::PublicKey { key, .. } = identity else {
+        let AgentIdentity::PublicKey { key, comment } = identity else {
+            out.debug(&format!("{agent_name}: skipping a certificate"));
             continue;
         };
+        let what = format!("{agent_name} key {} {comment}", fingerprint(&key));
+        out.debug(&format!("Offering {what}"));
         let hash = if key.algorithm().is_rsa() {
             rsa_hash
         } else {
@@ -885,9 +1130,11 @@ where
             .authenticate_publickey_with(user, key, hash, &mut agent)
             .await
         {
-            Ok(client::AuthResult::Success) => return Some(Step::Done),
-            Ok(failure) => last = Some(failure.into()),
-            Err(e) => tracing::debug!("agent signature failed: {e}"),
+            Ok(result) => match step(out, &what, result) {
+                Step::Done => return Some(Step::Done),
+                next => last = Some(next),
+            },
+            Err(e) => out.debug(&format!("{what}: the agent could not sign: {e}")),
         }
     }
     last
@@ -922,27 +1169,49 @@ async fn key_file_auth(
     out: &Output,
 ) -> Result<Option<Step>, End> {
     let mut last = None;
-    for (path, explicit) in identity_candidates(config) {
+    let candidates = identity_candidates(config);
+    if candidates.is_empty() {
+        out.debug(
+            "No key files: none set for the session and no ~/.ssh/id_ed25519, id_ecdsa or id_rsa",
+        );
+    }
+    for (path, explicit) in candidates {
+        out.debug(&format!("Trying key file {}", path.display()));
         let key = match keys::load_secret_key(&path, None) {
             Ok(key) => key,
-            Err(keys::Error::KeyIsEncrypted) => match ask_passphrase(&path, input, out).await? {
-                Some(key) => key,
-                None => continue,
-            },
+            Err(keys::Error::KeyIsEncrypted) => {
+                out.debug("The key is encrypted; asking for its passphrase");
+                match ask_passphrase(&path, input, out).await? {
+                    Some(key) => key,
+                    None => {
+                        out.debug("No passphrase given; skipping the key");
+                        continue;
+                    }
+                }
+            }
             Err(e) => {
                 if explicit {
                     out.error(&format!("Cannot read key {}: {e}", path.display()));
+                } else {
+                    out.debug(&format!("Cannot read the key: {e}"));
                 }
                 continue;
             }
         };
+        let what = format!(
+            "Key file {} ({})",
+            path.display(),
+            fingerprint(key.public_key())
+        );
         let key = PrivateKeyWithHashAlg::new(Arc::new(key), rsa_hash);
-        match handle
-            .authenticate_publickey(user, key)
-            .await
-            .map_err(failed("Authentication failed"))?
-            .into()
-        {
+        match step(
+            out,
+            &what,
+            handle
+                .authenticate_publickey(user, key)
+                .await
+                .map_err(failed("Authentication failed"))?,
+        ) {
             Step::Done => return Ok(Some(Step::Done)),
             next => last = Some(next),
         }
@@ -1067,6 +1336,7 @@ async fn keyboard_interactive_auth(
     input: &Arc<Mutex<Input>>,
     out: &Output,
 ) -> Result<Step, End> {
+    out.debug("Trying keyboard-interactive");
     let mut response = handle
         .authenticate_keyboard_interactive_start(user, None)
         .await
@@ -1078,14 +1348,25 @@ async fn keyboard_interactive_auth(
     loop {
         match response {
             KeyboardInteractiveAuthResponse::Success => {
+                out.debug("keyboard-interactive: accepted");
                 if let Some(password) = &typed {
                     saved.offer_save(password, input, out).await;
                 }
                 return Ok(Step::Done);
             }
             KeyboardInteractiveAuthResponse::Failure {
-                remaining_methods, ..
+                remaining_methods,
+                partial_success,
             } => {
+                out.debug(&format!(
+                    "keyboard-interactive: {}; server now allows: {}",
+                    if partial_success {
+                        "partial success, more is needed"
+                    } else {
+                        "rejected"
+                    },
+                    method_list(&remaining_methods)
+                ));
                 if sent_saved {
                     saved.reject(out).await;
                 }
@@ -1096,6 +1377,14 @@ async fn keyboard_interactive_auth(
                 instructions,
                 prompts,
             } => {
+                out.debug(&format!(
+                    "keyboard-interactive: the server asks {} question(s){}",
+                    prompts.len(),
+                    prompts
+                        .iter()
+                        .map(|p| format!(" [{}]", p.prompt.trim()))
+                        .collect::<String>()
+                ));
                 let password_at = password_prompt(&prompts);
                 // Asked for the password again: the saved one was wrong. A
                 // round asking only for a token means the password worked.

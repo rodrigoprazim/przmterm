@@ -37,9 +37,27 @@ pub(crate) enum Cmd {
 pub(crate) struct Output {
     tx: std_mpsc::Sender<Vec<u8>>,
     pub(crate) waker: Waker,
+    /// Show [`Output::debug`] lines.
+    debug: bool,
 }
 
 impl Output {
+    pub(crate) fn with_debug(mut self, on: bool) -> Self {
+        self.debug = on;
+        self
+    }
+
+    /// A step of the connection, shown only with debugging on (like `ssh -v`).
+    pub(crate) fn debug(&self, text: &str) {
+        if self.debug {
+            self.text(&format!("\x1b[36mdebug: {text}\x1b[0m\r\n"));
+        }
+    }
+
+    pub(crate) fn debugging(&self) -> bool {
+        self.debug
+    }
+
     pub(crate) fn bytes(&self, data: &[u8]) {
         if !data.is_empty() && self.tx.send(data.to_vec()).is_ok() {
             (self.waker)();
@@ -102,7 +120,11 @@ impl Pipe {
         };
         let end = TaskEnd {
             cmds: cmd_rx,
-            out: Output { tx: out_tx, waker },
+            out: Output {
+                tx: out_tx,
+                waker,
+                debug: false,
+            },
             closed,
         };
         (pipe, end)

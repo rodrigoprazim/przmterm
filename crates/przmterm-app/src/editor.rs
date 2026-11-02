@@ -87,6 +87,7 @@ pub struct Editor {
     log_path: String,
     log_dir: String,
     save_password: Option<bool>,
+    debug: Option<bool>,
     show_log_help: bool,
     confirm: Option<Confirm>,
     error: Option<String>,
@@ -125,6 +126,7 @@ fn field_label(key: &str) -> &'static str {
         "username" => "user name",
         "identity_file" => "key file",
         "save_password" => "save password",
+        "debug" => "debug login",
         "baud_rate" => "baud rate",
         "data_bits" => "data bits",
         "parity" => "parity",
@@ -158,6 +160,7 @@ impl Context<'_> {
             "username" => "asked at login".into(),
             "identity_file" => "agent and ~/.ssh keys".into(),
             "save_password" => "ask".into(),
+            "debug" => "no".into(),
             "serial_port" => "/dev/ttyUSB0 or COM3".into(),
             "baud_rate" => przmterm_session::DEFAULT_BAUD_RATE.to_string(),
             "data_bits" => DEFAULT_DATA_BITS.to_string(),
@@ -264,6 +267,7 @@ impl Editor {
             log_path: text(&s.log.path),
             log_dir: text(&s.log.dir),
             save_password: s.save_password,
+            debug: s.debug,
             show_log_help: false,
             confirm: None,
             error: None,
@@ -292,6 +296,7 @@ impl Editor {
             username: opt(&self.username),
             identity_file: opt(&self.identity_file),
             save_password: self.save_password,
+            debug: self.debug,
             serial_port: if session {
                 opt(&self.serial_port)
             } else {
@@ -615,6 +620,17 @@ impl Editor {
             &mut self.save_password,
             cx.inherited.save_password,
             None,
+        );
+        ui.end_row();
+        ui.label("Debug login")
+            .on_hover_text("Show each step of the connection and login, like ssh -v");
+        bool_pick(
+            ui,
+            &mut self.debug,
+            cx.inherited.debug.unwrap_or(false),
+            ["yes", "no"],
+            None,
+            &cx.hint("debug"),
         );
         ui.end_row();
     }

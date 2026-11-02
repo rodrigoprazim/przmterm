@@ -441,6 +441,45 @@ fn three_wrong_passwords_end_the_session() {
 }
 
 #[test]
+fn debug_shows_why_a_login_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let known_hosts = dir.path().join("known_hosts");
+    let port = start_server(host_key(), 2);
+
+    // Without debug, none of it shows.
+    let mut quiet = Screen::connect(config(port, &known_hosts));
+    quiet.wait_for("(yes/no)? ");
+    assert!(!quiet.text.contains("debug:"), "{}", quiet.text);
+    quiet.send("yes\r");
+    quiet.wait_for("password: ");
+    drop(quiet);
+
+    let mut c = config(port, &known_hosts);
+    c.debug = true;
+    let mut s = Screen::connect(c);
+    s.wait_for("password: ");
+    for needle in [
+        "debug: 127.0.0.1 resolves to 127.0.0.1",
+        "debug: Connecting to 127.0.0.1 port",
+        "debug: Server version: SSH-2.0-",
+        "debug: Key exchange: ",
+        "debug: Server host key: ssh-ed25519 SHA256:",
+        "is recorded in",
+        "debug: Authenticating as 'alice'",
+        "server now allows: password",
+        "debug: Server does not accept public keys",
+    ] {
+        assert!(
+            s.text.contains(needle),
+            "missing {needle:?} in:\n{}",
+            s.text
+        );
+    }
+    s.send("nope\r");
+    s.wait_for("debug: Password (typed): rejected; server now allows: password");
+}
+
+#[test]
 fn keyboard_interactive_prompts_in_the_terminal() {
     let dir = tempfile::tempdir().unwrap();
     let port = start_server_with(host_key(), 1, &[MethodKind::KeyboardInteractive], None);

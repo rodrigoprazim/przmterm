@@ -104,6 +104,9 @@ pub struct SessionSettings {
     /// Save passwords in the OS keychain: unset asks, `true` always, `false` never.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub save_password: Option<bool>,
+    /// SSH: show every step of the connection and login (like `ssh -v`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub debug: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub serial_port: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -129,13 +132,14 @@ pub struct SessionSettings {
 }
 
 /// Keys of the individual settings, used to compare and copy them.
-pub const FIELDS: [&str; 17] = [
+pub const FIELDS: [&str; 18] = [
     "protocol",
     "host",
     "port",
     "username",
     "identity_file",
     "save_password",
+    "debug",
     "serial_port",
     "baud_rate",
     "data_bits",
@@ -159,6 +163,7 @@ impl SessionSettings {
             "username" => self.username = from.username.clone(),
             "identity_file" => self.identity_file = from.identity_file.clone(),
             "save_password" => self.save_password = from.save_password,
+            "debug" => self.debug = from.debug,
             "serial_port" => self.serial_port = from.serial_port.clone(),
             "baud_rate" => self.baud_rate = from.baud_rate,
             "data_bits" => self.data_bits = from.data_bits,
@@ -184,6 +189,7 @@ impl SessionSettings {
             "username" => self.username.clone(),
             "identity_file" => self.identity_file.clone(),
             "save_password" => self.save_password.map(yes_no),
+            "debug" => self.debug.map(yes_no),
             "serial_port" => self.serial_port.clone(),
             "baud_rate" => self.baud_rate.map(|v| v.to_string()),
             "data_bits" => self.data_bits.map(|v| v.to_string()),
@@ -220,6 +226,7 @@ impl SessionSettings {
             username: pick(&self.username, &over.username),
             identity_file: pick(&self.identity_file, &over.identity_file),
             save_password: pick(&self.save_password, &over.save_password),
+            debug: pick(&self.debug, &over.debug),
             serial_port: pick(&self.serial_port, &over.serial_port),
             baud_rate: pick(&self.baud_rate, &over.baud_rate),
             data_bits: pick(&self.data_bits, &over.data_bits),
@@ -254,6 +261,7 @@ impl SessionSettings {
             "terminal.term_type" => s.terminal.term_type = Some(DEFAULT_TERM_TYPE.into()),
             "terminal.scrollback" => s.terminal.scrollback = Some(DEFAULT_SCROLLBACK),
             "log.enabled" => s.log.enabled = Some(false),
+            "debug" => s.debug = Some(false),
             "log.path" => s.log.path = Some(DEFAULT_LOG_TEMPLATE.into()),
             _ => return None,
         }
@@ -295,6 +303,8 @@ pub struct Session {
     pub identity_file: Option<PathBuf>,
     /// See [`SessionSettings::save_password`].
     pub save_password: Option<bool>,
+    /// See [`SessionSettings::debug`].
+    pub debug: bool,
     pub term_type: String,
     pub scrollback: usize,
     pub log_enabled: bool,
@@ -370,6 +380,7 @@ impl Session {
             target,
             identity_file: settings.identity_file.as_deref().map(expand_tilde),
             save_password: settings.save_password,
+            debug: settings.debug.unwrap_or(false),
             term_type: settings
                 .terminal
                 .term_type
@@ -386,8 +397,17 @@ impl Session {
     /// Builds a session from a quick-connect string:
     /// `host`, `user@host`, `host:port`, `user@[::1]:2222`, `telnet://host`,
     /// or `serial://PORT[@BAUD]` (`serial:///dev/ttyUSB0@115200`, `serial://COM3`).
+    /// A leading `-v` turns on [`Session::debug`], as with `ssh -v`.
     pub fn quick_connect(target: &str) -> Result<Session, String> {
         let target = target.trim();
+        if let Some(rest) = target
+            .strip_prefix("-v ")
+            .or_else(|| target.strip_prefix("-vvv "))
+        {
+            let mut session = Session::quick_connect(rest)?;
+            session.debug = true;
+            return Ok(session);
+        }
         let (protocol, rest) = match target.split_once("://") {
             Some(("ssh", rest)) => (Protocol::Ssh, rest),
             Some(("telnet", rest)) => (Protocol::Telnet, rest),
@@ -1063,6 +1083,10 @@ mod tests {
             Ok((Protocol::Serial, "COM3 9600 8N1".into()))
         );
         assert!(t("serial://COM3@fast").is_err());
+        let debug = Session::quick_connect("-v admin@sw1").unwrap();
+        assert!(debug.debug);
+        assert_eq!(debug.display_target(), "admin@sw1:22");
+        assert!(!Session::quick_connect("admin@sw1").unwrap().debug);
         assert!(t("serial://").is_err());
         assert!(t("host:99999").is_err());
         assert!(t("").is_err());
