@@ -9,6 +9,7 @@
 //! call a [`Waker`] when bytes arrive, so the GUI repaints only when needed.
 
 mod forward;
+pub mod modem;
 mod pipe;
 pub mod serial;
 pub mod sftp;

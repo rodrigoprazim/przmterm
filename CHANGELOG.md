@@ -17,6 +17,14 @@ All notable changes to PrzmTerm are recorded here. The format follows
   file, or *Download…*), with progress and *Cancel*; new folder, rename and
   delete (folders with their contents, after asking). Downloads never
   overwrite: an existing name gets ` (2)`.
+- File transfers in the terminal with Xmodem, Xmodem-1K, Ymodem and Zmodem
+  (*Send Files…* / *Receive Files…* in the tab menu, or shortcuts), for
+  serial consoles and Telnet as well as SSH. Running `sz` on the other side
+  downloads to the Downloads folder by itself; running `rz` asks for the
+  files to send. On a Unix host the dialog can type the `rz`/`sz`/`rb`/`sb`/
+  `rx`/`sx` command for you. The status bar shows the file and progress with
+  *Cancel* (Ctrl+C works too); received files never overwrite others, and a
+  cancelled one is removed.
 
 ## [0.7.0] - 2026-11-02
 

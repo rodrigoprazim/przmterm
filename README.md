@@ -98,6 +98,16 @@ it; *Download…* takes several files or whole folders. *Upload files…*,
 *Upload folder…* or dropping files on the window sends them to the folder
 shown. Transfers run in the background with a progress bar and *Cancel*.
 
+### Xmodem, Ymodem and Zmodem
+
+For serial consoles and hosts without SFTP. Run `sz file` on a Unix host and
+the file arrives in your Downloads folder; run `rz` and PrzmTerm asks which
+files to send. For a device (a bootloader waiting for firmware, say) use
+*Send Files…* or *Receive Files…* in the tab menu: choose the protocol and
+the files, with *Start the other side for me* off. The status bar shows the
+progress and *Cancel*. Zmodem streams and is much faster over a network;
+Xmodem and Ymodem wait for an answer after each block.
+
 ### Backup and sharing sessions
 
 **+** next to *Sessions* › *Back up settings…* writes one `.przm` file with

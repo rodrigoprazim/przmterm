@@ -12,6 +12,7 @@ use przmterm_session::vault::VaultEntry;
 use przmterm_session::{Session, Target};
 use przmterm_term::Terminal;
 use przmterm_term::log::TextLog;
+use przmterm_transport::modem;
 use przmterm_transport::serial::SerialTransport;
 use przmterm_transport::ssh::{Credential, SavePassword, SshConfig, SshTransport, Store};
 use przmterm_transport::telnet::{TelnetConfig, TelnetTransport};
@@ -258,6 +259,33 @@ pub struct Pane {
     script: Option<Script>,
     /// Output as plain text, for the script.
     plain: PlainText,
+    /// An Xmodem/Ymodem/Zmodem transfer: while it runs, the session's
+    /// output goes to it instead of the terminal.
+    transfer: Option<Transfer>,
+    /// What transfers need from the application.
+    transfer_events: Vec<TransferEvent>,
+    /// The other side runs `rz` and we asked for files already.
+    upload_asked: bool,
+    /// Files for the `rz` we just typed, sent when it starts.
+    queued_upload: Option<Vec<std::path::PathBuf>>,
+    /// Where the `sz` we just typed saves to.
+    queued_download: Option<std::path::PathBuf>,
+    /// An Xmodem/Ymodem receive that starts once the typed `sx`/`sb` runs.
+    delayed: Option<(std::time::Instant, modem::Kind, std::path::PathBuf, String)>,
+}
+
+pub struct Transfer {
+    engine: Box<dyn modem::Engine>,
+    pub kind: modem::Kind,
+    pub sending: bool,
+}
+
+/// What a transfer needs from the application.
+pub enum TransferEvent {
+    /// The other side runs `rz`: ask which files to send.
+    UploadWanted,
+    /// A transfer ended; a message for the status bar.
+    Ended(String),
 }
 
 /// What a running script needs from the application.
@@ -305,7 +333,170 @@ impl Pane {
             queue_at: None,
             script: None,
             plain: PlainText::new(),
+            transfer: None,
+            transfer_events: Vec::new(),
+            upload_asked: false,
+            queued_upload: None,
+            queued_download: None,
+            delayed: None,
         }
+    }
+
+    /// Starts what the transfer dialog asked for.
+    pub fn begin(&mut self, start: crate::transfer::Start) {
+        use crate::transfer::Start;
+        let now = std::time::Instant::now();
+        match start {
+            // Zmodem's own start (from rz/sz) begins the transfer, so the
+            // shell never sees protocol bytes.
+            Start::Send {
+                kind: modem::Kind::Zmodem,
+                files,
+                command: Some(cmd),
+            } => {
+                self.queued_upload = Some(files);
+                let _ = self.transport.write(format!("{cmd}\r").as_bytes());
+            }
+            Start::Send {
+                kind,
+                files,
+                command,
+            } => self.start_send(kind, files, command),
+            Start::Receive {
+                kind: modem::Kind::Zmodem,
+                dir,
+                command: Some(cmd),
+                ..
+            } => {
+                self.queued_download = Some(dir);
+                let _ = self.transport.write(format!("{cmd}\r").as_bytes());
+            }
+            Start::Receive {
+                kind,
+                dir,
+                name,
+                command: Some(cmd),
+            } => {
+                let _ = self.transport.write(format!("{cmd}\r").as_bytes());
+                self.delayed = Some((now + std::time::Duration::from_secs(1), kind, dir, name));
+            }
+            Start::Receive {
+                kind, dir, name, ..
+            } => self.start_receive(kind, dir, &name),
+        }
+    }
+
+    /// Starts sending `files` with `kind`. With `command`, it is typed
+    /// first to start the receiver on a Unix host (`rz`, `rb`, `rx NAME`).
+    pub fn start_send(
+        &mut self,
+        kind: modem::Kind,
+        files: Vec<std::path::PathBuf>,
+        command: Option<String>,
+    ) {
+        if let Some(cmd) = command {
+            let _ = self.transport.write(format!("{cmd}\r").as_bytes());
+        }
+        match modem::send(kind, files, std::time::Instant::now()) {
+            Ok(engine) => {
+                self.term.feed(
+                    format!("\r\n\x1b[2m[{} upload started]\x1b[0m\r\n", kind.label()).as_bytes(),
+                );
+                self.transfer = Some(Transfer {
+                    engine,
+                    kind,
+                    sending: true,
+                });
+            }
+            Err(e) => self
+                .transfer_events
+                .push(TransferEvent::Ended(format!("Cannot send: {e}"))),
+        }
+    }
+
+    /// Starts receiving into `dir` (Xmodem names its file `name`).
+    pub fn start_receive(&mut self, kind: modem::Kind, dir: std::path::PathBuf, name: &str) {
+        self.term
+            .feed(format!("\r\n\x1b[2m[{} download started]\x1b[0m\r\n", kind.label()).as_bytes());
+        self.transfer = Some(Transfer {
+            engine: modem::receive(kind, dir, name, std::time::Instant::now()),
+            kind,
+            sending: false,
+        });
+    }
+
+    /// The running transfer and how far it is.
+    pub fn transfer(&self) -> Option<(&Transfer, modem::Progress)> {
+        self.transfer.as_ref().map(|t| (t, t.engine.progress()))
+    }
+
+    pub fn cancel_transfer(&mut self) {
+        if let Some(t) = &mut self.transfer {
+            t.engine.cancel();
+        }
+    }
+
+    /// Answers `rz` that there is nothing to send.
+    pub fn refuse_upload(&mut self) {
+        let mut cancel = vec![0x18u8; 8];
+        cancel.extend([0x08; 8]);
+        let _ = self.transport.write(&cancel);
+        self.upload_asked = false;
+    }
+
+    pub fn take_transfer_events(&mut self) -> Vec<TransferEvent> {
+        std::mem::take(&mut self.transfer_events)
+    }
+
+    /// Lets the transfer run: its timeouts, what it sends, and its end.
+    fn run_transfer(&mut self) {
+        let Some(t) = &mut self.transfer else {
+            return;
+        };
+        t.engine.tick(std::time::Instant::now());
+        let out = t.engine.output();
+        if !out.is_empty() {
+            match self.transport.write(&out) {
+                Ok(()) => {}
+                Err(_) => t.engine.cancel(),
+            }
+        }
+        if self.transport.is_closed() && t.engine.status() == modem::Status::Running {
+            t.engine.cancel();
+        }
+        let status = t.engine.status();
+        if status == modem::Status::Running {
+            return;
+        }
+        let (kind, sending) = (t.kind.label(), t.sending);
+        let names = |files: &[std::path::PathBuf]| {
+            files
+                .iter()
+                .filter_map(|f| f.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let message = match status {
+            modem::Status::Finished(files) if sending => {
+                format!("{kind}: sent {} file(s): {}", files.len(), names(&files))
+            }
+            modem::Status::Finished(files) => {
+                format!(
+                    "{kind}: received {} file(s): {}",
+                    files.len(),
+                    names(&files)
+                )
+            }
+            modem::Status::Cancelled => format!("{kind}: transfer cancelled"),
+            modem::Status::Failed(e) => format!("{kind}: transfer failed: {e}"),
+            modem::Status::Running => unreachable!(),
+        };
+        self.term
+            .feed(format!("\r\n\x1b[2m[{message}]\x1b[0m\r\n").as_bytes());
+        self.transfer = None;
+        self.upload_asked = false;
+        self.transfer_events.push(TransferEvent::Ended(message));
     }
 
     pub fn demo() -> Self {
@@ -622,7 +813,20 @@ impl Pane {
             match self.transport.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    self.term.feed(&buf[..n]);
+                    got = true;
+                    let now = std::time::Instant::now();
+                    if let Some(t) = &mut self.transfer {
+                        t.engine.input(&buf[..n], now);
+                        continue;
+                    }
+                    // `sz` or `rz` started on the other side.
+                    let mut data = &buf[..n];
+                    let start = modem::find_zmodem(data);
+                    let tail = start.map(|(at, _)| data[at..].to_vec());
+                    if let Some((at, _)) = start {
+                        data = &buf[..at];
+                    }
+                    self.term.feed(data);
                     if let Some(log) = &mut self.log {
                         log.write(&buf[..n]);
                     }
@@ -633,9 +837,32 @@ impl Pane {
                         }
                     }
                     if let Some(script) = &self.script {
-                        script.feed(&self.plain.text(&buf[..n]));
+                        script.feed(&self.plain.text(data));
                     }
-                    got = true;
+                    match (start, tail) {
+                        (Some((_, modem::ZmodemStart::Download)), Some(tail)) => {
+                            let dir = self
+                                .queued_download
+                                .take()
+                                .unwrap_or_else(crate::transfer::downloads);
+                            self.start_receive(modem::Kind::Zmodem, dir, "");
+                            if let Some(t) = &mut self.transfer {
+                                t.engine.input(&tail, now);
+                            }
+                        }
+                        (Some((_, modem::ZmodemStart::Upload)), Some(tail)) => {
+                            if let Some(files) = self.queued_upload.take() {
+                                self.start_send(modem::Kind::Zmodem, files, None);
+                                if let Some(t) = &mut self.transfer {
+                                    t.engine.input(&tail, now);
+                                }
+                            } else if !self.upload_asked {
+                                self.upload_asked = true;
+                                self.transfer_events.push(TransferEvent::UploadWanted);
+                            }
+                        }
+                        _ => {}
+                    }
                 }
                 Err(e) => {
                     tracing::warn!("transport read failed: {e}");
@@ -644,8 +871,19 @@ impl Pane {
             }
         }
         let replies = self.term.take_output();
-        if !replies.is_empty() {
+        if !replies.is_empty() && self.transfer.is_none() {
             self.send(&replies);
+        }
+        if let Some((at, kind, dir, name)) = self.delayed.clone()
+            && std::time::Instant::now() >= at
+        {
+            self.delayed = None;
+            self.start_receive(kind, dir, &name);
+        }
+        if self.transfer.is_some() || self.delayed.is_some() {
+            self.run_transfer();
+            // Keep going while it runs.
+            got = true;
         }
         if self.transport.is_closed() && !self.closed_announced {
             self.closed_announced = true;
@@ -659,6 +897,13 @@ impl Pane {
     }
 
     pub fn send(&mut self, bytes: &[u8]) {
+        // Typing during a transfer would break it; Ctrl+C stops it.
+        if self.transfer.is_some() {
+            if bytes.contains(&3) {
+                self.cancel_transfer();
+            }
+            return;
+        }
         match self.transport.write(bytes) {
             Ok(()) | Err(TransportError::Closed) => {}
             Err(e) => tracing::warn!("transport write failed: {e}"),

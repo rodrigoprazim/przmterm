@@ -16,7 +16,7 @@ pub struct Command {
     pub default: Option<&'static str>,
 }
 
-pub const COMMANDS: [Command; 20] = [
+pub const COMMANDS: [Command; 22] = [
     Command {
         id: "new_tab",
         label: "New tab (same session)",
@@ -115,6 +115,16 @@ pub const COMMANDS: [Command; 20] = [
     Command {
         id: "open_sftp",
         label: "Connect SFTP session",
+        default: None,
+    },
+    Command {
+        id: "send_files",
+        label: "Send files (Zmodem, Ymodem, Xmodem)",
+        default: None,
+    },
+    Command {
+        id: "receive_files",
+        label: "Receive files (Zmodem, Ymodem, Xmodem)",
         default: None,
     },
 ];

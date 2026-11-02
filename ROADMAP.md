@@ -148,7 +148,9 @@ highlighting, triggers, saved credentials) work in PrzmTerm.
   connection (no new login); uploads (also by dropping files) and downloads
   of files and whole folders with progress and cancel, new folder, rename,
   delete
-- Xmodem, Ymodem and Zmodem
+- [x] Xmodem, Xmodem-1K, Ymodem and Zmodem, sending and receiving, checked
+  against lrzsz; a Zmodem start from `sz` or `rz` on the other side is
+  picked up on its own
 
 ## 0.9.0 — Automation and hardening
 

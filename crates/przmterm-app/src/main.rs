@@ -10,6 +10,7 @@ mod keywords;
 mod pane;
 mod scriptguide;
 mod sftp;
+mod transfer;
 mod vault;
 mod view;
 
@@ -275,6 +276,10 @@ enum Action {
     OpenSftp(usize),
     /// Connects a session and opens an SFTP browser once logged in.
     SftpFor(Box<Session>),
+    /// The Xmodem/Ymodem/Zmodem dialog for this tab: sending or receiving.
+    TransferDialog(usize, bool),
+    /// Stops the transfer of this tab's active pane.
+    CancelTransfer(usize),
     ClosePane,
     FocusPane(usize),
     Reconnect,
@@ -346,6 +351,8 @@ struct PrzmApp {
     shortcuts: keymap::Shortcuts,
     /// The keyboard shortcut editor, when open.
     keymap_editor: Option<keymap::KeymapEditor>,
+    /// The Xmodem/Ymodem/Zmodem dialog.
+    transfer_dialog: Option<transfer::TransferDialog>,
     /// SFTP browsers.
     sftp_windows: Vec<sftp::SftpBrowser>,
     sftp_next: u64,
@@ -461,6 +468,7 @@ impl PrzmApp {
             split_dialog: None,
             script_prompts: Default::default(),
             script_guide: None,
+            transfer_dialog: None,
             sftp_windows: Vec::new(),
             sftp_next: 0,
             sftp_pending: None,
@@ -759,6 +767,20 @@ impl PrzmApp {
                     self.apply(Action::Open(session), ctx);
                 }
             }
+            Action::TransferDialog(t, sending) => {
+                let pane = self.tabs[t].pane();
+                if pane.transport.is_closed() {
+                    self.notice = Some("The session is closed.".into());
+                } else {
+                    // Unix hosts get the lrzsz command typed for them.
+                    let unix = matches!(
+                        pane.transport.protocol(),
+                        przmterm_core::Protocol::Ssh | przmterm_core::Protocol::Telnet
+                    );
+                    self.transfer_dialog = Some(transfer::TransferDialog::new(t, sending, unix));
+                }
+            }
+            Action::CancelTransfer(t) => self.tabs[t].pane_mut().cancel_transfer(),
             Action::ScriptGuide => {
                 self.script_guide
                     .get_or_insert_with(scriptguide::ScriptGuide::new);
@@ -864,6 +886,38 @@ impl PrzmApp {
         }
     }
 
+    /// Transfers' messages, and `rz` on the other side asking for files.
+    fn run_transfers(&mut self, ctx: &egui::Context) {
+        let mut running = false;
+        for pane in self.tabs.iter_mut().flat_map(|t| &mut t.panes) {
+            running |= pane.transfer().is_some();
+            for event in pane.take_transfer_events() {
+                match event {
+                    pane::TransferEvent::Ended(message) => self.notice = Some(message),
+                    pane::TransferEvent::UploadWanted => {
+                        let files = rfd::FileDialog::new()
+                            .set_title("Zmodem: files to send")
+                            .pick_files();
+                        match files {
+                            Some(files) => pane.start_send(
+                                przmterm_transport::modem::Kind::Zmodem,
+                                files,
+                                None,
+                            ),
+                            // Tell rz there is nothing.
+                            None => pane.refuse_upload(),
+                        }
+                    }
+                }
+            }
+        }
+        // Xmodem and Ymodem wait for an answer after each block: run every
+        // frame while a transfer is on.
+        if running {
+            ctx.request_repaint();
+        }
+    }
+
     fn run_queues(&mut self, ctx: &egui::Context) {
         let now = std::time::Instant::now();
         let next = self
@@ -932,6 +986,8 @@ impl PrzmApp {
                 "stop_script" => Action::StopScript(t),
                 "script_guide" => Action::ScriptGuide,
                 "open_sftp" => Action::OpenSftp(t),
+                "send_files" => Action::TransferDialog(t, true),
+                "receive_files" => Action::TransferDialog(t, false),
                 _ => return None,
             },
             Does::Send(text) => Action::Macro(buttonbar::Press {
@@ -978,6 +1034,7 @@ impl PrzmApp {
             || !self.script_prompts.is_empty()
             || self.script_guide.is_some()
             || self.keymap_editor.is_some()
+            || self.transfer_dialog.is_some()
             || self.bundle_dialog.is_some()
             || self.vault.modal()
     }
@@ -1355,6 +1412,19 @@ impl PrzmApp {
             if let keymap::KeymapResult::Closed = editor.show(ctx, &dir, &buttons) {
                 self.keymap_editor = None;
                 self.shortcuts = keymap::Shortcuts::load(Some(&dir));
+            }
+        }
+        if let Some(dialog) = &mut self.transfer_dialog {
+            match dialog.show(ctx) {
+                transfer::Answer::Open => {}
+                transfer::Answer::Cancel => self.transfer_dialog = None,
+                transfer::Answer::Start(start) => {
+                    let t = dialog.tab;
+                    self.transfer_dialog = None;
+                    if let Some(tab) = self.tabs.get_mut(t) {
+                        tab.pane_mut().begin(start);
+                    }
+                }
             }
         }
         // Files dropped outside every SFTP window go to the newest one.
@@ -1803,6 +1873,19 @@ fn tab_menu(
         .is_some_and(|s| s.protocol == przmterm_core::Protocol::Ssh)
         && !tab.pane().transport.is_closed();
     item(ui, ssh_live, "Connect SFTP Session", Action::OpenSftp(i));
+    let live = tab.pane().origin.is_some() && !tab.pane().transport.is_closed();
+    item(
+        ui,
+        live,
+        "Send Files (Zmodem, Ymodem, Xmodem)…",
+        Action::TransferDialog(i, true),
+    );
+    item(
+        ui,
+        live,
+        "Receive Files (Zmodem, Ymodem, Xmodem)…",
+        Action::TransferDialog(i, false),
+    );
     ui.separator();
     // Typing into every pane of this tab: only for split tabs.
     let split = tab.panes.len() > 1;
@@ -2029,6 +2112,7 @@ impl eframe::App for PrzmApp {
         self.run_queues(&ctx);
         self.run_scripts();
         self.run_sftp_pending(&ctx);
+        self.run_transfers(&ctx);
         // "Send to all" is for split panes: off when the tab has one pane.
         if self.tab().panes.len() < 2 {
             self.broadcast = false;
@@ -2211,6 +2295,34 @@ impl eframe::App for PrzmApp {
                         .clicked()
                     {
                         actions.push(Action::ToggleButtons);
+                    }
+                    if let Some((t, p)) = pane.transfer() {
+                        if ui
+                            .small_button("Cancel")
+                            .on_hover_text("Stop the transfer (Ctrl+C in the terminal too)")
+                            .clicked()
+                        {
+                            actions.push(Action::CancelTransfer(self.active_tab));
+                        }
+                        let size = |n: u64| sftp::size_text(n);
+                        let amount = match p.total {
+                            Some(total) if total > 0 => format!(
+                                "{} of {} ({}%)",
+                                size(p.done),
+                                size(total),
+                                p.done * 100 / total
+                            ),
+                            _ => size(p.done),
+                        };
+                        let arrow = if t.sending { "↑" } else { "↓" };
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{arrow} {} {} {amount}",
+                                t.kind.label(),
+                                p.file
+                            ))
+                            .color(egui::Color32::from_rgb(110, 200, 255)),
+                        );
                     }
                     if let Some(name) = pane.script_name() {
                         if ui
