@@ -6,7 +6,7 @@ default-members = ["crates/przmterm-app"]
 
 [workspace.package]
 # Development versions carry a `-dev` suffix; see docs/VERSIONING.md.
-version = "0.6.0-dev"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
