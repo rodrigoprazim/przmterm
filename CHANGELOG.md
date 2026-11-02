@@ -29,7 +29,7 @@ All notable changes to PrzmTerm are recorded here. The format follows
   The `save_password` setting makes this always or never.
 - Session editor: create, edit, duplicate and delete sessions from the tree
   (right-click, or + for a new one). Only values set in the file are written;
-  empty fields show the value they inherit and where it comes from. The folder
+  empty fields show the value they inherit in grey. The folder
   is chosen from a compact tree, the terminal type from a list, and the key
   file with the system file dialog.
 - Folders: right-click a folder to add a session or a subfolder, rename it,
@@ -47,7 +47,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
   log file name listing the variables, examples and the next file name.
 - Drag sessions onto folders (or the top level) to move them, after unlocking
   the padlock next to *Sessions*.
-- Enter saves and Esc cancels in the editor and the folder dialogs.
+- Enter saves and Esc cancels in the editor and the folder dialogs. Dialogs
+  open in the middle of the window.
 
 ### Fixed
 

@@ -78,6 +78,12 @@ Checked on Linux against OpenSSH 9.6 and on macOS against the maintainer's serve
 - Button bar and quick commands
 - Send input to several tabs at once
 - Keyword highlighting and regex triggers
+- Password vault: an encrypted file (master password, Argon2id +
+  XChaCha20-Poly1305) holding user names, passwords and key passphrases.
+  Sessions and folders refer to a vault entry instead of storing a user name,
+  so one credential change updates every device that uses it. Works where no
+  OS keychain is available and can be copied between machines; the OS
+  keychain stays available as an alternative.
 
 ## 0.7.0 — Scripting
 

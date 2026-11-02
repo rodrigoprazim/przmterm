@@ -131,8 +131,6 @@ fn field_label(key: &str) -> &'static str {
 struct Context<'a> {
     /// Effective values coming from above.
     inherited: &'a SessionSettings,
-    /// Where they come from, for hints ("folder", "global"…); empty for built-ins.
-    source: &'a str,
     protocol: Protocol,
     /// Default log folder, `<config>/logs`.
     logs_dir: String,
@@ -157,18 +155,11 @@ impl Context<'_> {
         }
     }
 
+    /// The inherited value, shown in grey in an empty field.
     fn hint(&self, key: &str) -> String {
-        match self.inherited.field_text(key) {
-            Some(v) if self.source.is_empty() => v,
-            Some(v) => format!("from {}: {v}", self.source),
-            None => self.builtin(key),
-        }
-    }
-
-    /// "from folder" when the inherited value comes from a file, else nothing.
-    fn note(&self, key: &str) -> Option<String> {
-        (self.inherited.field_text(key).is_some() && !self.source.is_empty())
-            .then(|| format!("from {}", self.source))
+        self.inherited
+            .field_text(key)
+            .unwrap_or_else(|| self.builtin(key))
     }
 }
 
@@ -366,32 +357,16 @@ impl Editor {
         let mut result = EditorResult::Open;
         let mut open = true;
         let none = SessionSettings::default();
-        let (inherited, source): (SessionSettings, &str) = match &self.target {
-            Target::Session { trail, .. } => match root.find(trail) {
-                Some(f) => (
-                    f.settings.clone(),
-                    if trail.is_empty() { "global" } else { "folder" },
-                ),
-                None => (none.clone(), ""),
-            },
-            Target::Folder { trail, .. } => match root.find(trail) {
-                Some(f) => (
-                    f.inherited.clone(),
-                    if trail.len() <= 1 {
-                        "global"
-                    } else {
-                        "parent folder"
-                    },
-                ),
-                None => (none.clone(), ""),
-            },
-            Target::Global => (none.clone(), ""),
-        };
+        let inherited: SessionSettings = match &self.target {
+            Target::Session { trail, .. } => root.find(trail).map(|f| f.settings.clone()),
+            Target::Folder { trail, .. } => root.find(trail).map(|f| f.inherited.clone()),
+            Target::Global => None,
+        }
+        .unwrap_or(none);
         let protocol = self.protocol.or(inherited.protocol).unwrap_or_default();
         let logs_dir = tilde(&config_dir.join(przmterm_session::LOGS_DIR));
         let cx = Context {
             inherited: &inherited,
-            source,
             protocol,
             logs_dir,
         };
@@ -404,6 +379,8 @@ impl Editor {
         });
 
         egui::Window::new(self.title.clone())
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(ctx.content_rect().center())
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -567,7 +544,10 @@ impl Editor {
                 field(ui, "Host", &mut self.host, "10.0.0.1 or router.example.com");
             }
             field(ui, "Port", &mut self.port, &cx.hint("port"));
-            field(ui, "User name", &mut self.username, &cx.hint("username"));
+            // A user name for every session makes no sense globally.
+            if self.target != Target::Global {
+                field(ui, "User name", &mut self.username, &cx.hint("username"));
+            }
             ui.label("Key file");
             ui.horizontal(|ui| {
                 ui.add(
@@ -587,7 +567,7 @@ impl Editor {
                 ui,
                 &mut self.save_password,
                 cx.inherited.save_password,
-                cx.note("save_password"),
+                None,
             );
             ui.end_row();
         }
@@ -623,7 +603,7 @@ impl Editor {
             &mut self.log,
             cx.inherited.log.enabled.unwrap_or(false),
             ["yes", "no"],
-            cx.note("log.enabled"),
+            None,
             &cx.hint("log.enabled"),
         );
         ui.end_row();

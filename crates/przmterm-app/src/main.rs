@@ -342,6 +342,8 @@ impl PrzmApp {
             let mut close = false;
             let mut done: Option<String> = None;
             egui::Window::new(dialog.title)
+                .pivot(egui::Align2::CENTER_CENTER)
+                .default_pos(ctx.content_rect().center())
                 .collapsible(false)
                 .resizable(false)
                 .show(ctx, |ui| {
@@ -400,6 +402,8 @@ impl PrzmApp {
                 ),
             };
             egui::Window::new(title)
+                .pivot(egui::Align2::CENTER_CENTER)
+                .default_pos(ctx.content_rect().center())
                 .collapsible(false)
                 .resizable(false)
                 .show(ctx, |ui| {
