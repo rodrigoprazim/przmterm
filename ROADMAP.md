@@ -152,6 +152,9 @@ highlighting, triggers, saved credentials) work in PrzmTerm.
   against lrzsz; a Zmodem start from `sz` or `rz` on the other side is
   picked up on its own
 
+**Gate:** files moved to and from the maintainer's servers (SFTP, Zmodem)
+and, when a device is at hand, a serial console (Xmodem or Ymodem).
+
 ## 0.9.0 — Automation and hardening
 
 - Tabs and windows: tab groups (close a group, move tabs to a new group, send
