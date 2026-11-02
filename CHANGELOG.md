@@ -11,6 +11,13 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 - Keepalive interval per session (`keepalive`, seconds; 0 turns it off):
   SSH keepalives, Telnet NOPs. Default 30 s.
+- Tunnels (`[[forward]]` in the session file, *Tunnels* in the editor):
+  local (`-L`), remote (`-R`) and dynamic SOCKS 4/4a/5 (`-D`) port
+  forwarding, opened after login and closed with the session. A port already
+  in use is reported without ending the session.
+- Jump hosts (`jump_host`): connect through another SSH server first, named
+  by saved session or as `user@host:port`; a jump host's own jump host is
+  used too (chained). Each hop asks for its own login in the terminal.
 - Automatic reconnect (`auto_reconnect`): when a connection drops or cannot
   be made, the pane reconnects after 2, 5, 10, 20, then every 30 s. Enter
   reconnects at once, Ctrl+C stops it. Not after a normal logout or a failed

@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{Datelike, Timelike};
 use przmterm_core::Protocol;
+pub use przmterm_core::forward::{Forward, ForwardKind, Tunnel};
 pub use przmterm_core::serial::{
     COMMON_BAUD_RATES, DEFAULT_BAUD_RATE, DEFAULT_DATA_BITS, DEFAULT_STOP_BITS, FlowControl,
     Parity, SerialLine,
@@ -115,6 +116,10 @@ pub struct SessionSettings {
     /// Reconnect on its own when the connection drops or cannot be made.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_reconnect: Option<bool>,
+    /// SSH: connect through this server first: the name of another session,
+    /// or `user@host:port`. Its own jump host is used too (chained).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jump_host: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub serial_port: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -129,6 +134,10 @@ pub struct SessionSettings {
     pub stop_bits: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flow_control: Option<FlowControl>,
+    /// SSH tunnels, `[[forward]]` tables. A layer that sets any replaces
+    /// the inherited list.
+    #[serde(rename = "forward", skip_serializing_if = "Option::is_none")]
+    pub forwards: Option<Vec<Forward>>,
     #[serde(skip_serializing_if = "is_default")]
     pub terminal: TerminalSettings,
     #[serde(skip_serializing_if = "is_default")]
@@ -140,7 +149,7 @@ pub struct SessionSettings {
 }
 
 /// Keys of the individual settings, used to compare and copy them.
-pub const FIELDS: [&str; 20] = [
+pub const FIELDS: [&str; 22] = [
     "protocol",
     "host",
     "port",
@@ -150,6 +159,8 @@ pub const FIELDS: [&str; 20] = [
     "debug",
     "keepalive",
     "auto_reconnect",
+    "jump_host",
+    "forward",
     "serial_port",
     "baud_rate",
     "data_bits",
@@ -176,6 +187,8 @@ impl SessionSettings {
             "debug" => self.debug = from.debug,
             "keepalive" => self.keepalive = from.keepalive,
             "auto_reconnect" => self.auto_reconnect = from.auto_reconnect,
+            "jump_host" => self.jump_host = from.jump_host.clone(),
+            "forward" => self.forwards = from.forwards.clone(),
             "serial_port" => self.serial_port = from.serial_port.clone(),
             "baud_rate" => self.baud_rate = from.baud_rate,
             "data_bits" => self.data_bits = from.data_bits,
@@ -204,6 +217,17 @@ impl SessionSettings {
             "debug" => self.debug.map(yes_no),
             "keepalive" => self.keepalive.map(|v| v.to_string()),
             "auto_reconnect" => self.auto_reconnect.map(yes_no),
+            "jump_host" => self.jump_host.clone(),
+            "forward" => self.forwards.as_ref().map(|f| {
+                if f.is_empty() {
+                    "none".to_string()
+                } else {
+                    f.iter()
+                        .map(|f| f.to_string())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                }
+            }),
             "serial_port" => self.serial_port.clone(),
             "baud_rate" => self.baud_rate.map(|v| v.to_string()),
             "data_bits" => self.data_bits.map(|v| v.to_string()),
@@ -243,6 +267,8 @@ impl SessionSettings {
             debug: pick(&self.debug, &over.debug),
             keepalive: pick(&self.keepalive, &over.keepalive),
             auto_reconnect: pick(&self.auto_reconnect, &over.auto_reconnect),
+            jump_host: pick(&self.jump_host, &over.jump_host),
+            forwards: pick(&self.forwards, &over.forwards),
             serial_port: pick(&self.serial_port, &over.serial_port),
             baud_rate: pick(&self.baud_rate, &over.baud_rate),
             data_bits: pick(&self.data_bits, &over.data_bits),
@@ -326,6 +352,9 @@ pub struct Session {
     /// `None` when keepalives are off.
     pub keepalive: Option<std::time::Duration>,
     pub auto_reconnect: bool,
+    /// See [`SessionSettings::jump_host`].
+    pub jump_host: Option<String>,
+    pub tunnels: Vec<Tunnel>,
     pub term_type: String,
     pub scrollback: usize,
     pub log_enabled: bool,
@@ -407,6 +436,17 @@ impl Session {
                 secs => Some(std::time::Duration::from_secs(u64::from(secs))),
             },
             auto_reconnect: settings.auto_reconnect.unwrap_or(false),
+            jump_host: settings.jump_host.clone().filter(|j| !j.trim().is_empty()),
+            tunnels: settings
+                .forwards
+                .iter()
+                .flatten()
+                .enumerate()
+                .map(|(i, f)| {
+                    f.tunnel()
+                        .map_err(|e| invalid(&format!("tunnel {}: {e}", i + 1)))
+                })
+                .collect::<Result<_, _>>()?,
             term_type: settings
                 .terminal
                 .term_type
@@ -1373,6 +1413,39 @@ mod tests {
         bad.stop_bits = Some(3);
         assert!(Session::resolve("con", Vec::new(), "con.toml", &bad).is_err());
         assert!(SessionSettings::from_toml("parity = 'mark'").is_err());
+    }
+
+    #[test]
+    fn tunnels_and_jump_hosts() {
+        let folder = SessionSettings::from_toml(
+            "jump_host = 'bastion'\n[[forward]]\ntype = 'dynamic'\nlisten = '1080'",
+        )
+        .unwrap();
+        let own = SessionSettings::from_toml(
+            "host = 'db'\n[[forward]]\nlisten = '5432'\ntarget = 'localhost:5432'",
+        )
+        .unwrap();
+        // The session's list replaces the folder's; the jump host is inherited.
+        let merged = folder.overlay(&own);
+        let s = Session::resolve("db", Vec::new(), "db.toml", &merged).unwrap();
+        assert_eq!(s.jump_host.as_deref(), Some("bastion"));
+        assert_eq!(s.tunnels.len(), 1);
+        assert_eq!(
+            s.tunnels[0].to_string(),
+            "L 127.0.0.1:5432 → localhost:5432"
+        );
+        assert_eq!(
+            folder.field_text("forward").as_deref(),
+            Some("D 127.0.0.1:1080")
+        );
+        // Written back as [[forward]] tables.
+        let toml = own.to_toml();
+        assert!(toml.contains("[[forward]]"), "{toml}");
+        assert_eq!(SessionSettings::from_toml(&toml).unwrap(), own);
+
+        let bad = SessionSettings::from_toml("host = 'x'\n[[forward]]\nlisten = '80'").unwrap();
+        let err = Session::resolve("x", Vec::new(), "x.toml", &bad).unwrap_err();
+        assert!(err.to_string().contains("tunnel 1"), "{err}");
     }
 
     #[test]

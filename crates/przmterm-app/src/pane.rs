@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use przmterm_core::Protocol;
@@ -19,10 +19,69 @@ use crate::demo::DemoShell;
 use crate::keychain::Keychain;
 use crate::view::TerminalView;
 
-/// Paths a pane needs from the application.
+/// What a pane needs from the application.
 pub struct Env {
     pub known_hosts: PathBuf,
     pub config_dir: Option<PathBuf>,
+    /// Every saved session, for jump hosts named by session.
+    pub sessions: Vec<Session>,
+}
+
+/// Jump hosts deeper than this are taken as a loop.
+const MAX_JUMPS: usize = 5;
+
+/// The SSH settings of a session, with its jump hosts resolved.
+fn ssh_config(session: &Session, env: &Env, depth: usize) -> Result<SshConfig, String> {
+    let Target::Network {
+        host,
+        port,
+        username,
+    } = &session.target
+    else {
+        return Err(format!("{} is not an SSH session", session.name));
+    };
+    let mut config = SshConfig::new(host.clone(), *port, &env.known_hosts);
+    config.username = username.clone();
+    config.term_type = session.term_type.clone();
+    config.identity_files = session.identity_file.iter().cloned().collect();
+    config.debug = session.debug;
+    config.keepalive = session.keepalive;
+    // A jump host's own tunnels are not opened.
+    config.forwards = if depth == 0 {
+        session.tunnels.clone()
+    } else {
+        Vec::new()
+    };
+    config.password_store = Some(Store(Arc::new(Keychain)));
+    config.save_password = match session.save_password {
+        None => SavePassword::Ask,
+        Some(true) => SavePassword::Always,
+        Some(false) => SavePassword::Never,
+    };
+    if let Some(jump) = &session.jump_host {
+        if depth >= MAX_JUMPS {
+            return Err(format!(
+                "Too many jump hosts from {} (is there a loop?)",
+                session.name
+            ));
+        }
+        let via = find_jump(jump, env)?;
+        config.jump = Some(Box::new(ssh_config(&via, env, depth + 1)?));
+    }
+    Ok(config)
+}
+
+/// A jump host: a saved session by name, else `user@host:port`.
+fn find_jump(name: &str, env: &Env) -> Result<Session, String> {
+    let name = name.trim();
+    if let Some(s) = env
+        .sessions
+        .iter()
+        .find(|s| s.name.eq_ignore_ascii_case(name) && s.protocol == Protocol::Ssh)
+    {
+        return Ok(s.clone());
+    }
+    Session::quick_connect(name).map_err(|e| format!("Jump host `{name}`: {e}"))
 }
 
 /// A plain-text log of everything a pane receives.
@@ -311,30 +370,11 @@ impl Pane {
 
 /// Starts the connection behind a session.
 fn connect(session: &Session, env: &Env, size: Size, waker: Waker) -> Box<dyn Transport> {
-    let known_hosts: &Path = &env.known_hosts;
     match (&session.protocol, &session.target) {
-        (
-            Protocol::Ssh,
-            Target::Network {
-                host,
-                port,
-                username,
-            },
-        ) => {
-            let mut config = SshConfig::new(host.clone(), *port, known_hosts);
-            config.username = username.clone();
-            config.term_type = session.term_type.clone();
-            config.identity_files = session.identity_file.iter().cloned().collect();
-            config.debug = session.debug;
-            config.keepalive = session.keepalive;
-            config.password_store = Some(Store(Arc::new(Keychain)));
-            config.save_password = match session.save_password {
-                None => SavePassword::Ask,
-                Some(true) => SavePassword::Always,
-                Some(false) => SavePassword::Never,
-            };
-            Box::new(SshTransport::connect(config, size, waker))
-        }
+        (Protocol::Ssh, Target::Network { .. }) => match ssh_config(session, env, 0) {
+            Ok(config) => Box::new(SshTransport::connect(config, size, waker)),
+            Err(e) => message(&format!("\x1b[31m{e}\x1b[0m\r\n")),
+        },
         (Protocol::Telnet, Target::Network { host, port, .. }) => {
             let mut config = TelnetConfig::new(host.clone(), *port);
             config.term_type = session.term_type.clone();
@@ -479,6 +519,37 @@ mod tests {
         pane.origin = Some(session);
         pane.transport = Box::new(Ended(ending));
         pane
+    }
+
+    fn session(toml: &str, name: &str) -> Session {
+        let settings = przmterm_session::SessionSettings::from_toml(toml).unwrap();
+        Session::resolve(name, Vec::new(), format!("{name}.toml"), &settings).unwrap()
+    }
+
+    #[test]
+    fn jump_hosts_resolve_by_name_or_address_and_loops_stop() {
+        let bastion = session("host = 'bastion.example'\nusername = 'ops'", "Bastion");
+        let db = session("host = '10.0.0.5'\njump_host = 'bastion'", "db");
+        let env = Env {
+            known_hosts: PathBuf::from("/tmp/kh"),
+            config_dir: None,
+            sessions: vec![bastion, db.clone()],
+        };
+        let config = ssh_config(&db, &env, 0).unwrap();
+        let jump = config.jump.unwrap();
+        assert_eq!(jump.host, "bastion.example");
+        assert_eq!(jump.username.as_deref(), Some("ops"));
+
+        let direct = session("host = '10.0.0.6'\njump_host = 'me@gw:2200'", "x");
+        let jump = ssh_config(&direct, &env, 0).unwrap().jump.unwrap();
+        assert_eq!((jump.host.as_str(), jump.port), ("gw", 2200));
+
+        let looped = session("host = 'a'\njump_host = 'loop'", "loop");
+        let env = Env {
+            sessions: vec![looped.clone()],
+            ..env
+        };
+        assert!(ssh_config(&looped, &env, 0).unwrap_err().contains("loop"));
     }
 
     #[test]

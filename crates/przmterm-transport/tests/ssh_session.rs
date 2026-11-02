@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use przmterm_transport::ssh::{PasswordStore, SavePassword, SshConfig, SshTransport, Store};
+use przmterm_transport::ssh::{
+    Forward, ForwardKind, PasswordStore, SavePassword, SshConfig, SshTransport, Store,
+};
 use przmterm_transport::{Size, Transport, noop_waker};
 use russh::keys::{Algorithm, PrivateKey};
 use russh::server::{self, Auth, Msg, Session};
@@ -23,6 +25,8 @@ struct TestServer {
     /// Session channels allowed per connection (0 = unlimited).
     max_channels: usize,
     channels: usize,
+    /// Session channels; tunnel channels are not echoed.
+    shells: Vec<ChannelId>,
 }
 
 impl TestServer {
@@ -111,6 +115,7 @@ impl server::Handler for TestServer {
                 .await;
         } else {
             self.channels += 1;
+            self.shells.push(_channel.id());
             reply.accept().await;
         }
         Ok(())
@@ -151,6 +156,9 @@ impl server::Handler for TestServer {
         data: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        if !self.shells.contains(&channel) {
+            return Ok(());
+        }
         if data == b"exit\r" {
             session.exit_status_request(channel, 3)?;
             session.close(channel)?;
@@ -158,6 +166,71 @@ impl server::Handler for TestServer {
             session.data(channel, data.to_vec())?;
         }
         Ok(())
+    }
+
+    /// Like OpenSSH's `-L` side: connect where the client asks.
+    async fn channel_open_direct_tcpip(
+        &mut self,
+        channel: Channel<Msg>,
+        host_to_connect: &str,
+        port_to_connect: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: server::ChannelOpenHandle,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        let port = u16::try_from(port_to_connect).unwrap_or(0);
+        match tokio::net::TcpStream::connect((host_to_connect, port)).await {
+            Ok(mut socket) => {
+                reply.accept().await;
+                tokio::spawn(async move {
+                    let mut stream = channel.into_stream();
+                    let _ = tokio::io::copy_bidirectional(&mut socket, &mut stream).await;
+                });
+            }
+            Err(_) => {
+                reply.reject(russh::ChannelOpenFailure::ConnectFailed).await;
+            }
+        }
+        Ok(())
+    }
+
+    /// Like OpenSSH's `-R` side: listen and hand connections to the client.
+    async fn tcpip_forward(
+        &mut self,
+        address: &str,
+        port: &mut u32,
+        session: &mut Session,
+    ) -> Result<bool, Self::Error> {
+        let Ok(listener) =
+            tokio::net::TcpListener::bind((address, u16::try_from(*port).unwrap_or(0))).await
+        else {
+            return Ok(false);
+        };
+        let bound = u32::from(listener.local_addr().unwrap().port());
+        *port = bound;
+        let (handle, address) = (session.handle(), address.to_string());
+        tokio::spawn(async move {
+            while let Ok((mut socket, peer)) = listener.accept().await {
+                let handle = handle.clone();
+                let address = address.clone();
+                tokio::spawn(async move {
+                    if let Ok(channel) = handle
+                        .channel_open_forwarded_tcpip(
+                            address,
+                            bound,
+                            peer.ip().to_string(),
+                            u32::from(peer.port()),
+                        )
+                        .await
+                    {
+                        let mut stream = channel.into_stream();
+                        let _ = tokio::io::copy_bidirectional(&mut socket, &mut stream).await;
+                    }
+                });
+            }
+        });
+        Ok(true)
     }
 
     async fn window_change_request(
@@ -230,6 +303,7 @@ fn start_server_full(
                 stage: 0,
                 max_channels,
                 channels: 0,
+                shells: Vec::new(),
             };
             for _ in 0..connections {
                 let (socket, _) = listener.accept().await.unwrap();
@@ -474,7 +548,7 @@ fn debug_shows_why_a_login_fails() {
         "debug: Key exchange: ",
         "debug: Server host key: ssh-ed25519 SHA256:",
         "is recorded in",
-        "debug: Authenticating as 'alice'",
+        "debug: Authenticating to 127.0.0.1 as 'alice'",
         "server now allows: password",
         "debug: Server does not accept public keys",
     ] {
@@ -486,6 +560,186 @@ fn debug_shows_why_a_login_fails() {
     }
     s.send("nope\r");
     s.wait_for("debug: Password (typed): rejected; server now allows: password");
+}
+
+/// A TCP echo server on a random port, as the far end of tunnels.
+fn echo_server() -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            std::thread::spawn(move || {
+                let mut reader = stream.try_clone().unwrap();
+                let mut writer = stream;
+                let _ = std::io::copy(&mut reader, &mut writer);
+            });
+        }
+    });
+    port
+}
+
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// Sends `msg` over `stream` and expects it back.
+fn round_trip(stream: &mut std::net::TcpStream, msg: &[u8]) {
+    use std::io::{Read, Write};
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    stream.write_all(msg).unwrap();
+    let mut back = vec![0u8; msg.len()];
+    stream.read_exact(&mut back).unwrap();
+    assert_eq!(back, msg);
+}
+
+fn tunnel(kind: ForwardKind, listen: &str, target: &str) -> przmterm_transport::ssh::Tunnel {
+    Forward {
+        kind,
+        listen: listen.into(),
+        target: target.into(),
+    }
+    .tunnel()
+    .unwrap()
+}
+
+/// Logs in with the password, accepting the host key.
+fn log_in(s: &mut Screen) {
+    s.wait_for("(yes/no)? ");
+    s.send("yes\r");
+    s.wait_for("password: ");
+    s.send("secret\r");
+    s.wait_for("welcome");
+}
+
+#[test]
+fn local_remote_and_dynamic_tunnels_carry_data() {
+    use std::io::{Read, Write};
+    let dir = tempfile::tempdir().unwrap();
+    let echo = echo_server();
+    let port = start_server(host_key(), 1);
+    let (local, socks, remote) = (free_port(), free_port(), free_port());
+    let mut c = config(port, &dir.path().join("known_hosts"));
+    c.forwards = vec![
+        tunnel(
+            ForwardKind::Local,
+            &local.to_string(),
+            &format!("127.0.0.1:{echo}"),
+        ),
+        tunnel(ForwardKind::Dynamic, &socks.to_string(), ""),
+        tunnel(
+            ForwardKind::Remote,
+            &format!("127.0.0.1:{remote}"),
+            &format!("127.0.0.1:{echo}"),
+        ),
+    ];
+    let mut s = Screen::connect(c);
+    log_in(&mut s);
+    s.wait_for(&format!("Tunnel R 127.0.0.1:{remote}"));
+    assert!(
+        s.text
+            .contains(&format!("Tunnel L 127.0.0.1:{local} → 127.0.0.1:{echo}"))
+    );
+
+    // -L: here → server → echo.
+    let mut l = std::net::TcpStream::connect(("127.0.0.1", local)).unwrap();
+    round_trip(&mut l, b"through the local tunnel");
+
+    // -D: SOCKS 5 by name, then SOCKS 4a.
+    let mut d = std::net::TcpStream::connect(("127.0.0.1", socks)).unwrap();
+    d.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    d.write_all(&[5, 1, 0]).unwrap();
+    let mut hello = [0u8; 2];
+    d.read_exact(&mut hello).unwrap();
+    assert_eq!(hello, [5, 0]);
+    let name = b"localhost";
+    let mut req = vec![5, 1, 0, 3, name.len() as u8];
+    req.extend(name);
+    req.extend(echo.to_be_bytes());
+    d.write_all(&req).unwrap();
+    let mut reply = [0u8; 10];
+    d.read_exact(&mut reply).unwrap();
+    assert_eq!(reply[1], 0, "SOCKS 5 connect succeeded");
+    round_trip(&mut d, b"through socks5");
+
+    let mut d4 = std::net::TcpStream::connect(("127.0.0.1", socks)).unwrap();
+    d4.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let mut req = vec![4, 1];
+    req.extend(echo.to_be_bytes());
+    req.extend([0, 0, 0, 1, 0]);
+    req.extend(b"127.0.0.1\0");
+    d4.write_all(&req).unwrap();
+    let mut reply = [0u8; 8];
+    d4.read_exact(&mut reply).unwrap();
+    assert_eq!(reply[1], 0x5a, "SOCKS 4a connect succeeded");
+    round_trip(&mut d4, b"through socks4a");
+
+    // -R: server port → back through us → echo.
+    let mut r = std::net::TcpStream::connect(("127.0.0.1", remote)).unwrap();
+    round_trip(&mut r, b"through the remote tunnel");
+
+    // The tunnels end with the session.
+    s.send("exit\r");
+    s.wait_closed();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while std::net::TcpStream::connect(("127.0.0.1", local)).is_ok() {
+        assert!(Instant::now() < deadline, "local tunnel still listening");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn a_tunnel_on_a_busy_port_is_reported_and_the_session_goes_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let port = start_server(host_key(), 1);
+    let busy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let busy_port = busy.local_addr().unwrap().port();
+    let mut c = config(port, &dir.path().join("known_hosts"));
+    c.forwards = vec![tunnel(
+        ForwardKind::Local,
+        &busy_port.to_string(),
+        "127.0.0.1:1",
+    )];
+    let mut s = Screen::connect(c);
+    log_in(&mut s);
+    s.wait_for("cannot listen");
+    s.send("still here");
+    s.wait_for("still here");
+}
+
+#[test]
+fn logs_in_through_a_jump_host() {
+    let dir = tempfile::tempdir().unwrap();
+    let known_hosts = dir.path().join("known_hosts");
+    // The server is its own jump host: two connections.
+    let port = start_server(host_key(), 2);
+    let mut c = config(port, &known_hosts);
+    let mut jump = config(port, &known_hosts);
+    jump.username = Some("alice".into());
+    c.jump = Some(Box::new(jump));
+    let mut s = Screen::connect(c);
+    s.wait_for("(yes/no)? ");
+    s.send("yes\r");
+    s.wait_for("password: ");
+    s.send("secret\r");
+    s.wait_for("through 127.0.0.1");
+    // Wait for the target's own password prompt (the second one).
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while s.text.matches("password: ").count() < 2 {
+        assert!(Instant::now() < deadline, "no second prompt:\n{}", s.text);
+        s.pump();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // The same host key, already learnt: no second question.
+    s.send("secret\r");
+    s.wait_for("welcome");
+    s.send("hi");
+    s.wait_for("hi");
 }
 
 #[test]

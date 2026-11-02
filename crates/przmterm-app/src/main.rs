@@ -152,7 +152,7 @@ struct NameDialog {
 /// What a confirmation dialog would delete.
 #[derive(Clone)]
 enum Deletion {
-    Session(Session),
+    Session(Box<Session>),
     Folder {
         dir: PathBuf,
         name: String,
@@ -201,6 +201,13 @@ impl PrzmApp {
                 .unwrap_or_else(std::env::temp_dir)
                 .join(przmterm_session::KNOWN_HOSTS_FILE),
             config_dir: self.config_dir.clone(),
+            sessions: self
+                .sessions
+                .root
+                .all_sessions()
+                .into_iter()
+                .cloned()
+                .collect(),
         }
     }
 
@@ -847,7 +854,7 @@ impl eframe::App for PrzmApp {
                                     self.editor = Some(Editor::duplicate(&s))
                                 }
                                 TreeAction::Delete(s) => {
-                                    self.confirm_delete = Some(Deletion::Session(s))
+                                    self.confirm_delete = Some(Deletion::Session(Box::new(s)))
                                 }
                                 TreeAction::Move(path, dir) => {
                                     self.notice =

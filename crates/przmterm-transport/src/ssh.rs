@@ -23,6 +23,7 @@ use tokio::sync::{Mutex, mpsc};
 
 use crate::pipe::{Closed, Cmd, Output, Pipe, runtime};
 use crate::{Ending, Protocol, Size, Transport, TransportError, Waker};
+pub use przmterm_core::forward::{Forward, ForwardKind, HostPort, Tunnel};
 
 /// Default key files tried after the agent, in this order (like OpenSSH).
 const DEFAULT_IDENTITIES: [&str; 3] = ["id_ed25519", "id_ecdsa", "id_rsa"];
@@ -82,6 +83,11 @@ pub struct SshConfig {
     /// Show every step of the connection and login in the terminal, like
     /// `ssh -v`, to find out why a login fails.
     pub debug: bool,
+    /// Connect through this server first (ProxyJump). Jump hosts can have
+    /// their own jump host.
+    pub jump: Option<Box<SshConfig>>,
+    /// Tunnels opened once logged in.
+    pub forwards: Vec<Tunnel>,
 }
 
 impl SshConfig {
@@ -105,6 +111,8 @@ impl SshConfig {
             password_store: None,
             save_password: SavePassword::Ask,
             debug: false,
+            jump: None,
+            forwards: Vec::new(),
         }
     }
 }
@@ -402,14 +410,21 @@ fn fingerprint(key: &PublicKey) -> String {
     )
 }
 
-struct ClientHandler {
+pub(crate) struct ClientHandler {
     host: String,
     port: u16,
     known_hosts: PathBuf,
     extra_known_hosts: Vec<PathBuf>,
     input: Arc<Mutex<Input>>,
     out: Output,
+    /// Where connections to our remote forwards go.
+    remote: RemoteTargets,
+    /// The jump host this connection runs through, kept alive with it.
+    _jump: Option<Arc<Handle>>,
 }
+
+/// Remote forwards by the port the server listens on, with their targets.
+pub(crate) type RemoteTargets = Arc<std::sync::Mutex<Vec<(u32, HostPort)>>>;
 
 impl ClientHandler {
     fn warn_changed(&self, offered: &PublicKey, path: &Path, line: usize) {
@@ -524,6 +539,35 @@ impl client::Handler for ClientHandler {
         _session: &mut client::Session,
     ) -> Result<(), Self::Error> {
         self.out.lines(banner);
+        Ok(())
+    }
+
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        _connected_address: &str,
+        connected_port: u32,
+        originator_address: &str,
+        originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        let target = self.remote.lock().ok().and_then(|r| {
+            r.iter()
+                .find(|(port, _)| *port == connected_port)
+                .map(|(_, t)| t.clone())
+        });
+        let Some(target) = target else {
+            reply
+                .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+            return Ok(());
+        };
+        reply.accept().await;
+        self.out.debug(&format!(
+            "Remote tunnel: {originator_address}:{originator_port} → {target}"
+        ));
+        crate::forward::serve_remote(channel, target, self.out.clone());
         Ok(())
     }
 
@@ -735,58 +779,113 @@ async fn run_session(
     out: &Output,
     shared: &Shared,
 ) -> Result<Option<u32>, End> {
-    out.notice(&format!("Connecting to {}:{}…", config.host, config.port));
-
-    // Only resolving and the TCP connect are timed: the host key question
-    // may take a while.
-    let stream = connect_tcp(config, out).await?;
-    let _ = stream.set_nodelay(true);
-    if let Some(every) = config.keepalive {
-        out.debug(&format!("Keepalive every {} s", every.as_secs()));
-    }
-
-    let ssh_config = Arc::new(client::Config {
-        keepalive_interval: config.keepalive,
-        keepalive_max: 3,
-        inactivity_timeout: None,
-        nodelay: true,
-        ..Default::default()
-    });
-    let handler = ClientHandler {
-        host: config.host.clone(),
-        port: config.port,
-        known_hosts: config.known_hosts.clone(),
-        extra_known_hosts: config.extra_known_hosts.clone(),
-        input: input.clone(),
-        out: out.clone(),
-    };
-    let mut handle = match client::connect_stream(ssh_config, stream, handler).await {
-        Ok(h) => h,
-        Err(russh::Error::UnknownKey) => {
-            return Err(End::Failed("Host key verification failed.".into()));
-        }
-        Err(e) => return Err(End::Unreachable(format!("SSH handshake failed: {e}"))),
-    };
-
-    let user = match config.username.as_deref().filter(|u| !u.is_empty()) {
-        Some(u) => u.to_string(),
-        None => {
-            let mut input = input.lock().await;
-            out.text("login as: ");
-            input.read_line(out, true).await?.trim().to_string()
-        }
-    };
-    out.debug(&format!("Authenticating as '{user}'"));
-
-    authenticate(&mut handle, config, &user, input, out).await?;
-
-    let handle = Arc::new(handle);
+    let remote = RemoteTargets::default();
+    let handle = Arc::new(login(config, input, out, remote.clone(), false).await?);
     if let Ok(mut slot) = shared.lock() {
         *slot = Some(Arc::downgrade(&handle));
     }
+    let tunnels = crate::forward::start(&handle, &config.forwards, &remote, out).await;
     let result = run_channel(&handle, &config.term_type, input, out, false).await;
+    // The tunnels belong to this pane's session.
+    for task in tunnels {
+        task.abort();
+    }
     release(handle).await;
     result
+}
+
+/// Something an SSH connection can run over: TCP, or a channel through a
+/// jump host.
+trait Stream: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> Stream for T {}
+
+/// Connects (through the jump hosts, if any) and logs in.
+fn login<'a>(
+    config: &'a SshConfig,
+    input: &'a Arc<Mutex<Input>>,
+    out: &'a Output,
+    remote: RemoteTargets,
+    is_jump: bool,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Handle, End>> + Send + 'a>> {
+    Box::pin(async move {
+        let (stream, jump): (Box<dyn Stream>, Option<Arc<Handle>>) = match &config.jump {
+            None => {
+                out.notice(&format!("Connecting to {}:{}…", config.host, config.port));
+                // Only resolving and the TCP connect are timed: the host key
+                // question may take a while.
+                let stream = connect_tcp(config, out).await?;
+                let _ = stream.set_nodelay(true);
+                (Box::new(stream), None)
+            }
+            Some(via) => {
+                let jump = Arc::new(login(via, input, out, RemoteTargets::default(), true).await?);
+                out.notice(&format!(
+                    "Connecting to {}:{} through {}…",
+                    config.host, config.port, via.host
+                ));
+                let channel = jump
+                    .channel_open_direct_tcpip(
+                        config.host.as_str(),
+                        u32::from(config.port),
+                        "127.0.0.1",
+                        0,
+                    )
+                    .await
+                    .map_err(|e| {
+                        End::Unreachable(format!(
+                            "The jump host {} could not reach {}:{}: {e}",
+                            via.host, config.host, config.port
+                        ))
+                    })?;
+                (Box::new(channel.into_stream()), Some(jump))
+            }
+        };
+        if let Some(every) = config.keepalive {
+            out.debug(&format!("Keepalive every {} s", every.as_secs()));
+        }
+
+        let ssh_config = Arc::new(client::Config {
+            keepalive_interval: config.keepalive,
+            keepalive_max: 3,
+            inactivity_timeout: None,
+            nodelay: true,
+            ..Default::default()
+        });
+        let handler = ClientHandler {
+            host: config.host.clone(),
+            port: config.port,
+            known_hosts: config.known_hosts.clone(),
+            extra_known_hosts: config.extra_known_hosts.clone(),
+            input: input.clone(),
+            out: out.clone(),
+            remote,
+            _jump: jump,
+        };
+        let mut handle = match client::connect_stream(ssh_config, stream, handler).await {
+            Ok(h) => h,
+            Err(russh::Error::UnknownKey) => {
+                return Err(End::Failed("Host key verification failed.".into()));
+            }
+            Err(e) => return Err(End::Unreachable(format!("SSH handshake failed: {e}"))),
+        };
+
+        let user = match config.username.as_deref().filter(|u| !u.is_empty()) {
+            Some(u) => u.to_string(),
+            None => {
+                let mut input = input.lock().await;
+                if is_jump {
+                    out.text(&format!("login as (jump host {}): ", config.host));
+                } else {
+                    out.text("login as: ");
+                }
+                input.read_line(out, true).await?.trim().to_string()
+            }
+        };
+        out.debug(&format!("Authenticating to {} as '{user}'", config.host));
+
+        authenticate(&mut handle, config, &user, input, out).await?;
+        Ok(handle)
+    })
 }
 
 /// Resolves the host and connects to its addresses in turn.
@@ -946,7 +1045,7 @@ impl From<client::AuthResult> for Step {
     }
 }
 
-type Handle = client::Handle<ClientHandler>;
+pub(crate) type Handle = client::Handle<ClientHandler>;
 
 async fn authenticate(
     handle: &mut Handle,

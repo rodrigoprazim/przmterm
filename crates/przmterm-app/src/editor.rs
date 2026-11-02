@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use eframe::egui;
 use przmterm_core::Protocol;
 use przmterm_session::{
-    COMMON_BAUD_RATES, DEFAULT_DATA_BITS, DEFAULT_STOP_BITS, FlowControl, Folder, LogSettings,
-    Parity, Session, SessionSettings, TerminalSettings,
+    COMMON_BAUD_RATES, DEFAULT_DATA_BITS, DEFAULT_STOP_BITS, FlowControl, Folder, Forward,
+    ForwardKind, LogSettings, Parity, Session, SessionSettings, TerminalSettings,
 };
 use przmterm_transport::serial::{PortInfo, available_ports};
 
@@ -90,6 +90,9 @@ pub struct Editor {
     debug: Option<bool>,
     keepalive: String,
     auto_reconnect: Option<bool>,
+    jump_host: String,
+    /// Tunnels set here; `None` inherits the list from above.
+    forwards: Option<Vec<Forward>>,
     show_log_help: bool,
     confirm: Option<Confirm>,
     error: Option<String>,
@@ -131,6 +134,8 @@ fn field_label(key: &str) -> &'static str {
         "debug" => "debug login",
         "keepalive" => "keepalive",
         "auto_reconnect" => "auto reconnect",
+        "jump_host" => "jump host",
+        "forward" => "tunnels",
         "baud_rate" => "baud rate",
         "data_bits" => "data bits",
         "parity" => "parity",
@@ -151,6 +156,8 @@ fn field_label(key: &str) -> &'static str {
 struct Context<'a> {
     /// Effective values coming from above.
     inherited: &'a SessionSettings,
+    /// Names of the saved SSH sessions, for the jump host list.
+    ssh_sessions: Vec<String>,
     protocol: Protocol,
     /// Default log folder, `<config>/logs`.
     logs_dir: String,
@@ -167,6 +174,8 @@ impl Context<'_> {
             "debug" => "no".into(),
             "keepalive" => format!("{} (0 = off)", przmterm_session::DEFAULT_KEEPALIVE),
             "auto_reconnect" => "no".into(),
+            "jump_host" => "none (direct), or a session name or user@host".into(),
+            "forward" => "none".into(),
             "serial_port" => "/dev/ttyUSB0 or COM3".into(),
             "baud_rate" => przmterm_session::DEFAULT_BAUD_RATE.to_string(),
             "data_bits" => DEFAULT_DATA_BITS.to_string(),
@@ -276,6 +285,8 @@ impl Editor {
             debug: s.debug,
             keepalive: text(&s.keepalive),
             auto_reconnect: s.auto_reconnect,
+            jump_host: text(&s.jump_host),
+            forwards: s.forwards.clone(),
             show_log_help: false,
             confirm: None,
             error: None,
@@ -307,6 +318,21 @@ impl Editor {
             debug: self.debug,
             keepalive: number("Keepalive", &self.keepalive)?,
             auto_reconnect: self.auto_reconnect,
+            jump_host: opt(&self.jump_host),
+            forwards: match &self.forwards {
+                None => None,
+                Some(list) => {
+                    let list: Vec<Forward> = list
+                        .iter()
+                        .filter(|f| !f.listen.trim().is_empty() || !f.target.trim().is_empty())
+                        .cloned()
+                        .collect();
+                    for (i, f) in list.iter().enumerate() {
+                        f.tunnel().map_err(|e| format!("Tunnel {}: {e}", i + 1))?;
+                    }
+                    Some(list)
+                }
+            },
             serial_port: if session {
                 opt(&self.serial_port)
             } else {
@@ -409,6 +435,12 @@ impl Editor {
         let logs_dir = tilde(&config_dir.join(przmterm_session::LOGS_DIR));
         let cx = Context {
             inherited: &inherited,
+            ssh_sessions: root
+                .all_sessions()
+                .into_iter()
+                .filter(|s| s.protocol == Protocol::Ssh)
+                .map(|s| s.name.clone())
+                .collect(),
             protocol,
             logs_dir,
         };
@@ -472,7 +504,11 @@ impl Editor {
                 });
                 ui.weak("Enter saves, Esc cancels.");
                 ui.add_space(6.0);
-                self.form(ui, &cx, root);
+                // Long forms scroll on small screens.
+                egui::ScrollArea::vertical()
+                    .max_height((ctx.content_rect().height() - 220.0).max(200.0))
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| self.form(ui, &cx, root));
 
                 if self.show_log_help {
                     ui.add_space(4.0);
@@ -649,6 +685,121 @@ impl Editor {
             &cx.hint("debug"),
         );
         ui.end_row();
+
+        ui.label("Jump host")
+            .on_hover_text("Connect through this SSH server first (ProxyJump)");
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.jump_host)
+                    .hint_text(cx.hint("jump_host"))
+                    .desired_width(200.0),
+            );
+            ui.menu_button("Sessions ▾", |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(240.0)
+                    .show(ui, |ui| {
+                        if ui
+                            .selectable_label(self.jump_host.is_empty(), "none")
+                            .clicked()
+                        {
+                            self.jump_host.clear();
+                            ui.close();
+                        }
+                        for name in &cx.ssh_sessions {
+                            if Some(name.as_str()) == opt(&self.name).as_deref() {
+                                continue; // not through itself
+                            }
+                            if ui.selectable_label(self.jump_host == *name, name).clicked() {
+                                self.jump_host = name.clone();
+                                ui.close();
+                            }
+                        }
+                    });
+            });
+        });
+        ui.end_row();
+
+        ui.label("Tunnels")
+            .on_hover_text("Port forwarding, opened after login and closed with the session");
+        self.tunnels_ui(ui, cx);
+        ui.end_row();
+    }
+
+    fn tunnels_ui(&mut self, ui: &mut egui::Ui, cx: &Context) {
+        ui.vertical(|ui| {
+            let Some(list) = &mut self.forwards else {
+                ui.horizontal(|ui| {
+                    ui.weak(cx.hint("forward"));
+                    if ui
+                        .small_button("+ Add")
+                        .on_hover_text("Set the tunnels here")
+                        .clicked()
+                    {
+                        let mut list = cx.inherited.forwards.clone().unwrap_or_default();
+                        list.push(Forward::default());
+                        self.forwards = Some(list);
+                    }
+                });
+                return;
+            };
+            let mut remove = None;
+            for (i, f) in list.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    egui::ComboBox::from_id_salt(("tunnel-kind", i))
+                        .width(80.0)
+                        .selected_text(match f.kind {
+                            ForwardKind::Local => "local",
+                            ForwardKind::Remote => "remote",
+                            ForwardKind::Dynamic => "SOCKS",
+                        })
+                        .show_ui(ui, |ui| {
+                            for k in ForwardKind::ALL {
+                                ui.selectable_value(&mut f.kind, k, k.label());
+                            }
+                        });
+                    ui.add(
+                        egui::TextEdit::singleline(&mut f.listen)
+                            .hint_text(match f.kind {
+                                ForwardKind::Remote => "server port",
+                                _ => "local port",
+                            })
+                            .desired_width(80.0),
+                    );
+                    if f.kind == ForwardKind::Dynamic {
+                        ui.weak("SOCKS proxy");
+                    } else {
+                        ui.label("→");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut f.target)
+                                .hint_text("host:port")
+                                .desired_width(110.0),
+                        );
+                    }
+                    if ui.small_button("✕").on_hover_text("Remove").clicked() {
+                        remove = Some(i);
+                    }
+                });
+            }
+            if let Some(i) = remove {
+                list.remove(i);
+            }
+            let mut inherit = false;
+            ui.horizontal(|ui| {
+                if ui.small_button("+ Add tunnel").clicked() {
+                    list.push(Forward::default());
+                }
+                inherit = ui
+                    .small_button("↺")
+                    .on_hover_text(format!(
+                        "Back to the inherited tunnels ({})",
+                        cx.hint("forward")
+                    ))
+                    .clicked();
+            });
+            if inherit {
+                self.forwards = None;
+            }
+        });
     }
 
     /// Port and line settings for serial consoles.
@@ -1039,6 +1190,34 @@ mod tests {
         assert!(
             !toml.contains("data_bits"),
             "unset values stay unset: {toml}"
+        );
+    }
+
+    #[test]
+    fn tunnels_are_checked_and_saved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut e = Editor::new_session(&[]);
+        e.name = "db".into();
+        e.host = "10.0.0.5".into();
+        e.jump_host = "bastion".into();
+        e.forwards = Some(vec![
+            Forward {
+                kind: ForwardKind::Local,
+                listen: "5432".into(),
+                target: "localhost".into(),
+            },
+            Forward::default(),
+        ]);
+        let err = e.save(tmp.path(), true).unwrap_err();
+        assert!(err.contains("Tunnel 1"), "{err}");
+        e.forwards.as_mut().unwrap()[0].target = "localhost:5432".into();
+        e.save(tmp.path(), true).unwrap();
+        let toml = std::fs::read_to_string(tmp.path().join("sessions/db.toml")).unwrap();
+        assert!(toml.contains("jump_host = \"bastion\""), "{toml}");
+        assert_eq!(
+            toml.matches("[[forward]]").count(),
+            1,
+            "blank rows dropped: {toml}"
         );
     }
 

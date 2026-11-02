@@ -55,6 +55,29 @@ and the known_hosts file it was found in, every key, password and
 keyboard-interactive attempt with the server's answer and the methods it still
 allows, and the reason the server gave if it disconnected.
 
+### Tunnels and jump hosts
+
+```toml
+jump_host = "bastion"        # a saved session, or "user@host:port"
+
+[[forward]]                  # ssh -L
+listen = "5432"              # 127.0.0.1:5432 here…
+target = "db.internal:5432"  # …reaches this, from the server's side
+
+[[forward]]                  # ssh -R
+type = "remote"
+listen = "8022"              # port on the server…
+target = "localhost:22"      # …reaches this, from here
+
+[[forward]]                  # ssh -D
+type = "dynamic"
+listen = "1080"              # SOCKS 4/5 proxy here
+```
+
+The editor has the same under *Jump host* and *Tunnels*. A jump host's own
+`jump_host` is followed too, so chains work. Tunnels open after login and
+close with the session.
+
 ### Keepalive and reconnect
 
 Sessions send a keepalive every 30 s (`keepalive`, 0 turns it off). With

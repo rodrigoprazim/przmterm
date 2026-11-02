@@ -74,7 +74,7 @@ equipment; the serial console has only been checked against a virtual cable.
 ## 0.5.0 — Network gear
 
 - Import sessions from SecureCRT
-- Jump hosts (ProxyJump, chained) and tunnels: port forwarding (local, remote,
+- [x] Jump hosts (ProxyJump, chained) and tunnels: port forwarding (local, remote,
   dynamic / SOCKS)
 - X11 forwarding: remote graphical programs shown on the local X server
   (XQuartz on macOS, VcXsrv or similar on Windows)
