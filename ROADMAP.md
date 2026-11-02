@@ -11,7 +11,7 @@ date. Version numbering and the release procedure are in
 | 0.2.0 | SSH | Released |
 | 0.3.0 | Daily-driver MVP | Released |
 | 0.4.0 | Telnet and serial | Released |
-| 0.5.0 | Network gear | In progress |
+| 0.5.0 | Network gear | Released |
 | 0.6.0 | Productivity | Planned |
 | 0.7.0 | Scripting | Planned |
 | 0.8.0 | File transfer | Planned |
@@ -83,8 +83,12 @@ equipment; the serial console has only been checked against a virtual cable.
       and DSA; a libssh2 fallback moved to after 1.0, only if equipment needs
       an algorithm `russh` lacks)
 - [x] Keepalive and automatic reconnect
+- [x] Gate checked: SSH, jump hosts, tunnels and X11 on the maintainer's
+      machines; legacy algorithms against an OpenSSH limited to them (real
+      old equipment still to be confirmed)
 
-**Gate:** connects to every device in the reference lab.
+**Gate:** connects to every device in the reference lab. Checked on the
+maintainer's servers; legacy algorithms only against a test server.
 
 ## 0.6.0 — Productivity
 
