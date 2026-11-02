@@ -84,6 +84,10 @@ Checked on Linux against OpenSSH 9.6 and on macOS against the maintainer's serve
   so one credential change updates every device that uses it. Works where no
   OS keychain is available and can be copied between machines; the OS
   keychain stays available as an alternative.
+- Settings backup and export. Backup: one archive with global settings,
+  folders, sessions and known hosts, restorable on this or another machine.
+  Export: a chosen set of folders or sessions to share with someone else,
+  without passwords or vault entries, imported into their tree as a new folder.
 
 ## 0.7.0 — Scripting
 

@@ -21,8 +21,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
 - DEC Special Graphics line-drawing charset.
 - Per-session plain-text logs: escape sequences removed, `\r` progress lines
   collapsed. File names take `%S` (session), `%H` (host), `%Y %M %D`,
-  `%h %m %s`; relative paths go under `<config>/logs`. The status bar toggles
-  logging for the active pane.
+  `%h %m %s`; relative paths go under `<config>/logs`. The status bar button
+  toggles logging for the active pane: green while logging, red while not.
 - Saved passwords in the OS keychain (Keychain on macOS, Credential Manager on
   Windows, Secret Service on Linux). After a typed password works, PrzmTerm
   asks whether to save it; a saved password that stops working is forgotten.

@@ -673,18 +673,25 @@ impl eframe::App for PrzmApp {
                     ui.weak("(closed)");
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let (text, hover) = match &pane.log {
+                    // Green while logging, red while not; the dot keeps the
+                    // state readable without colour.
+                    let (text, fill, hover) = match &pane.log {
                         Some(log) => (
-                            egui::RichText::new("● Log")
-                                .color(egui::Color32::from_rgb(230, 90, 90)),
+                            "● Log",
+                            egui::Color32::from_rgb(40, 135, 65),
                             format!("Logging to {}\nClick to stop", log.path.display()),
                         ),
                         None => (
-                            egui::RichText::new("○ Log"),
-                            "Start logging this pane".into(),
+                            "○ Log",
+                            egui::Color32::from_rgb(170, 55, 55),
+                            "Not logging. Click to start".into(),
                         ),
                     };
-                    if ui.small_button(text).on_hover_text(hover).clicked() {
+                    let button =
+                        egui::Button::new(egui::RichText::new(text).color(egui::Color32::WHITE))
+                            .fill(fill)
+                            .small();
+                    if ui.add(button).on_hover_text(hover).clicked() {
                         actions.push(Action::ToggleLog);
                     }
                 });
