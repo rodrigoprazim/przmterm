@@ -108,6 +108,16 @@ Sessions can also be created and edited from the app: **+** next to
 a folder to add a session or subfolder there, rename it, or edit the settings
 its sessions inherit.
 
+Global defaults live in `defaults.toml` (⚙ next to *Sessions* in the app).
+Global and folder settings can force fields onto everything below them,
+overriding folder and session values:
+
+```toml
+# defaults.toml
+username = "netops"
+force = ["username"]      # every session logs in as netops
+```
+
 A sample tree is in [examples/config](examples/config). Try it with
 `PRZMTERM_HOME=examples/config cargo run`.
 

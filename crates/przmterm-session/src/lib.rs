@@ -106,9 +106,76 @@ pub struct SessionSettings {
     pub terminal: TerminalSettings,
     #[serde(skip_serializing_if = "is_default")]
     pub log: LogSettings,
+    /// Fields this layer imposes on everything below it, overriding folder and
+    /// session values (only meaningful in `defaults.toml` and `folder.toml`).
+    /// Keys are those in [`FIELDS`].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub force: Vec<String>,
+}
+
+/// Keys of the settings that can be forced, as used in `force = [...]`.
+pub const FIELDS: [&str; 12] = [
+    "protocol",
+    "host",
+    "port",
+    "username",
+    "identity_file",
+    "save_password",
+    "serial_port",
+    "baud_rate",
+    "terminal.term_type",
+    "terminal.scrollback",
+    "log.enabled",
+    "log.path",
+];
+
+/// A field forced from above, and by whom (`global` or a folder name).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Forced {
+    pub key: String,
+    pub source: String,
 }
 
 impl SessionSettings {
+    /// Copies the field `key` (see [`FIELDS`]) from `from`, set or not.
+    pub fn copy_field(&mut self, from: &SessionSettings, key: &str) {
+        match key {
+            "protocol" => self.protocol = from.protocol,
+            "host" => self.host = from.host.clone(),
+            "port" => self.port = from.port,
+            "username" => self.username = from.username.clone(),
+            "identity_file" => self.identity_file = from.identity_file.clone(),
+            "save_password" => self.save_password = from.save_password,
+            "serial_port" => self.serial_port = from.serial_port.clone(),
+            "baud_rate" => self.baud_rate = from.baud_rate,
+            "terminal.term_type" => self.terminal.term_type = from.terminal.term_type.clone(),
+            "terminal.scrollback" => self.terminal.scrollback = from.terminal.scrollback,
+            "log.enabled" => self.log.enabled = from.log.enabled,
+            "log.path" => self.log.path = from.log.path.clone(),
+            _ => {}
+        }
+    }
+
+    /// The field `key` as text, if set.
+    pub fn field_text(&self, key: &str) -> Option<String> {
+        let yes_no = |b: bool| if b { "yes" } else { "no" }.to_string();
+        match key {
+            "protocol" => self.protocol.map(|p| p.to_string()),
+            "host" => self.host.clone(),
+            "port" => self.port.map(|v| v.to_string()),
+            "username" => self.username.clone(),
+            "identity_file" => self.identity_file.clone(),
+            "save_password" => self.save_password.map(yes_no),
+            "serial_port" => self.serial_port.clone(),
+            "baud_rate" => self.baud_rate.map(|v| v.to_string()),
+            "terminal.term_type" => self.terminal.term_type.clone(),
+            "terminal.scrollback" => self.terminal.scrollback.map(|v| v.to_string()),
+            "log.enabled" => self.log.enabled.map(yes_no),
+            "log.path" => self.log.path.clone(),
+            _ => None,
+        }
+    }
+
     pub fn from_toml(text: &str) -> Result<Self, toml::de::Error> {
         toml::from_str(text)
     }
@@ -140,8 +207,44 @@ impl SessionSettings {
                 enabled: pick(&self.log.enabled, &over.log.enabled),
                 path: pick(&self.log.path, &over.log.path),
             },
+            // Each layer's own; never inherited as a list.
+            force: Vec::new(),
         }
     }
+}
+
+/// One layer of the inheritance chain: its own settings and a name for messages.
+#[derive(Debug, Clone)]
+struct Layer {
+    own: SessionSettings,
+    source: String,
+}
+
+/// Applies the forced fields of `chain` (root first) to `settings`. Upper
+/// layers win: they are applied last.
+fn apply_forced(mut settings: SessionSettings, chain: &[Layer]) -> SessionSettings {
+    for layer in chain.iter().rev() {
+        for key in &layer.own.force {
+            settings.copy_field(&layer.own, key);
+        }
+    }
+    settings
+}
+
+/// Which fields `chain` forces and the topmost layer forcing each.
+fn forced_list(chain: &[Layer]) -> Vec<Forced> {
+    let mut out: Vec<Forced> = Vec::new();
+    for layer in chain {
+        for key in &layer.own.force {
+            if !out.iter().any(|f| f.key == *key) {
+                out.push(Forced {
+                    key: key.clone(),
+                    source: layer.source.clone(),
+                });
+            }
+        }
+    }
+    out
 }
 
 /// Where a session connects to, after inheritance.
@@ -357,6 +460,11 @@ pub struct Folder {
     pub settings: SessionSettings,
     /// Settings this folder receives from above (without its own `folder.toml`).
     pub inherited: SessionSettings,
+    /// Fields forced on the sessions in this folder (by `defaults.toml` or a
+    /// `folder.toml` from the root down to this folder).
+    pub forced: Vec<Forced>,
+    /// Fields forced on this folder from above.
+    pub inherited_forced: Vec<Forced>,
     pub folders: Vec<Folder>,
     pub sessions: Vec<Session>,
 }
@@ -429,19 +537,20 @@ impl SessionTree {
             }
         };
         let sessions_dir = config_dir.join(SESSIONS_DIR);
+        let chain = vec![Layer {
+            own: defaults.clone(),
+            source: "global".into(),
+        }];
         if sessions_dir.is_dir() {
-            tree.root = load_folder(
-                &sessions_dir,
-                String::new(),
-                &[],
-                &defaults,
-                &mut tree.errors,
-            );
+            tree.root = load_folder(&sessions_dir, String::new(), &[], &chain, &mut tree.errors);
         } else {
+            let effective = apply_forced(defaults, &chain);
             tree.root = Folder {
                 dir: sessions_dir,
-                settings: defaults.clone(),
-                inherited: defaults,
+                settings: effective.clone(),
+                inherited: effective,
+                forced: forced_list(&chain),
+                inherited_forced: forced_list(&chain),
                 ..Folder::default()
             };
         }
@@ -579,6 +688,16 @@ pub fn write_folder_settings(dir: &Path, settings: &SessionSettings) -> Result<(
     }
 }
 
+/// Writes the global defaults (`<config>/defaults.toml`).
+pub fn write_defaults(config_dir: &Path, settings: &SessionSettings) -> Result<(), SessionError> {
+    let path = config_dir.join(DEFAULTS_FILE);
+    fs::create_dir_all(config_dir).map_err(|source| SessionError::Io {
+        path: config_dir.to_path_buf(),
+        source,
+    })?;
+    fs::write(&path, settings.to_toml()).map_err(|source| SessionError::Io { path, source })
+}
+
 /// Default configuration directory: `$PRZMTERM_HOME`, else the OS config dir.
 pub fn default_config_dir() -> Option<PathBuf> {
     if let Some(home) = std::env::var_os("PRZMTERM_HOME") {
@@ -672,21 +791,36 @@ fn read_settings(path: &Path) -> Result<Option<SessionSettings>, SessionError> {
         })
 }
 
+/// Loads a folder. `above` is the chain of layers from `defaults.toml` down
+/// to the parent folder.
 fn load_folder(
     dir: &Path,
     name: String,
     parents: &[String],
-    inherited: &SessionSettings,
+    above: &[Layer],
     errors: &mut Vec<SessionError>,
 ) -> Folder {
-    let settings = match read_settings(&dir.join(FOLDER_FILE)) {
-        Ok(Some(own)) => inherited.overlay(&own),
-        Ok(None) => inherited.clone(),
+    let merged_above = above
+        .iter()
+        .fold(SessionSettings::default(), |acc, l| acc.overlay(&l.own));
+    let inherited = apply_forced(merged_above, above);
+    let own = match read_settings(&dir.join(FOLDER_FILE)) {
+        Ok(own) => own.unwrap_or_default(),
         Err(e) => {
             errors.push(e);
-            inherited.clone()
+            SessionSettings::default()
         }
     };
+    let mut chain = above.to_vec();
+    chain.push(Layer {
+        own: own.clone(),
+        source: if name.is_empty() {
+            "top-level folder".into()
+        } else {
+            format!("folder {name}")
+        },
+    });
+    let settings = apply_forced(inherited.overlay(&own), &chain);
     let mut trail = parents.to_vec();
     if !name.is_empty() {
         trail.push(name.clone());
@@ -710,6 +844,8 @@ fn load_folder(
         trail: trail.clone(),
         settings: settings.clone(),
         inherited: inherited.clone(),
+        forced: forced_list(&chain),
+        inherited_forced: forced_list(above),
         ..Folder::default()
     };
     for path in entries {
@@ -725,7 +861,7 @@ fn load_folder(
                 &path,
                 file_name.to_string(),
                 &trail,
-                &settings,
+                &chain,
                 errors,
             ));
         } else if file_name != FOLDER_FILE && path.extension().is_some_and(|e| e == "toml") {
@@ -735,7 +871,7 @@ fn load_folder(
                 .unwrap_or_default()
                 .to_string();
             let result = read_settings(&path).and_then(|own| {
-                let merged = settings.overlay(&own.unwrap_or_default());
+                let merged = apply_forced(settings.overlay(&own.unwrap_or_default()), &chain);
                 Session::resolve(session_name, trail.clone(), &path, &merged)
             });
             match result {
@@ -890,6 +1026,67 @@ mod tests {
         assert!(!renamed.join(FOLDER_FILE).exists());
         delete_folder(&renamed).unwrap();
         assert!(SessionTree::load(dir).root.all_sessions().is_empty());
+    }
+
+    #[test]
+    fn forced_values_override_folders_and_sessions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write(
+            dir,
+            "defaults.toml",
+            "username = 'ops'\nport = 22\nforce = ['username']\n[log]\nenabled = true",
+        );
+        write(
+            dir,
+            "sessions/Lab/folder.toml",
+            "username = 'lab'\nport = 2222\nforce = ['port', 'username']",
+        );
+        write(
+            dir,
+            "sessions/Lab/sw.toml",
+            "host = 'sw'\nusername = 'me'\nport = 1\n[log]\nenabled = false",
+        );
+        write(
+            dir,
+            "sessions/free.toml",
+            "host = 'free'\nusername = 'me'\nport = 1",
+        );
+
+        let tree = SessionTree::load(dir);
+        assert!(tree.errors.is_empty(), "{:?}", tree.errors);
+        let lab = tree.root.find(&["Lab".into()]).unwrap();
+        let sw = &lab.sessions[0];
+        // Global forces the user even over the folder's own forced value;
+        // the folder forces the port; log is not forced, so the session wins.
+        assert_eq!(sw.display_target(), "ops@sw:2222");
+        assert!(!sw.log_enabled);
+        assert_eq!(
+            lab.forced,
+            vec![
+                Forced {
+                    key: "username".into(),
+                    source: "global".into()
+                },
+                Forced {
+                    key: "port".into(),
+                    source: "folder Lab".into()
+                },
+            ]
+        );
+        assert_eq!(lab.inherited_forced.len(), 1);
+
+        let free = &tree.root.sessions[0];
+        assert_eq!(
+            free.display_target(),
+            "ops@free:1",
+            "only the user is forced at the top"
+        );
+
+        let text = SessionSettings::from_toml("force = ['log.enabled']")
+            .unwrap()
+            .to_toml();
+        assert_eq!(text, "force = [\"log.enabled\"]\n");
     }
 
     #[test]

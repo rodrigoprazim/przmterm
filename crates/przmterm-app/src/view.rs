@@ -282,7 +282,8 @@ impl TerminalView {
             );
         }
 
-        if focused {
+        // `active` is false while a dialog is open: its fields get the keys.
+        if focused && active {
             self.handle_keys(ui, response.id, term, &mut input);
         }
         self.context_menu(&response, term, &mut input);

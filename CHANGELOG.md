@@ -37,6 +37,20 @@ All notable changes to PrzmTerm are recorded here. The format follows
 - New tabs and split panes open another channel on the existing SSH connection,
   so there is no second login or two-factor prompt.
 - Two panes logging the same session write to separate files (`-2`, `-3`…).
+  If the server refuses a second session on one connection, the new pane
+  logs in on its own and says why. Opening a session that is already
+  connected also reuses its connection.
+- Global settings (⚙ next to *Sessions*, saved in `defaults.toml`). Global and
+  folder settings can **force** a field: it then overrides folders and sessions
+  below (`force = ["username", "port"]`). Forced fields show locked, with who
+  forced them, in the editors below.
+- Enter saves and Esc cancels in the editor and the folder dialogs.
+
+### Fixed
+
+- A password followed by a two-factor prompt (keyboard-interactive in two
+  rounds) was never saved, and a saved password was wrongly dropped when the
+  token prompt came. The password is now saved and reused; the token is always asked.
 
 ## [0.2.0] - 2026-11-01
 

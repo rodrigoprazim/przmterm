@@ -117,8 +117,7 @@ pub struct SshTransport {
     pending_pos: usize,
     closed: Arc<AtomicBool>,
     shared: Shared,
-    host: String,
-    term_type: String,
+    config: SshConfig,
 }
 
 impl SshTransport {
@@ -126,8 +125,7 @@ impl SshTransport {
         size: Size,
         waker: Waker,
         shared: Shared,
-        host: String,
-        term_type: String,
+        config: SshConfig,
         task: impl FnOnce(Arc<Mutex<Input>>, Output, Arc<AtomicBool>) -> TaskFuture,
     ) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -143,8 +141,7 @@ impl SshTransport {
             pending_pos: 0,
             closed,
             shared,
-            host,
-            term_type,
+            config,
         }
     }
 
@@ -152,36 +149,29 @@ impl SshTransport {
     /// `waker` is called whenever new output is available.
     pub fn connect(config: SshConfig, size: Size, waker: Waker) -> Self {
         let shared: Shared = Arc::default();
-        let (host, term_type) = (config.host.clone(), config.term_type.clone());
-        let shared2 = shared.clone();
-        Self::spawn(
-            size,
-            waker,
-            shared,
-            host,
-            term_type,
-            move |input, out, closed| Box::pin(session_task(config, input, out, closed, shared2)),
-        )
+        let (shared2, config2) = (shared.clone(), config.clone());
+        Self::spawn(size, waker, shared, config, move |input, out, closed| {
+            Box::pin(session_task(config2, input, out, closed, shared2))
+        })
     }
 
     /// Opens another shell on this transport's connection, without logging
     /// in again (like OpenSSH connection sharing). `None` if the connection
-    /// is not authenticated yet or has ended.
+    /// is not authenticated yet or has ended. If the server refuses a second
+    /// session on one connection, the new transport logs in on its own.
     pub fn share_connection(&self, size: Size, waker: Waker) -> Option<SshTransport> {
         let handle = self.shared.lock().ok()?.as_ref()?.upgrade()?;
         if handle.is_closed() {
             return None;
         }
-        let (host, term_type) = (self.host.clone(), self.term_type.clone());
-        let (host2, term2) = (host.clone(), term_type.clone());
+        let (shared, config) = (self.shared.clone(), self.config.clone());
         Some(Self::spawn(
             size,
             waker,
             self.shared.clone(),
-            host,
-            term_type,
+            self.config.clone(),
             move |input, out, closed| {
-                Box::pin(channel_task(handle, host2, term2, input, out, closed))
+                Box::pin(channel_task(handle, config, input, out, closed, shared))
             },
         ))
     }
@@ -549,6 +539,8 @@ enum End {
     Closed(Option<u32>),
     Cancelled,
     Failed(String),
+    /// The server would not open another session on this connection.
+    Refused(String),
 }
 
 impl From<Cancelled> for End {
@@ -568,7 +560,7 @@ fn report(end: End, host: &str, out: &Output, closed: &AtomicBool) {
         )),
         End::Closed(_) => out.notice(&format!("Connection to {host} closed.")),
         End::Cancelled => out.notice("Connection cancelled."),
-        End::Failed(msg) => out.error(&msg),
+        End::Failed(msg) | End::Refused(msg) => out.error(&msg),
     }
     closed.store(true, Ordering::Release);
     (out.waker)();
@@ -588,24 +580,67 @@ async fn session_task(
     report(end, &config.host, &out, &closed);
 }
 
-/// A further shell on an already authenticated connection.
+/// A further shell on an already authenticated connection, falling back to
+/// a new login if the server refuses it.
 async fn channel_task(
     handle: Arc<Handle>,
-    host: String,
-    term_type: String,
+    config: SshConfig,
     input: Arc<Mutex<Input>>,
     out: Output,
     closed: Arc<AtomicBool>,
+    shared: Shared,
 ) {
+    let host = config.host.clone();
     out.notice(&format!(
         "New session on the existing connection to {host} (no new login)."
     ));
-    let end = match run_channel(&handle, &term_type, &input, &out).await {
+    let result = run_channel(&handle, &config.term_type, &input, &out, true).await;
+    release(handle).await;
+    let end = match result {
         Ok(status) => End::Closed(status),
+        Err(End::Refused(reason)) => {
+            out.notice(&format!(
+                "{host} does not allow another session on the same connection ({reason}). \
+                 Logging in again."
+            ));
+            match run_session(&config, &input, &out, &shared).await {
+                Ok(status) => End::Closed(status),
+                Err(end) => end,
+            }
+        }
         Err(end) => end,
     };
-    release(handle).await;
     report(end, &host, &out, &closed);
+}
+
+/// How long to wait for the server to confirm a PTY or shell on a shared
+/// connection before assuming it was accepted.
+const REPLY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Waits for the server's answer to a request sent with `want_reply`.
+/// Output that arrives meanwhile goes to the terminal.
+async fn confirmed(
+    channel: &mut russh::Channel<client::Msg>,
+    what: &str,
+    out: &Output,
+) -> Result<(), End> {
+    let wait = async {
+        loop {
+            match channel.wait().await {
+                Some(ChannelMsg::Success) => return Ok(()),
+                Some(ChannelMsg::Failure) => return Err(End::Refused(format!("{what} refused"))),
+                Some(ChannelMsg::Close) | Some(ChannelMsg::Eof) | None => {
+                    return Err(End::Refused("channel closed".into()));
+                }
+                Some(ChannelMsg::Data { data }) => out.bytes(&data),
+                Some(ChannelMsg::ExtendedData { data, .. }) => out.bytes(&data),
+                Some(_) => {}
+            }
+        }
+    };
+    tokio::time::timeout(REPLY_TIMEOUT, wait)
+        .await
+        .unwrap_or(Ok(()))
 }
 
 /// Drops one user of the connection, disconnecting if it was the last.
@@ -681,27 +716,30 @@ async fn run_session(
     if let Ok(mut slot) = shared.lock() {
         *slot = Some(Arc::downgrade(&handle));
     }
-    let result = run_channel(&handle, &config.term_type, input, out).await;
+    let result = run_channel(&handle, &config.term_type, input, out, false).await;
     release(handle).await;
     result
 }
 
-/// Opens a shell channel with a PTY and relays it until it closes.
+/// Opens a shell channel with a PTY and relays it until it closes. With
+/// `confirm`, refusals are reported as [`End::Refused`] (shared connections).
 async fn run_channel(
     handle: &Handle,
     term_type: &str,
     input: &Arc<Mutex<Input>>,
     out: &Output,
+    confirm: bool,
 ) -> Result<Option<u32>, End> {
-    let channel = handle
-        .channel_open_session()
-        .await
-        .map_err(failed("Cannot open a session"))?;
+    let mut channel = match handle.channel_open_session().await {
+        Ok(c) => c,
+        Err(e) if confirm => return Err(End::Refused(e.to_string())),
+        Err(e) => return Err(failed("Cannot open a session")(e)),
+    };
     let mut input = input.lock().await;
     let size = input.size;
     channel
         .request_pty(
-            false,
+            confirm,
             term_type,
             u32::from(size.cols),
             u32::from(size.rows),
@@ -711,12 +749,17 @@ async fn run_channel(
         )
         .await
         .map_err(failed("PTY request failed"))?;
+    if confirm {
+        confirmed(&mut channel, "terminal", out).await?;
+    }
     channel
-        .request_shell(false)
+        .request_shell(confirm)
         .await
         .map_err(failed("Shell request failed"))?;
+    if confirm {
+        confirmed(&mut channel, "shell", out).await?;
+    }
 
-    let mut channel = channel;
     let mut exit_status = None;
     loop {
         tokio::select! {
@@ -1087,11 +1130,17 @@ impl SavedPassword {
     }
 }
 
-/// True for a lone hidden "Password:" prompt, where a saved password applies.
-fn is_password_prompt(prompts: &[client::Prompt]) -> bool {
-    matches!(prompts, [p] if !p.echo && p.prompt.to_ascii_lowercase().contains("password"))
+/// Index of the hidden "Password:" prompt in a round, if any. Other prompts
+/// (one-time codes, tokens) are always asked.
+fn password_prompt(prompts: &[client::Prompt]) -> Option<usize> {
+    prompts
+        .iter()
+        .position(|p| !p.echo && p.prompt.to_ascii_lowercase().contains("password"))
 }
 
+/// Keyboard-interactive login, which may take several rounds, e.g. a
+/// password and then a two-factor token. The saved password answers the
+/// password prompt; everything else is asked in the terminal.
 async fn keyboard_interactive_auth(
     handle: &mut Handle,
     user: &str,
@@ -1103,12 +1152,14 @@ async fn keyboard_interactive_auth(
         .authenticate_keyboard_interactive_start(user, None)
         .await
         .map_err(failed("Authentication failed"))?;
-    // The password typed or taken from the store in the last round.
-    let mut last_password: Option<(String, bool)> = None;
+    // The password the user typed in this login, offered for saving at the end.
+    let mut typed: Option<String> = None;
+    // The saved password went out in the last password round.
+    let mut sent_saved = false;
     loop {
         match response {
             KeyboardInteractiveAuthResponse::Success => {
-                if let Some((password, false)) = &last_password {
+                if let Some(password) = &typed {
                     saved.offer_save(password, input, out).await;
                 }
                 return Ok(Step::Done);
@@ -1116,7 +1167,7 @@ async fn keyboard_interactive_auth(
             KeyboardInteractiveAuthResponse::Failure {
                 remaining_methods, ..
             } => {
-                if let Some((_, true)) = last_password {
+                if sent_saved {
                     saved.reject(out).await;
                 }
                 return Ok(Step::Next(remaining_methods));
@@ -1126,30 +1177,42 @@ async fn keyboard_interactive_auth(
                 instructions,
                 prompts,
             } => {
-                // Asked again after we sent the saved password: it was wrong.
-                if let Some((_, true)) = last_password.take() {
+                let password_at = password_prompt(&prompts);
+                // Asked for the password again: the saved one was wrong. A
+                // round asking only for a token means the password worked.
+                if password_at.is_some() && sent_saved {
                     saved.reject(out).await;
+                    sent_saved = false;
                 }
                 let mut answers = Vec::with_capacity(prompts.len());
-                let password_prompt = is_password_prompt(&prompts);
-                if password_prompt && let Some(p) = saved.take() {
-                    out.notice("Using the password saved in the keychain.");
-                    answers.push(p.clone());
-                    last_password = Some((p, true));
-                } else {
-                    let mut input = input.lock().await;
-                    for text in [name, instructions] {
-                        if !text.is_empty() {
-                            out.lines(&text);
-                            out.text("\r\n");
+                let mut input = input.lock().await;
+                let mut header_shown = false;
+                for (i, prompt) in prompts.iter().enumerate() {
+                    if Some(i) == password_at
+                        && let Some(p) = saved.take()
+                    {
+                        out.notice("Using the password saved in the keychain.");
+                        answers.push(p);
+                        sent_saved = true;
+                        continue;
+                    }
+                    if !header_shown {
+                        for text in [&name, &instructions] {
+                            if !text.is_empty() {
+                                out.lines(text);
+                                out.text("\r\n");
+                            }
                         }
+                        header_shown = true;
                     }
-                    for prompt in prompts {
-                        out.lines(&prompt.prompt);
-                        answers.push(input.read_line(out, prompt.echo).await?);
+                    out.lines(&prompt.prompt);
+                    let answer = input.read_line(out, prompt.echo).await?;
+                    if Some(i) == password_at {
+                        typed = Some(answer.clone());
                     }
-                    last_password = password_prompt.then(|| (answers[0].clone(), false));
+                    answers.push(answer);
                 }
+                drop(input);
                 response = handle
                     .authenticate_keyboard_interactive_respond(answers)
                     .await

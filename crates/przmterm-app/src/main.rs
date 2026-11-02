@@ -202,8 +202,21 @@ impl PrzmApp {
         let env = self.env();
         match action {
             Action::Open(session) => {
-                let size = self.tab().pane().size();
-                let pane = Pane::open(&session, &env, size, waker);
+                // Already connected to this session? Open another channel on
+                // that connection instead of logging in (and 2FA) again.
+                let live = self.tabs.iter().flat_map(|t| &t.panes).find(|p| {
+                    !p.transport.is_closed()
+                        && p.origin
+                            .as_ref()
+                            .is_some_and(|o| o.path == session.path && o.name == session.name)
+                });
+                let pane = match live {
+                    Some(p) => p.clone_session(&env, waker),
+                    None => {
+                        let size = self.tab().pane().size();
+                        Pane::open(&session, &env, size, waker)
+                    }
+                };
                 // The first demo shell is just a placeholder: replace it.
                 let tab = self.tab_mut();
                 if tab.panes.len() == 1 && tab.pane().origin.is_none() {
@@ -299,6 +312,10 @@ impl PrzmApp {
 }
 
 impl PrzmApp {
+    fn modal_open(&self) -> bool {
+        self.editor.is_some() || self.name_dialog.is_some() || self.confirm_delete.is_some()
+    }
+
     /// The session editor and the delete confirmation.
     fn dialogs(&mut self, ctx: &egui::Context) {
         if let (Some(editor), Some(dir)) = (&mut self.editor, self.config_dir.clone()) {
@@ -326,7 +343,7 @@ impl PrzmApp {
                             .desired_width(240.0),
                     );
                     edit.request_focus();
-                    let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                    let enter = ui.input(|i| i.key_pressed(Key::Enter));
                     if let Some(err) = &dialog.error {
                         ui.colored_label(ui.visuals().error_fg_color, err);
                     }
@@ -379,6 +396,9 @@ impl PrzmApp {
                 .resizable(false)
                 .show(ctx, |ui| {
                     ui.label(question);
+                    if ui.input(|i| i.key_pressed(Key::Escape)) {
+                        keep_open = false;
+                    }
                     ui.horizontal(|ui| {
                         if ui.button("Delete").clicked() {
                             let result = match &deletion {
@@ -644,6 +664,14 @@ impl eframe::App for PrzmApp {
                     if ui.small_button("⟳").on_hover_text("Reload").clicked() {
                         self.reload_sessions();
                     }
+                    if let Some(dir) = &self.config_dir
+                        && ui
+                            .small_button("⚙")
+                            .on_hover_text("Global settings for every session")
+                            .clicked()
+                    {
+                        self.editor = Some(Editor::global(dir));
+                    }
                     if self.config_dir.is_some() {
                         ui.menu_button("+", |ui| {
                             if ui.button("New session…").clicked() {
@@ -751,6 +779,7 @@ impl eframe::App for PrzmApp {
                 });
             });
 
+        let modal = self.modal_open();
         egui::CentralPanel::no_frame().show(ui, |ui| {
             let tab = &mut self.tabs[self.active_tab];
             let area = ui.available_rect_before_wrap();
@@ -776,7 +805,7 @@ impl eframe::App for PrzmApp {
                 let active = i == tab.active;
                 let out = ui
                     .scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-                        pane.view.show(ui, &mut pane.term, active)
+                        pane.view.show(ui, &mut pane.term, active && !modal)
                     })
                     .inner;
                 if n > 1 && active {
@@ -810,6 +839,10 @@ impl eframe::App for PrzmApp {
         });
 
         self.dialogs(&ctx);
+        // Give the keyboard back to the terminal when the last dialog closes.
+        if modal && !self.modal_open() {
+            self.tab_mut().pane_mut().view.focus();
+        }
 
         for action in actions {
             self.apply(action, &ctx);

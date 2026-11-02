@@ -17,6 +17,12 @@ use russh::{Channel, ChannelId, MethodKind, MethodSet};
 struct TestServer {
     methods: Vec<MethodKind>,
     client_key: Option<russh::keys::PublicKey>,
+    /// Keyboard-interactive asks "Password:" then "Two-Factor Token:".
+    two_step: bool,
+    stage: u8,
+    /// Session channels allowed per connection (0 = unlimited).
+    max_channels: usize,
+    channels: usize,
 }
 
 impl TestServer {
@@ -59,6 +65,24 @@ impl server::Handler for TestServer {
         _submethods: &str,
         response: Option<server::Response<'a>>,
     ) -> Result<Auth, Self::Error> {
+        if self.two_step {
+            let ask = |prompt: &'static str| Auth::Partial {
+                name: "".into(),
+                instructions: "".into(),
+                prompts: vec![(prompt.into(), false)].into(),
+            };
+            let answer = response.and_then(|mut r| r.next());
+            return Ok(match (self.stage, answer.as_deref()) {
+                (_, None) => ask("Password: "),
+                (0, Some(b"secret")) => {
+                    self.stage = 1;
+                    ask("Two-Factor Token: ")
+                }
+                (0, Some(_)) => ask("Password: "),
+                (_, Some(b"123456")) => Auth::Accept,
+                _ => self.retry(),
+            });
+        }
         Ok(match response {
             None => Auth::Partial {
                 name: "".into(),
@@ -81,7 +105,14 @@ impl server::Handler for TestServer {
         reply: server::ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        reply.accept().await;
+        if self.max_channels > 0 && self.channels >= self.max_channels {
+            reply
+                .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+        } else {
+            self.channels += 1;
+            reply.accept().await;
+        }
         Ok(())
     }
 
@@ -100,6 +131,7 @@ impl server::Handler for TestServer {
             channel,
             format!("pty {term} {cols}x{rows}\r\n").into_bytes(),
         )?;
+        session.channel_success(channel)?;
         Ok(())
     }
 
@@ -109,6 +141,7 @@ impl server::Handler for TestServer {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         session.data(channel, b"welcome\r\n".to_vec())?;
+        session.channel_success(channel)?;
         Ok(())
     }
 
@@ -146,12 +179,35 @@ fn start_server(key: PrivateKey, connections: usize) -> u16 {
     start_server_with(key, connections, &[MethodKind::Password], None)
 }
 
+/// Keyboard-interactive server asking for a password, then a token.
+fn start_two_step_server(key: PrivateKey, connections: usize) -> u16 {
+    start_server_full(
+        key,
+        connections,
+        &[MethodKind::KeyboardInteractive],
+        None,
+        true,
+        0,
+    )
+}
+
 /// Starts a server on a random local port, accepting `connections` clients.
 fn start_server_with(
     key: PrivateKey,
     connections: usize,
     methods: &[MethodKind],
     client_key: Option<russh::keys::PublicKey>,
+) -> u16 {
+    start_server_full(key, connections, methods, client_key, false, 0)
+}
+
+fn start_server_full(
+    key: PrivateKey,
+    connections: usize,
+    methods: &[MethodKind],
+    client_key: Option<russh::keys::PublicKey>,
+    two_step: bool,
+    max_channels: usize,
 ) -> u16 {
     let methods = methods.to_vec();
     let (tx, rx) = std::sync::mpsc::channel();
@@ -170,6 +226,10 @@ fn start_server_with(
             let server = TestServer {
                 methods: methods.clone(),
                 client_key,
+                two_step,
+                stage: 0,
+                max_channels,
+                channels: 0,
             };
             for _ in 0..connections {
                 let (socket, _) = listener.accept().await.unwrap();
@@ -574,4 +634,101 @@ fn duplicate_reuses_the_authenticated_connection() {
     second.send("exit\r");
     second.wait_closed();
     assert!(second.text.contains("exit status 3"));
+}
+
+#[test]
+fn password_then_token_saves_and_reuses_the_password() {
+    let dir = tempfile::tempdir().unwrap();
+    let known_hosts = dir.path().join("known_hosts");
+    let port = start_two_step_server(host_key(), 3);
+    let store = Arc::new(MemoryStore::default());
+    let account = format!("alice@127.0.0.1:{port}");
+    let with_store = |mode| {
+        let mut c = config(port, &known_hosts);
+        c.password_store = Some(Store(store.clone()));
+        c.save_password = mode;
+        c
+    };
+
+    // 1. Password, then token; the password is offered for saving.
+    let mut s = Screen::connect(with_store(SavePassword::Ask));
+    s.wait_for("(yes/no)? ");
+    s.send("yes\r");
+    s.wait_for("Password: ");
+    s.send("secret\r");
+    s.wait_for("Two-Factor Token: ");
+    s.send("123456\r");
+    s.wait_for("Save this password in the system keychain? (yes/no) ");
+    s.send("yes\r");
+    s.wait_for("welcome");
+    assert_eq!(store.get(&account).as_deref(), Some("secret"));
+    s.transport.close().unwrap();
+    s.wait_closed();
+
+    // 2. The saved password answers "Password:"; only the token is asked,
+    //    and the token round does not count as a rejection.
+    let mut s = Screen::connect(with_store(SavePassword::Ask));
+    s.wait_for("Two-Factor Token: ");
+    assert!(s.text.contains("Using the password saved in the keychain."));
+    assert!(!s.text.contains("rejected"));
+    s.send("123456\r");
+    s.wait_for("welcome");
+    assert_eq!(store.get(&account).as_deref(), Some("secret"));
+    s.transport.close().unwrap();
+    s.wait_closed();
+
+    // 3. A stale password is detected when "Password:" comes back, then forgotten.
+    store.set(&account, "old").unwrap();
+    let mut s = Screen::connect(with_store(SavePassword::Always));
+    s.wait_for("The saved password was rejected.");
+    s.wait_for("Password: ");
+    s.send("secret\r");
+    s.wait_for("Two-Factor Token: ");
+    s.send("123456\r");
+    s.wait_for("welcome");
+    assert!(
+        !s.text.contains("Save this password"),
+        "always saves without asking"
+    );
+    assert_eq!(store.get(&account).as_deref(), Some("secret"));
+    s.transport.close().unwrap();
+    s.wait_closed();
+}
+
+#[test]
+fn refused_second_channel_falls_back_to_a_new_login() {
+    let dir = tempfile::tempdir().unwrap();
+    // One session per connection, like some bastions; two connections allowed.
+    let port = start_server_full(
+        host_key(),
+        2,
+        &[MethodKind::KeyboardInteractive],
+        None,
+        false,
+        1,
+    );
+    let mut first = Screen::connect(config(port, &dir.path().join("known_hosts")));
+    first.wait_for("(yes/no)? ");
+    first.send("yes\r");
+    first.wait_for("Verification code: ");
+    first.send("123456\r");
+    first.wait_for("welcome");
+
+    let mut second = Screen {
+        transport: first
+            .transport
+            .share_connection(Size { cols: 80, rows: 24 }, noop_waker())
+            .unwrap(),
+        text: String::new(),
+    };
+    second.wait_for("does not allow another session on the same connection");
+    second.wait_for("Verification code: ");
+    second.send("123456\r");
+    second.wait_for("welcome");
+    first.send("first still works");
+    first.wait_for("first still works");
+    first.transport.close().unwrap();
+    second.transport.close().unwrap();
+    first.wait_closed();
+    second.wait_closed();
 }

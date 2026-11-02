@@ -1,14 +1,16 @@
-//! Editor window for sessions and folders.
+//! Editor window for sessions, folders and the global defaults.
 //!
-//! Only the values set in the file itself are written. Every field shows the
-//! value it inherits (from the folder, `defaults.toml` or the built-in
-//! default) so it is clear what an empty field means.
+//! Only the values set in the file itself are written. Every empty field
+//! shows the value it inherits. Global and folder settings can *force* a
+//! field: the value then applies to everything below, overriding folders and
+//! sessions, and those fields are shown locked further down.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use eframe::egui;
 use przmterm_core::Protocol;
-use przmterm_session::{Folder, LogSettings, Session, SessionSettings, TerminalSettings};
+use przmterm_session::{Folder, Forced, LogSettings, Session, SessionSettings, TerminalSettings};
 
 /// Terminal types offered in the list. Any other value can still be typed in
 /// the session file.
@@ -33,6 +35,8 @@ enum Target {
     },
     /// A folder's own settings (`folder.toml`), with rename.
     Folder { dir: PathBuf, trail: Vec<String> },
+    /// `defaults.toml`.
+    Global,
 }
 
 pub struct Editor {
@@ -51,6 +55,8 @@ pub struct Editor {
     log: Option<bool>,
     log_path: String,
     save_password: Option<bool>,
+    /// Fields this layer forces on everything below (global and folders).
+    force: BTreeSet<String>,
     error: Option<String>,
 }
 
@@ -77,6 +83,62 @@ fn tilde(path: &Path) -> String {
         return format!("~/{}", rest.display());
     }
     path.display().to_string()
+}
+
+/// The value a field has when nothing sets it.
+fn builtin(key: &str, protocol: Protocol) -> String {
+    match key {
+        "protocol" => "ssh".into(),
+        "port" => protocol.default_port().unwrap_or(22).to_string(),
+        "username" => "asked at login".into(),
+        "identity_file" => "agent and ~/.ssh keys".into(),
+        "save_password" => "ask".into(),
+        "serial_port" => "/dev/ttyUSB0 or COM3".into(),
+        "baud_rate" => "9600".into(),
+        "terminal.term_type" => "xterm-256color".into(),
+        "terminal.scrollback" => "10000".into(),
+        "log.enabled" => "no".into(),
+        "log.path" => "%S-%Y%M%D-%h%m%s.log".into(),
+        _ => String::new(),
+    }
+}
+
+/// Everything a row needs to know about inheritance.
+struct Context<'a> {
+    /// Effective values coming from above.
+    inherited: &'a SessionSettings,
+    /// Where they come from, for hints ("folder", "global"…).
+    source: &'a str,
+    /// Fields locked by a layer above.
+    forced: &'a [Forced],
+    /// Whether this editor can force fields (global and folders).
+    can_force: bool,
+    protocol: Protocol,
+}
+
+impl Context<'_> {
+    fn hint(&self, key: &str) -> String {
+        match self.inherited.field_text(key) {
+            Some(v) if self.source.is_empty() => v,
+            Some(v) => format!("from {}: {v}", self.source),
+            None => builtin(key, self.protocol),
+        }
+    }
+
+    /// "from folder" when the inherited value comes from a file, else nothing.
+    fn note(&self, key: &str) -> Option<String> {
+        (self.inherited.field_text(key).is_some() && !self.source.is_empty())
+            .then(|| format!("from {}", self.source))
+    }
+
+    fn locked(&self, key: &str) -> Option<String> {
+        let forced = self.forced.iter().find(|f| f.key == key)?;
+        let value = self
+            .inherited
+            .field_text(key)
+            .unwrap_or_else(|| builtin(key, self.protocol));
+        Some(format!("🔒 {value}  (forced by {})", forced.source))
+    }
 }
 
 impl Editor {
@@ -134,6 +196,14 @@ impl Editor {
         )
     }
 
+    pub fn global(config_dir: &Path) -> Self {
+        let settings = przmterm_session::read_session_settings(
+            &config_dir.join(przmterm_session::DEFAULTS_FILE),
+        )
+        .unwrap_or_default();
+        Self::from_settings(Target::Global, "Global settings", "", &settings)
+    }
+
     fn from_settings(target: Target, title: &str, name: &str, s: &SessionSettings) -> Self {
         Self {
             target,
@@ -151,12 +221,13 @@ impl Editor {
             log: s.log.enabled,
             log_path: text(&s.log.path),
             save_password: s.save_password,
+            force: s.force.iter().cloned().collect(),
             error: None,
         }
     }
 
-    fn is_folder(&self) -> bool {
-        matches!(self.target, Target::Folder { .. })
+    fn is_session(&self) -> bool {
+        matches!(self.target, Target::Session { .. })
     }
 
     fn settings(&self) -> Result<SessionSettings, String> {
@@ -169,18 +240,19 @@ impl Editor {
                     .map_err(|_| format!("{field}: `{v}` is not a valid number")),
             }
         }
+        let session = self.is_session();
         Ok(SessionSettings {
             protocol: self.protocol,
-            host: if self.is_folder() {
-                None
-            } else {
-                opt(&self.host)
-            },
+            host: if session { opt(&self.host) } else { None },
             port: number("Port", &self.port)?,
             username: opt(&self.username),
             identity_file: opt(&self.identity_file),
             save_password: self.save_password,
-            serial_port: opt(&self.serial_port),
+            serial_port: if session {
+                opt(&self.serial_port)
+            } else {
+                None
+            },
             baud_rate: number("Baud rate", &self.baud_rate)?,
             terminal: TerminalSettings {
                 term_type: self.term_type.clone(),
@@ -190,15 +262,20 @@ impl Editor {
                 enabled: self.log,
                 path: opt(&self.log_path),
             },
+            force: if session {
+                Vec::new()
+            } else {
+                self.force.iter().cloned().collect()
+            },
         })
     }
 
     fn save(&self, config_dir: &Path) -> Result<String, String> {
-        przmterm_session::validate_name(&self.name)?;
         let settings = self.settings()?;
-        let name = self.name.trim().to_string();
         match &self.target {
             Target::Session { original, trail } => {
+                przmterm_session::validate_name(&self.name)?;
+                let name = self.name.trim().to_string();
                 let path =
                     przmterm_session::write_session(config_dir, &trail.join("/"), &name, &settings)
                         .map_err(|e| e.to_string())?;
@@ -208,14 +285,22 @@ impl Editor {
                     std::fs::remove_file(original)
                         .map_err(|e| format!("saved, but could not remove the old file: {e}"))?;
                 }
+                Ok(name)
             }
             Target::Folder { dir, .. } => {
+                przmterm_session::validate_name(&self.name)?;
+                let name = self.name.trim().to_string();
                 przmterm_session::write_folder_settings(dir, &settings)
                     .map_err(|e| e.to_string())?;
                 przmterm_session::rename_folder(dir, &name).map_err(|e| e.to_string())?;
+                Ok(format!("folder {name}"))
+            }
+            Target::Global => {
+                przmterm_session::write_defaults(config_dir, &settings)
+                    .map_err(|e| e.to_string())?;
+                Ok("global settings".into())
             }
         }
-        Ok(name)
     }
 
     /// Draws the window. `root` is the session tree, for the folder picker
@@ -223,187 +308,225 @@ impl Editor {
     pub fn show(&mut self, ctx: &egui::Context, config_dir: &Path, root: &Folder) -> EditorResult {
         let mut result = EditorResult::Open;
         let mut open = true;
-        // What an empty field falls back to.
-        let (inherited, source) = match &self.target {
-            Target::Session { trail, .. } => (
-                root.find(trail)
-                    .map(|f| f.settings.clone())
-                    .unwrap_or_default(),
-                if trail.is_empty() {
-                    "defaults"
-                } else {
-                    "folder"
-                },
-            ),
-            Target::Folder { trail, .. } => (
-                root.find(trail)
-                    .map(|f| f.inherited.clone())
-                    .unwrap_or_default(),
-                if trail.len() <= 1 {
-                    "defaults"
-                } else {
-                    "parent folder"
-                },
-            ),
+        let none = SessionSettings::default();
+        let (inherited, source, forced): (SessionSettings, &str, Vec<Forced>) = match &self.target {
+            Target::Session { trail, .. } => match root.find(trail) {
+                Some(f) => (
+                    f.settings.clone(),
+                    if trail.is_empty() { "global" } else { "folder" },
+                    f.forced.clone(),
+                ),
+                None => (none.clone(), "", Vec::new()),
+            },
+            Target::Folder { trail, .. } => match root.find(trail) {
+                Some(f) => (
+                    f.inherited.clone(),
+                    if trail.len() <= 1 {
+                        "global"
+                    } else {
+                        "parent folder"
+                    },
+                    f.inherited_forced.clone(),
+                ),
+                None => (none.clone(), "", Vec::new()),
+            },
+            Target::Global => (none.clone(), "", Vec::new()),
         };
-        let from = |value: Option<String>, builtin: &str| match value {
-            Some(v) => format!("from {source}: {v}"),
-            None => format!("default: {builtin}"),
+        let protocol = self.protocol.or(inherited.protocol).unwrap_or_default();
+        let cx = Context {
+            inherited: &inherited,
+            source,
+            forced: &forced,
+            can_force: !self.is_session(),
+            protocol,
         };
-        let effective_protocol = self.protocol.or(inherited.protocol).unwrap_or_default();
+        let mut force = std::mem::take(&mut self.force);
 
         egui::Window::new(self.title.clone())
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
-            .default_width(460.0)
+            .default_width(500.0)
             .show(ctx, |ui| {
-                ui.weak("Empty fields inherit the value shown in grey.");
+                ui.weak(match self.target {
+                    Target::Global => {
+                        "Defaults for every session. Tick “force” to override folders and sessions."
+                    }
+                    Target::Folder { .. } => {
+                        "Defaults for the sessions in this folder. Tick “force” to override them."
+                    }
+                    Target::Session { .. } => "Empty fields use the value shown in grey.",
+                });
+                ui.weak("Enter saves, Esc cancels.");
                 ui.add_space(6.0);
                 egui::Grid::new("editor-grid")
-                    .num_columns(2)
+                    .num_columns(3)
                     .spacing([12.0, 6.0])
                     .show(ui, |ui| {
-                        ui.label(if self.is_folder() {
-                            "Folder name"
-                        } else {
-                            "Name"
-                        });
-                        ui.add(egui::TextEdit::singleline(&mut self.name).desired_width(280.0));
-                        ui.end_row();
-
+                        if self.target != Target::Global {
+                            ui.label(if self.is_session() {
+                                "Name"
+                            } else {
+                                "Folder name"
+                            });
+                            ui.add(egui::TextEdit::singleline(&mut self.name).desired_width(280.0));
+                            ui.label("");
+                            ui.end_row();
+                        }
                         if let Target::Session { trail, .. } = &mut self.target {
                             ui.label("Folder");
                             folder_picker(ui, root, trail);
+                            ui.label("");
                             ui.end_row();
                         }
 
-                        ui.label("Protocol");
-                        let inherit_label = from(inherited.protocol.map(|p| p.to_string()), "ssh");
-                        egui::ComboBox::from_id_salt("protocol")
-                            .width(280.0)
-                            .selected_text(match self.protocol {
-                                None => inherit_label.clone(),
-                                Some(p) => p.to_string(),
-                            })
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut self.protocol, None, inherit_label);
-                                for p in [Protocol::Ssh, Protocol::Telnet, Protocol::Serial] {
-                                    ui.selectable_value(&mut self.protocol, Some(p), p.to_string());
-                                }
+                        row(ui, &cx, &mut force, "Protocol", "protocol", |ui| {
+                            ui.horizontal(|ui| {
+                                egui::ComboBox::from_id_salt("protocol")
+                                    .width(250.0)
+                                    .selected_text(shown(
+                                        self.protocol.map(|p| p.to_string()),
+                                        cx.hint("protocol"),
+                                    ))
+                                    .show_ui(ui, |ui| {
+                                        for p in [Protocol::Ssh, Protocol::Telnet, Protocol::Serial]
+                                        {
+                                            ui.selectable_value(
+                                                &mut self.protocol,
+                                                Some(p),
+                                                p.to_string(),
+                                            );
+                                        }
+                                    });
+                                reset(ui, &mut self.protocol, &cx.hint("protocol"));
                             });
-                        ui.end_row();
+                        });
 
-                        if effective_protocol == Protocol::Serial {
-                            if !self.is_folder() {
-                                field(
+                        let session = self.is_session();
+                        if protocol == Protocol::Serial {
+                            if session {
+                                text_row(
                                     ui,
+                                    &cx,
+                                    &mut force,
                                     "Serial port",
+                                    "serial_port",
                                     &mut self.serial_port,
-                                    &from(inherited.serial_port.clone(), "/dev/ttyUSB0 or COM3"),
                                 );
                             }
-                            field(
+                            text_row(
                                 ui,
+                                &cx,
+                                &mut force,
                                 "Baud rate",
+                                "baud_rate",
                                 &mut self.baud_rate,
-                                &from(inherited.baud_rate.map(|b| b.to_string()), "9600"),
                             );
                         } else {
-                            if !self.is_folder() {
-                                field(ui, "Host", &mut self.host, "10.0.0.1 or router.example.com");
+                            if session {
+                                text_row(ui, &cx, &mut force, "Host", "host", &mut self.host);
                             }
-                            let port = effective_protocol.default_port().unwrap_or(22).to_string();
-                            field(
+                            text_row(ui, &cx, &mut force, "Port", "port", &mut self.port);
+                            text_row(
                                 ui,
-                                "Port",
-                                &mut self.port,
-                                &from(inherited.port.map(|p| p.to_string()), &port),
-                            );
-                            field(
-                                ui,
+                                &cx,
+                                &mut force,
                                 "User name",
+                                "username",
                                 &mut self.username,
-                                &from(inherited.username.clone(), "asked at login"),
                             );
-                            ui.label("Key file");
-                            ui.horizontal(|ui| {
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.identity_file)
-                                        .hint_text(from(
-                                            inherited.identity_file.clone(),
-                                            "agent and ~/.ssh keys",
-                                        ))
-                                        .desired_width(200.0),
-                                );
-                                if ui.button("Browse…").clicked()
-                                    && let Some(path) = pick_key_file()
-                                {
-                                    self.identity_file = tilde(&path);
-                                }
+                            row(ui, &cx, &mut force, "Key file", "identity_file", |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut self.identity_file)
+                                            .hint_text(cx.hint("identity_file"))
+                                            .desired_width(200.0),
+                                    );
+                                    if ui.button("Browse…").clicked()
+                                        && let Some(path) = pick_key_file()
+                                    {
+                                        self.identity_file = tilde(&path);
+                                    }
+                                });
                             });
-                            ui.end_row();
-                            choice(
+                            row(
                                 ui,
+                                &cx,
+                                &mut force,
                                 "Save password",
-                                &mut self.save_password,
-                                &from(inherited.save_password.map(yes_no), "ask"),
-                                [("always", true), ("never", false)],
+                                "save_password",
+                                |ui| {
+                                    save_pick(
+                                        ui,
+                                        &mut self.save_password,
+                                        cx.inherited.save_password,
+                                        cx.note("save_password"),
+                                    );
+                                },
                             );
                         }
 
-                        ui.label("Terminal type");
-                        let inherit_label =
-                            from(inherited.terminal.term_type.clone(), "xterm-256color");
-                        egui::ComboBox::from_id_salt("term-type")
-                            .width(280.0)
-                            .selected_text(
-                                self.term_type
-                                    .clone()
-                                    .unwrap_or_else(|| inherit_label.clone()),
-                            )
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut self.term_type, None, inherit_label);
-                                for t in TERM_TYPES {
-                                    ui.selectable_value(
-                                        &mut self.term_type,
-                                        Some(t.to_string()),
-                                        t,
-                                    );
-                                }
-                                if let Some(custom) = self.term_type.clone()
-                                    && !TERM_TYPES.contains(&custom.as_str())
-                                {
-                                    ui.selectable_value(
-                                        &mut self.term_type,
-                                        Some(custom.clone()),
-                                        custom,
-                                    );
-                                }
-                            });
-                        ui.end_row();
-
-                        field(
+                        row(
                             ui,
+                            &cx,
+                            &mut force,
+                            "Terminal type",
+                            "terminal.term_type",
+                            |ui| {
+                                ui.horizontal(|ui| {
+                                    egui::ComboBox::from_id_salt("term-type")
+                                        .width(250.0)
+                                        .selected_text(shown(
+                                            self.term_type.clone(),
+                                            cx.hint("terminal.term_type"),
+                                        ))
+                                        .show_ui(ui, |ui| {
+                                            for t in TERM_TYPES {
+                                                ui.selectable_value(
+                                                    &mut self.term_type,
+                                                    Some(t.to_string()),
+                                                    t,
+                                                );
+                                            }
+                                            if let Some(custom) = self.term_type.clone()
+                                                && !TERM_TYPES.contains(&custom.as_str())
+                                            {
+                                                ui.selectable_value(
+                                                    &mut self.term_type,
+                                                    Some(custom.clone()),
+                                                    custom,
+                                                );
+                                            }
+                                        });
+                                    reset(ui, &mut self.term_type, &cx.hint("terminal.term_type"));
+                                });
+                            },
+                        );
+                        text_row(
+                            ui,
+                            &cx,
+                            &mut force,
                             "Scrollback lines",
+                            "terminal.scrollback",
                             &mut self.scrollback,
-                            &from(
-                                inherited.terminal.scrollback.map(|n| n.to_string()),
-                                "10000",
-                            ),
                         );
-                        choice(
+                        row(ui, &cx, &mut force, "Log to file", "log.enabled", |ui| {
+                            bool_pick(
+                                ui,
+                                &mut self.log,
+                                cx.inherited.log.enabled.unwrap_or(false),
+                                ["yes", "no"],
+                                cx.note("log.enabled"),
+                                &cx.hint("log.enabled"),
+                            );
+                        });
+                        text_row(
                             ui,
-                            "Log to file",
-                            &mut self.log,
-                            &from(inherited.log.enabled.map(yes_no), "no"),
-                            [("yes", true), ("no", false)],
-                        );
-                        field(
-                            ui,
+                            &cx,
+                            &mut force,
                             "Log file",
+                            "log.path",
                             &mut self.log_path,
-                            &from(inherited.log.path.clone(), "%S-%Y%M%D-%h%m%s.log"),
                         );
                     });
 
@@ -412,8 +535,20 @@ impl Editor {
                     ui.colored_label(ui.visuals().error_fg_color, err);
                 }
                 ui.add_space(8.0);
+                // Enter saves and Escape cancels, unless a list is open.
+                let popup = egui::Popup::is_any_open(ui.ctx());
+                let (enter, escape) = ui.input(|i| {
+                    (
+                        i.key_pressed(egui::Key::Enter),
+                        i.key_pressed(egui::Key::Escape),
+                    )
+                });
+                if escape && !popup {
+                    result = EditorResult::Cancel;
+                }
                 ui.horizontal(|ui| {
-                    if ui.button("Save").clicked() {
+                    if ui.button("Save").clicked() || (enter && !popup) {
+                        self.force = force.clone();
                         match self.save(config_dir) {
                             Ok(name) => result = EditorResult::Saved(name),
                             Err(e) => self.error = Some(e),
@@ -424,6 +559,7 @@ impl Editor {
                     }
                 });
             });
+        self.force = force;
         if !open {
             result = EditorResult::Cancel;
         }
@@ -431,8 +567,64 @@ impl Editor {
     }
 }
 
-fn yes_no(b: bool) -> String {
-    if b { "yes" } else { "no" }.to_string()
+/// One settings row: label, the widget (or the locked value when forced from
+/// above) and, for global and folder settings, the “force” box.
+fn row(
+    ui: &mut egui::Ui,
+    cx: &Context,
+    force: &mut BTreeSet<String>,
+    label: &str,
+    key: &str,
+    add: impl FnOnce(&mut egui::Ui),
+) {
+    ui.label(label);
+    match cx.locked(key) {
+        Some(locked) => {
+            ui.weak(locked)
+                .on_hover_text("Set and forced in a parent folder or the global settings");
+            ui.label("");
+        }
+        None => {
+            add(ui);
+            if cx.can_force {
+                let mut on = force.contains(key);
+                if ui
+                    .checkbox(&mut on, "force")
+                    .on_hover_text(
+                        "Apply this value to every folder and session below, overriding theirs",
+                    )
+                    .changed()
+                {
+                    if on {
+                        force.insert(key.to_string());
+                    } else {
+                        force.remove(key);
+                    }
+                }
+            } else {
+                ui.label("");
+            }
+        }
+    }
+    ui.end_row();
+}
+
+fn text_row(
+    ui: &mut egui::Ui,
+    cx: &Context,
+    force: &mut BTreeSet<String>,
+    label: &str,
+    key: &str,
+    value: &mut String,
+) {
+    let hint = cx.hint(key);
+    row(ui, cx, force, label, key, |ui| {
+        ui.add(
+            egui::TextEdit::singleline(value)
+                .hint_text(hint)
+                .desired_width(280.0),
+        );
+    });
 }
 
 fn pick_key_file() -> Option<PathBuf> {
@@ -479,10 +671,9 @@ fn picker_level(ui: &mut egui::Ui, folder: &Folder, trail: &mut Vec<String>) {
                 ui.close();
             }
         } else {
-            let open_by_default = trail.starts_with(&f.trail);
             egui::CollapsingHeader::new(format!("📁 {}", f.name))
                 .id_salt(&f.dir)
-                .default_open(open_by_default)
+                .default_open(trail.starts_with(&f.trail))
                 .show(ui, |ui| {
                     if ui
                         .selectable_label(selected, format!("(in {})", f.name))
@@ -497,33 +688,77 @@ fn picker_level(ui: &mut egui::Ui, folder: &Folder, trail: &mut Vec<String>) {
     }
 }
 
-fn field(ui: &mut egui::Ui, label: &str, value: &mut String, hint: &str) {
-    ui.label(label);
-    ui.add(
-        egui::TextEdit::singleline(value)
-            .hint_text(hint)
-            .desired_width(280.0),
-    );
-    ui.end_row();
+/// The value a list shows: the one set here, or the inherited one in grey.
+fn shown(value: Option<String>, inherited: String) -> egui::WidgetText {
+    match value {
+        Some(v) => v.into(),
+        None => egui::RichText::new(inherited).weak().into(),
+    }
 }
 
-/// An inherit / yes / no choice. `inherit` describes what inheriting gives.
-fn choice(
+/// A small ↺ button that clears a value set here, back to the inherited one.
+fn reset<T>(ui: &mut egui::Ui, value: &mut Option<T>, inherited: &str) {
+    if value.is_some()
+        && ui
+            .small_button("↺")
+            .on_hover_text(format!("Back to the inherited value ({inherited})"))
+            .clicked()
+    {
+        *value = None;
+    }
+}
+
+/// Yes/no buttons with the effective value selected. `note` says where an
+/// inherited value comes from.
+fn bool_pick(
     ui: &mut egui::Ui,
-    label: &str,
     value: &mut Option<bool>,
-    inherit: &str,
-    options: [(&str, bool); 2],
+    inherited: bool,
+    labels: [&str; 2],
+    note: Option<String>,
+    hint: &str,
 ) {
-    ui.label(label);
     ui.horizontal(|ui| {
-        ui.selectable_value(value, None, inherit)
-            .on_hover_text("Use the inherited value");
-        for (text, v) in options {
-            ui.selectable_value(value, Some(v), text);
+        let effective = value.unwrap_or(inherited);
+        for (text, v) in [(labels[0], true), (labels[1], false)] {
+            if ui.selectable_label(effective == v, text).clicked() {
+                *value = Some(v);
+            }
+        }
+        match (value.is_some(), note) {
+            (true, _) => reset(ui, value, hint),
+            (false, Some(note)) => {
+                ui.weak(note);
+            }
+            (false, None) => {}
         }
     });
-    ui.end_row();
+}
+
+/// Ask / always / never for saving passwords. “Ask” is the unset state.
+fn save_pick(
+    ui: &mut egui::Ui,
+    value: &mut Option<bool>,
+    inherited: Option<bool>,
+    note: Option<String>,
+) {
+    ui.horizontal(|ui| {
+        let effective = value.or(inherited);
+        for (text, v) in [
+            ("ask", None),
+            ("always", Some(true)),
+            ("never", Some(false)),
+        ] {
+            if ui.selectable_label(effective == v, text).clicked() {
+                *value = v;
+            }
+        }
+        if value.is_none()
+            && let Some(note) = note
+        {
+            ui.weak(note);
+        }
+    });
 }
 
 #[cfg(test)]
@@ -531,7 +766,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sessions_and_folders_round_trip() {
+    fn sessions_folders_and_global_round_trip() {
         let tmp = tempfile::tempdir().unwrap();
         let sessions = tmp.path().join(przmterm_session::SESSIONS_DIR);
         przmterm_session::create_folder(&sessions, "Lab").unwrap();
@@ -539,6 +774,7 @@ mod tests {
         let mut e = Editor::new_session(&["Lab".to_string()]);
         e.name = "sw1".into();
         e.host = "10.0.0.1".into();
+        e.username = "me".into();
         e.term_type = Some("vt220".into());
         e.save(tmp.path()).unwrap();
         assert!(sessions.join("Lab/sw1.toml").exists());
@@ -547,19 +783,30 @@ mod tests {
         let lab = tree.root.find(&["Lab".to_string()]).unwrap();
         let mut f = Editor::folder(lab);
         f.port = "2222".into();
+        f.force.insert("port".into());
         f.name = "Lab2".into();
         f.host = "ignored for folders".into();
         f.save(tmp.path()).unwrap();
         let folder_toml = std::fs::read_to_string(sessions.join("Lab2/folder.toml")).unwrap();
-        assert_eq!(folder_toml, "port = 2222\n");
+        assert_eq!(folder_toml, "port = 2222\nforce = [\"port\"]\n");
+
+        let mut g = Editor::global(tmp.path());
+        g.username = "ops".into();
+        g.force.insert("username".into());
+        g.save(tmp.path()).unwrap();
 
         let tree = przmterm_session::SessionTree::load(tmp.path());
         let sw1 = tree.root.all_sessions()[0];
-        assert_eq!(sw1.display_target(), "10.0.0.1:2222");
+        assert_eq!(
+            sw1.display_target(),
+            "ops@10.0.0.1:2222",
+            "global and folder force win"
+        );
         assert_eq!(sw1.term_type, "vt220");
 
         let mut e = Editor::edit(sw1);
         assert!(e.port.is_empty(), "inherited values are not copied in");
+        assert!(e.force.is_empty());
         e.target = Target::Session {
             original: Some(sw1.path.clone()),
             trail: vec![],
