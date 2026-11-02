@@ -97,8 +97,10 @@ maintainer's servers; legacy algorithms only against a test server.
   session, with a description and optional tooltips (running a script waits
   for 0.7.0)
 - [x] Send input to every pane of a split tab at once, after a warning
-- Keymap editor: assign keyboard shortcuts to sending text, app commands
-  (new tab, split, send BREAK…) and buttons
+- [x] Tab menu (right-click a tab): rename the tab (until it closes), reset the
+  name, reconnect, disconnect, close (connected sessions ask first), close
+  disconnected / other / right-hand / all tabs, clone, session options (or
+  save a quick-connect session), font size, send commands to the tab
 - [x] Keyword highlighting: named keyword sets (words or regular expressions, each
   with its colours), chosen per session or folder; SecureCRT keyword lists
   (`Keywords/*.ini`, e.g. a `CORES` set) can be imported
@@ -118,17 +120,25 @@ maintainer's servers; legacy algorithms only against a test server.
 
 ## 0.7.0 — Scripting
 
+- Keymap editor: assign keyboard shortcuts to sending text, app commands
+  (new tab, split, send BREAK…), buttons and scripts
+
 - Embedded scripting with a `session` object (`send`, `wait_for`, `read_until`, `log`, `prompt`).
   Python via `pyo3` as an optional feature is the current plan; Lua/Rhai is the
   lighter alternative (decision open)
 
 ## 0.8.0 — File transfer
 
-- SFTP with a file browser
+- SFTP with a file browser, also opened from a tab's menu ("Connect SFTP
+  Session")
 - Xmodem, Ymodem and Zmodem
 
 ## 0.9.0 — Automation and hardening
 
+- Tabs and windows: tab groups (close a group, move tabs to a new group, send
+  commands to a group), several windows (clone or move a tab to a new
+  window), locking a session with a password, font family and size saved per
+  session
 - `przm run <session> --cmd …` headless mode
 - MCP server: `list_sessions`, `open_session`, `send`, `read_screen`, `run_script`,
   with per-session permissions and a command block list

@@ -57,6 +57,9 @@ struct Tab {
     panes: Vec<Pane>,
     active: usize,
     layout: Layout,
+    /// Set with "Rename": shown instead of the session's title, until the
+    /// tab closes (the session itself keeps its name).
+    name: Option<String>,
 }
 
 impl Tab {
@@ -65,6 +68,7 @@ impl Tab {
             panes: vec![pane],
             active: 0,
             layout: Layout::Columns,
+            name: None,
         }
     }
 
@@ -76,8 +80,16 @@ impl Tab {
         &mut self.panes[self.active]
     }
 
+    /// Panes still connected to a session.
+    fn connected(&self) -> usize {
+        self.panes
+            .iter()
+            .filter(|p| p.origin.is_some() && !p.transport.is_closed())
+            .count()
+    }
+
     fn title(&self) -> String {
-        let title = self.pane().title();
+        let title = self.name.clone().unwrap_or_else(|| self.pane().title());
         if self.panes.len() > 1 {
             format!("{title} (+{})", self.panes.len() - 1)
         } else {
@@ -101,6 +113,17 @@ enum Action {
     Macro(buttonbar::Press),
     ToggleBroadcast,
     ToggleButtons,
+    /// Close these tabs, asking first if any is connected.
+    RequestClose(Vec<usize>),
+    /// Close the active pane, asking first if it is connected.
+    RequestClosePane,
+    RenameTab(usize),
+    ResetTabName(usize),
+    ReconnectTab(usize),
+    DisconnectTab(usize),
+    CloneTab(usize),
+    SessionOptions(usize),
+    FontTab(usize),
     ToggleSessions,
 }
 
@@ -137,6 +160,12 @@ struct PrzmApp {
     confirm_broadcast: bool,
     /// Asking before quitting with sessions open.
     confirm_quit: bool,
+    /// Asking before closing connected tabs or panes.
+    confirm_close: Option<CloseRequest>,
+    /// The "Rename" dialog: tab and the name being typed.
+    tab_rename: Option<(usize, String)>,
+    /// The "Font…" dialog, for this tab.
+    font_dialog: Option<usize>,
     /// The quit was confirmed: let the window close.
     quitting: bool,
 }
@@ -174,6 +203,13 @@ struct NameDialog {
     rename: bool,
     value: String,
     error: Option<String>,
+}
+
+/// What the close confirmation would close.
+#[derive(Clone)]
+enum CloseRequest {
+    Tabs(Vec<usize>),
+    Pane,
 }
 
 /// What a confirmation dialog would delete.
@@ -220,6 +256,9 @@ impl PrzmApp {
             broadcast: false,
             confirm_broadcast: false,
             confirm_quit: false,
+            confirm_close: None,
+            tab_rename: None,
+            font_dialog: None,
             quitting: false,
         }
     }
@@ -328,6 +367,61 @@ impl PrzmApp {
             }
             Action::FocusPane(index) => self.tab_mut().active = index,
             Action::ToggleSessions => self.sessions_hidden = !self.sessions_hidden,
+            Action::RequestClose(mut tabs) => {
+                tabs.sort_unstable();
+                tabs.dedup();
+                let connected: usize = tabs.iter().map(|&t| self.tabs[t].connected()).sum();
+                if connected > 0 {
+                    self.confirm_close = Some(CloseRequest::Tabs(tabs));
+                } else {
+                    // Highest first, so the indices stay right.
+                    for t in tabs.into_iter().rev() {
+                        self.apply(Action::CloseTab(t), ctx);
+                    }
+                }
+            }
+            Action::RequestClosePane => {
+                let pane = self.tab().pane();
+                if pane.origin.is_some() && !pane.transport.is_closed() {
+                    self.confirm_close = Some(CloseRequest::Pane);
+                } else {
+                    self.apply(Action::ClosePane, ctx);
+                }
+            }
+            Action::RenameTab(t) => {
+                let name = self.tabs[t].title();
+                self.tab_rename = Some((t, self.tabs[t].name.clone().unwrap_or(name)));
+            }
+            Action::ResetTabName(t) => self.tabs[t].name = None,
+            Action::ReconnectTab(t) => {
+                for pane in &mut self.tabs[t].panes {
+                    if pane.transport.is_closed() {
+                        let ctx2 = ctx.clone();
+                        pane.reconnect(&env, Arc::new(move || ctx2.request_repaint()));
+                    }
+                }
+            }
+            Action::DisconnectTab(t) => {
+                for pane in &mut self.tabs[t].panes {
+                    pane.cancel_retry();
+                    let _ = pane.transport.close();
+                }
+            }
+            Action::CloneTab(t) => {
+                let pane = self.tabs[t].pane().clone_session(&env, waker);
+                self.tabs.insert(t + 1, Tab::new(pane));
+                self.active_tab = t + 1;
+            }
+            Action::SessionOptions(t) => {
+                if let Some(session) = self.tabs[t].pane().origin.clone() {
+                    self.editor = Some(if session.path.as_os_str().is_empty() {
+                        Editor::save_quick(&session)
+                    } else {
+                        Editor::edit(&session)
+                    });
+                }
+            }
+            Action::FontTab(t) => self.font_dialog = Some(t),
             Action::ToggleBroadcast => {
                 if self.broadcast {
                     self.broadcast = false;
@@ -412,7 +506,7 @@ impl PrzmApp {
             if i.consume_key(cmd_shift, Key::T) {
                 Some(Action::NewTab)
             } else if i.consume_key(cmd_shift, Key::W) {
-                Some(Action::ClosePane)
+                Some(Action::RequestClosePane)
             } else if i.consume_key(cmd_shift, Key::D) {
                 Some(Action::Split(Layout::Columns))
             } else if i.consume_key(cmd_shift, Key::E) {
@@ -443,6 +537,9 @@ impl PrzmApp {
             || self.buttons.modal()
             || self.confirm_broadcast
             || self.confirm_quit
+            || self.confirm_close.is_some()
+            || self.tab_rename.is_some()
+            || self.font_dialog.is_some()
     }
 
     /// Panes with a live connection to a session.
@@ -497,6 +594,123 @@ impl PrzmApp {
 
     /// The session editor and the delete confirmation.
     fn dialogs(&mut self, ctx: &egui::Context) {
+        let center = ctx.content_rect().center();
+        let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        let enter = ctx.input(|i| i.key_pressed(egui::Key::Enter));
+        if let Some(request) = self.confirm_close.clone() {
+            let (title, text) = match &request {
+                CloseRequest::Pane => (
+                    "Close pane?".to_string(),
+                    "The session in this pane is connected. Closing disconnects it.".to_string(),
+                ),
+                CloseRequest::Tabs(tabs) => {
+                    let connected: usize = tabs
+                        .iter()
+                        .filter_map(|&t| self.tabs.get(t))
+                        .map(Tab::connected)
+                        .sum();
+                    (
+                        if tabs.len() == 1 {
+                            "Close tab?".to_string()
+                        } else {
+                            format!("Close {} tabs?", tabs.len())
+                        },
+                        format!("{connected} session(s) are connected. Closing disconnects them."),
+                    )
+                }
+            };
+            let mut answer = None;
+            egui::Window::new(title)
+                .pivot(egui::Align2::CENTER_CENTER)
+                .default_pos(center)
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label(text);
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Close").clicked() || enter {
+                            answer = Some(true);
+                        }
+                        if ui.button("Cancel").clicked() || escape {
+                            answer = Some(false);
+                        }
+                    });
+                });
+            if let Some(yes) = answer {
+                self.confirm_close = None;
+                if yes {
+                    match request {
+                        CloseRequest::Pane => self.apply(Action::ClosePane, ctx),
+                        CloseRequest::Tabs(tabs) => {
+                            for t in tabs.into_iter().rev() {
+                                if t < self.tabs.len() {
+                                    self.apply(Action::CloseTab(t), ctx);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let Some((t, name)) = &mut self.tab_rename {
+            let mut answer = None;
+            egui::Window::new("Rename tab")
+                .pivot(egui::Align2::CENTER_CENTER)
+                .default_pos(center)
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.add(egui::TextEdit::singleline(name).desired_width(260.0))
+                        .request_focus();
+                    ui.weak("Only the tab changes; the session keeps its name.");
+                    ui.horizontal(|ui| {
+                        if ui.button("OK").clicked() || enter {
+                            answer = Some(true);
+                        }
+                        if ui.button("Cancel").clicked() || escape {
+                            answer = Some(false);
+                        }
+                    });
+                });
+            if let Some(yes) = answer {
+                let (t, name) = (*t, name.trim().to_string());
+                if yes && let Some(tab) = self.tabs.get_mut(t) {
+                    tab.name = (!name.is_empty()).then_some(name);
+                }
+                self.tab_rename = None;
+            }
+        }
+        if let Some(t) = self.font_dialog {
+            let mut close = escape;
+            if let Some(tab) = self.tabs.get_mut(t) {
+                let mut size = tab.pane().view.font_size;
+                egui::Window::new("Font")
+                    .pivot(egui::Align2::CENTER_CENTER)
+                    .default_pos(center)
+                    .collapsible(false)
+                    .resizable(false)
+                    .show(ctx, |ui| {
+                        ui.add(
+                            egui::Slider::new(&mut size, 8.0..=32.0)
+                                .step_by(1.0)
+                                .text("size"),
+                        );
+                        ui.weak("For the panes of this tab, until it closes.");
+                        if ui.button("Close").clicked() || enter {
+                            close = true;
+                        }
+                    });
+                for pane in &mut tab.panes {
+                    pane.view.font_size = size;
+                }
+            } else {
+                close = true;
+            }
+            if close {
+                self.font_dialog = None;
+            }
+        }
         if self.confirm_quit {
             let n = self.open_sessions();
             let mut answer = None;
@@ -735,6 +949,114 @@ impl PrzmApp {
 }
 
 /// Draws the session tree, collecting what the user picked.
+/// The right-click menu of a tab.
+fn tab_menu(
+    ui: &mut egui::Ui,
+    tabs: &[Tab],
+    i: usize,
+    active: usize,
+    broadcast: bool,
+    actions: &mut Vec<Action>,
+) {
+    let tab = &tabs[i];
+    let has_session = tab.panes.iter().any(|p| p.origin.is_some());
+    let any_closed = tab
+        .panes
+        .iter()
+        .any(|p| p.origin.is_some() && p.transport.is_closed());
+    let mut item = |ui: &mut egui::Ui, enabled: bool, text: &str, action: Action| {
+        if ui.add_enabled(enabled, egui::Button::new(text)).clicked() {
+            actions.push(action);
+            ui.close();
+        }
+    };
+    item(ui, true, "Rename…", Action::RenameTab(i));
+    item(
+        ui,
+        tab.name.is_some(),
+        "Reset Name",
+        Action::ResetTabName(i),
+    );
+    item(ui, any_closed, "Reconnect", Action::ReconnectTab(i));
+    item(
+        ui,
+        tab.connected() > 0,
+        "Disconnect",
+        Action::DisconnectTab(i),
+    );
+    ui.separator();
+    item(ui, true, "Close", Action::RequestClose(vec![i]));
+    let disconnected: Vec<usize> = tabs
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.panes.iter().any(|p| p.origin.is_some()) && t.connected() == 0)
+        .map(|(n, _)| n)
+        .collect();
+    item(
+        ui,
+        !disconnected.is_empty(),
+        "Close Disconnected Tabs",
+        Action::RequestClose(disconnected),
+    );
+    let others: Vec<usize> = (0..tabs.len()).filter(|&n| n != i).collect();
+    item(
+        ui,
+        !others.is_empty(),
+        "Close Other Tabs",
+        Action::RequestClose(others),
+    );
+    let right: Vec<usize> = (i + 1..tabs.len()).collect();
+    item(
+        ui,
+        !right.is_empty(),
+        "Close Tabs to the Right",
+        Action::RequestClose(right),
+    );
+    item(
+        ui,
+        true,
+        "Close All Tabs",
+        Action::RequestClose((0..tabs.len()).collect()),
+    );
+    ui.separator();
+    item(ui, has_session, "Clone Session", Action::CloneTab(i));
+    ui.separator();
+    let quick = tab
+        .pane()
+        .origin
+        .as_ref()
+        .is_some_and(|s| s.path.as_os_str().is_empty());
+    item(
+        ui,
+        has_session,
+        if quick {
+            "Save Session…"
+        } else {
+            "Session Options…"
+        },
+        Action::SessionOptions(i),
+    );
+    item(ui, true, "Font…", Action::FontTab(i));
+    ui.separator();
+    // Typing into every pane of this tab: only for split tabs.
+    let split = tab.panes.len() > 1;
+    let on = broadcast && i == active;
+    if ui
+        .add_enabled(
+            split,
+            egui::Button::selectable(on, "Send Commands to This Tab"),
+        )
+        .on_disabled_hover_text("Split the tab first (Ctrl+Shift+D, ⌘⇧D)")
+        .clicked()
+    {
+        if i != active {
+            actions.push(Action::SelectTab(i));
+        }
+        actions.push(Action::ToggleBroadcast);
+        ui.close();
+    }
+}
+
 /// True if the session's name, host or address contains `filter`
 /// (already lower-case).
 fn session_matches(s: &Session, filter: &str) -> bool {
@@ -935,12 +1257,13 @@ impl eframe::App for PrzmApp {
                             format!("Ctrl+Shift+{k}")
                         }
                     };
-                    if ui
-                        .button("× Pane")
-                        .on_hover_text(format!("Close pane ({})", shortcut("W")))
-                        .clicked()
+                    if self.tabs[self.active_tab].panes.len() > 1
+                        && ui
+                            .button("× Pane")
+                            .on_hover_text(format!("Close pane ({})", shortcut("W")))
+                            .clicked()
                     {
-                        actions.push(Action::ClosePane);
+                        actions.push(Action::RequestClosePane);
                     }
                     if ui
                         .button("⬓ Split")
@@ -1333,25 +1656,29 @@ impl eframe::App for PrzmApp {
                     } else if !tab.pane().transport.weak_algorithms().is_empty() {
                         title = format!("⚠ {title}");
                     }
-                    let tab_button = ui.selectable_label(i == self.active_tab, title);
+                    let tab_button = ui
+                        .selectable_label(i == self.active_tab, title)
+                        .on_hover_text("Right-click for more");
                     if tab_button.clicked() {
                         actions.push(Action::SelectTab(i));
                     }
                     if tab_button.middle_clicked() {
-                        actions.push(Action::CloseTab(i));
+                        actions.push(Action::RequestClose(vec![i]));
                     }
+                    tab_button.context_menu(|ui| {
+                        tab_menu(
+                            ui,
+                            &self.tabs,
+                            i,
+                            self.active_tab,
+                            self.broadcast,
+                            &mut actions,
+                        );
+                    });
                     if ui.small_button("×").on_hover_text("Close tab").clicked() {
-                        actions.push(Action::CloseTab(i));
+                        actions.push(Action::RequestClose(vec![i]));
                     }
                     ui.separator();
-                }
-                let new_tab = if cfg!(target_os = "macos") {
-                    "New tab with the same session (⌘⇧T)"
-                } else {
-                    "New tab with the same session (Ctrl+Shift+T)"
-                };
-                if ui.button("+").on_hover_text(new_tab).clicked() {
-                    actions.push(Action::NewTab);
                 }
             });
         });

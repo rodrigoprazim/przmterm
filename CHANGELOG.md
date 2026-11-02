@@ -25,7 +25,14 @@ All notable changes to PrzmTerm are recorded here. The format follows
   typed goes to every pane of that tab until turned off (or the tab changes).
 - Search in the session list: filters by name, host or IP; Enter connects
   to the first match, Esc clears it.
-- Quitting with sessions connected asks first.
+- Quitting with sessions connected asks first; so does closing a tab or pane
+  whose session is connected.
+- Tab menu (right-click a tab): *Rename…* (only the tab, until it closes),
+  *Reset Name*, *Reconnect*, *Disconnect*, *Close*, *Close Disconnected
+  Tabs*, *Close Other Tabs*, *Close Tabs to the Right*, *Close All Tabs*,
+  *Clone Session*, *Session Options…* (or *Save Session…* for a quick-connect
+  session), *Font…* (size, for the tab) and *Send Commands to This Tab* (split
+  tabs).
 - Keyword set editor (**+** › *Keyword sets…*, or *Edit sets…* next to
   *Keywords* in the session editor): create, rename and delete sets; add,
   find, reorder and remove rules with colour pickers; a live preview on
@@ -108,6 +115,9 @@ All notable changes to PrzmTerm are recorded here. The format follows
   open instead of failing to open it twice.
 - Messages such as "Saved …" or "BREAK sent." appear in the status bar for a
   few seconds instead of under *Sessions*.
+- The **+** after the tabs is gone (*Clone Session* in the tab menu, or
+  Ctrl+Shift+T / ⌘⇧T); *× Pane* shows only in a split tab; the button
+  dialog has *Clear* on the left and *Save* / *Cancel* on the right.
 - The session list reaches up to the toolbar; the tabs of open sessions and
   the button bar span the terminal only.
 - Long session names stay on one line; the session list scrolls sideways

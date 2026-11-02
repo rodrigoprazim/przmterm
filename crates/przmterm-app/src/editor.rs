@@ -225,6 +225,48 @@ impl Editor {
         )
     }
 
+    /// A new saved session from one opened with Quick connect.
+    pub fn save_quick(session: &Session) -> Self {
+        let mut s = SessionSettings {
+            protocol: (session.protocol != Protocol::Ssh).then_some(session.protocol),
+            debug: session.debug.then_some(true),
+            ..SessionSettings::default()
+        };
+        let name = match &session.target {
+            przmterm_session::Target::Network {
+                host,
+                port,
+                username,
+            } => {
+                s.host = Some(host.clone());
+                s.port = (Some(*port) != session.protocol.default_port()).then_some(*port);
+                s.username = username.clone();
+                host.clone()
+            }
+            przmterm_session::Target::Serial(line) => {
+                s.serial_port = Some(line.port.clone());
+                s.baud_rate = Some(line.baud_rate);
+                line.port
+                    .rsplit(['/', '\\'])
+                    .next()
+                    .unwrap_or("serial")
+                    .to_string()
+            }
+            przmterm_session::Target::Local => "local".into(),
+        };
+        let mut name = name;
+        przmterm_session::strip_forbidden(&mut name);
+        Self::from_settings(
+            Target::Session {
+                original: None,
+                trail: Vec::new(),
+            },
+            "Save session",
+            &name,
+            &s,
+        )
+    }
+
     pub fn edit(session: &Session) -> Self {
         let settings = przmterm_session::read_session_settings(&session.path).unwrap_or_default();
         Self::from_settings(
