@@ -7,6 +7,16 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Scripts in [Rhai](https://rhai.rs) (`<config>/scripts/*.rhai`): a
+  `session` object with `send`, `wait_for` (one text or a list, with a
+  timeout), `read_until`, `name`, `host` and `username`, plus `log`/`print`,
+  `prompt`, `prompt_secret` and `sleep`. Run them with *Run Script…* in the
+  tab menu, from a button (*Script* in the button dialog) or as a session's
+  *Logon script*, run each time it connects. The status bar shows the running
+  script with **■ Stop**. Scripts are included in backups.
+
 ## [0.6.0] - 2026-11-02
 
 ### Added

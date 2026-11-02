@@ -18,6 +18,9 @@ use przmterm_transport::telnet::{TelnetConfig, TelnetTransport};
 use przmterm_transport::x11::X11Display;
 use przmterm_transport::{Ending, Size, Transport, TransportError, Waker};
 
+use przmterm_script::{Outcome, Request, Script, SessionInfo};
+use przmterm_term::plain::PlainText;
+
 use crate::demo::DemoShell;
 use crate::keychain::Keychain;
 use crate::view::TerminalView;
@@ -251,6 +254,23 @@ pub struct Pane {
     /// Macro text still to send, and when the next piece is due (`\p`).
     queue: VecDeque<Chunk>,
     queue_at: Option<std::time::Instant>,
+    /// The script driving this pane, if one runs.
+    script: Option<Script>,
+    /// Output as plain text, for the script.
+    plain: PlainText,
+}
+
+/// What a running script needs from the application.
+pub enum ScriptEvent {
+    /// Ask the user, then answer on `reply` (`None` stops the script).
+    Prompt {
+        script: String,
+        question: String,
+        secret: bool,
+        reply: std::sync::mpsc::Sender<Option<String>>,
+    },
+    /// The script ended; a message for the status bar.
+    Ended(String),
 }
 
 /// When the next automatic reconnect happens.
@@ -263,13 +283,19 @@ pub struct Retry {
 const RETRY_DELAYS: [u64; 5] = [2, 5, 10, 20, 30];
 
 impl Pane {
-    pub fn demo() -> Self {
+    fn with(
+        term: Terminal,
+        transport: Box<dyn Transport>,
+        view: TerminalView,
+        label: String,
+        origin: Option<Session>,
+    ) -> Self {
         Self {
-            term: Terminal::new(80, 24),
-            transport: Box::new(DemoShell::new()),
-            view: TerminalView::default(),
-            label: "demo shell".into(),
-            origin: None,
+            term,
+            transport,
+            view,
+            label,
+            origin,
             log: None,
             closed_announced: false,
             retry: None,
@@ -277,35 +303,153 @@ impl Pane {
             triggers: None,
             queue: VecDeque::new(),
             queue_at: None,
+            script: None,
+            plain: PlainText::new(),
         }
     }
 
+    pub fn demo() -> Self {
+        Self::with(
+            Terminal::new(80, 24),
+            Box::new(DemoShell::new()),
+            TerminalView::default(),
+            "demo shell".into(),
+            None,
+        )
+    }
+
     pub fn open(session: &Session, env: &Env, size: Size, waker: Waker) -> Self {
-        let transport = connect(session, env, size, waker);
-        let mut pane = Self {
-            term: Terminal::with_scrollback(
+        let transport = connect(session, env, size, waker.clone());
+        let mut pane = Self::with(
+            Terminal::with_scrollback(
                 usize::from(size.cols),
                 usize::from(size.rows),
                 session.scrollback,
             ),
             transport,
-            view: TerminalView::for_protocol(session.protocol),
-            label: format!("{} {}", session.protocol, session.display_target()),
-            origin: Some(session.clone()),
-            log: None,
-            closed_announced: false,
-            retry: None,
-            attempts: 0,
-            triggers: None,
-            queue: VecDeque::new(),
-            queue_at: None,
-        };
+            TerminalView::for_protocol(session.protocol),
+            format!("{} {}", session.protocol, session.display_target()),
+            Some(session.clone()),
+        );
         pane.load_keywords(session, env);
         pane.load_triggers(session);
         if session.log_enabled {
             pane.start_log(env);
         }
+        pane.start_logon_script(env, waker);
         pane
+    }
+
+    /// Runs the session's logon script, if it has one.
+    fn start_logon_script(&mut self, env: &Env, waker: Waker) {
+        if let Some(name) = self.origin.as_ref().and_then(|s| s.logon_script.clone()) {
+            let path = przmterm_session::script_path(env.config_dir.as_deref(), &name);
+            self.run_script(&path, waker);
+        }
+    }
+
+    /// Runs the script at `path` on this pane, stopping one already running.
+    pub fn run_script(&mut self, path: &std::path::Path, waker: Waker) {
+        self.stop_script();
+        let info = match &self.origin {
+            Some(s) => SessionInfo {
+                name: s.name.clone(),
+                host: match &s.target {
+                    Target::Network { host, .. } => host.clone(),
+                    Target::Serial(line) => line.port.clone(),
+                    Target::Local => String::new(),
+                },
+                username: match &s.target {
+                    Target::Network { username, .. } => username.clone().unwrap_or_default(),
+                    _ => String::new(),
+                },
+            },
+            None => SessionInfo {
+                name: self.label.clone(),
+                ..SessionInfo::default()
+            },
+        };
+        let script = Script::run_file(path, info, waker);
+        self.term
+            .feed(format!("\x1b[2m[Script {} started]\x1b[0m\r\n", script.name).as_bytes());
+        if self.transport.is_closed() {
+            script.session_closed();
+        }
+        self.plain.reset();
+        self.script = Some(script);
+    }
+
+    /// The name of the running script, if any.
+    pub fn script_name(&self) -> Option<&str> {
+        self.script.as_ref().map(|s| s.name.as_str())
+    }
+
+    pub fn stop_script(&mut self) {
+        if let Some(script) = &self.script {
+            script.cancel();
+        }
+    }
+
+    /// Carries out what the running script asked; prompts and the end are
+    /// handed to the application.
+    pub fn poll_script(&mut self) -> Vec<ScriptEvent> {
+        let Some(script) = &mut self.script else {
+            return Vec::new();
+        };
+        let name = script.name.clone();
+        let mut events = Vec::new();
+        let mut ended = false;
+        for request in script.poll() {
+            match request {
+                Request::Send(text) => {
+                    self.term.screen_mut().reset_display();
+                    match self.transport.write(text.as_bytes()) {
+                        Ok(()) | Err(TransportError::Closed) => {}
+                        Err(e) => tracing::warn!("transport write failed: {e}"),
+                    }
+                }
+                Request::Log(text) => {
+                    let text = text.replace('\n', "\r\n");
+                    // On a line of its own, not after the remote prompt.
+                    let start = if self.term.screen().cursor().col > 0 {
+                        "\r\n"
+                    } else {
+                        ""
+                    };
+                    self.term
+                        .feed(format!("{start}\x1b[36m[{name}] {text}\x1b[0m\r\n").as_bytes());
+                }
+                Request::Prompt {
+                    question,
+                    secret,
+                    reply,
+                } => events.push(ScriptEvent::Prompt {
+                    script: name.clone(),
+                    question,
+                    secret,
+                    reply,
+                }),
+                Request::Done(outcome) => {
+                    ended = true;
+                    let message = match outcome {
+                        Outcome::Finished => format!("Script {name} finished."),
+                        Outcome::Cancelled => format!("Script {name} stopped."),
+                        Outcome::Failed(e) => {
+                            let shown = e.replace('\n', "\r\n");
+                            self.term.feed(
+                                format!("\x1b[31m[Script {name}: {shown}]\x1b[0m\r\n").as_bytes(),
+                            );
+                            format!("Script {name} failed: {e}")
+                        }
+                    };
+                    events.push(ScriptEvent::Ended(message));
+                }
+            }
+        }
+        if ended {
+            self.script = None;
+        }
+        events
     }
 
     /// Arms the session's triggers; problems are shown in the terminal.
@@ -389,11 +533,12 @@ impl Pane {
         self.retry = None;
         self.term.feed(b"\r\n");
         let _ = self.transport.close();
-        self.transport = connect(&session, env, self.size(), waker);
+        self.transport = connect(&session, env, self.size(), waker.clone());
         self.closed_announced = false;
         if let Some(engine) = &mut self.triggers {
             engine.reset();
         }
+        self.start_logon_script(env, waker);
     }
 
     /// The pending automatic reconnect, if any.
@@ -487,6 +632,9 @@ impl Pane {
                                 .extend(przmterm_session::buttons::parse_send(&send));
                         }
                     }
+                    if let Some(script) = &self.script {
+                        script.feed(&self.plain.text(&buf[..n]));
+                    }
                     got = true;
                 }
                 Err(e) => {
@@ -501,6 +649,9 @@ impl Pane {
         }
         if self.transport.is_closed() && !self.closed_announced {
             self.closed_announced = true;
+            if let Some(script) = &self.script {
+                script.session_closed();
+            }
             self.after_close();
             got = true;
         }
@@ -606,24 +757,17 @@ impl Pane {
         else {
             return Pane::open(session, env, size, waker);
         };
-        let mut pane = Self {
-            term: Terminal::with_scrollback(
+        let mut pane = Self::with(
+            Terminal::with_scrollback(
                 usize::from(size.cols),
                 usize::from(size.rows),
                 session.scrollback,
             ),
             transport,
-            view: TerminalView::for_protocol(session.protocol),
-            label: self.label.clone(),
-            origin: Some(session.clone()),
-            log: None,
-            closed_announced: false,
-            retry: None,
-            attempts: 0,
-            triggers: None,
-            queue: VecDeque::new(),
-            queue_at: None,
-        };
+            TerminalView::for_protocol(session.protocol),
+            self.label.clone(),
+            Some(session.clone()),
+        );
         pane.load_triggers(session);
         pane.view.highlighter = self.view.highlighter.clone();
         if session.log_enabled {

@@ -154,6 +154,45 @@ once = true                # only the first time per connection
 
 Triggers are saved as plain text, so leave passwords to the keychain.
 
+### Scripts
+
+Scripts are [Rhai](https://rhai.rs) files (`.rhai`) kept in
+`<config>/scripts/`. Run one with *Run Script…* in the tab menu, put it on a
+button (*Script* in the button dialog), or give a session a **Logon script**
+that runs each time it connects. **■ Stop** in the status bar stops it.
+
+```rhai
+// Log in to a switch that asks for its own user name and password.
+if session.wait_for("Username:", 15) {
+    session.send(session.username + "\r");
+    session.wait_for("Password:");
+    session.send(prompt_secret("Password for " + session.name) + "\r");
+}
+let seen = session.wait_for(["#", ">", "denied"], 10);   // index, or -1
+if seen == 0 {
+    session.send("terminal length 0\r");
+    session.wait_for("#");
+    session.send("show version\r");
+    let version = session.read_until("#", 10);   // the output before "#"
+    log("version: " + version.len() + " characters");
+}
+```
+
+| In a script | Does |
+| --- | --- |
+| `session.send(text)` | types `text` (`"\r"` is Enter) |
+| `session.wait_for(text)` / `(text, seconds)` | `true` once `text` shows up; `false` if the session closes or time runs out |
+| `session.wait_for([a, b, …], seconds)` | index of the text seen first, `-1` if none |
+| `session.read_until(text, seconds)` | the output before `text`; an error on time-out |
+| `session.name`, `.host`, `.username` | the session's details |
+| `log(text)`, `print(text)` | shows a line in the terminal (not sent) |
+| `prompt(question)`, `prompt_secret(question)` | asks you; *Stop script* cancels |
+| `sleep(ms)` | waits |
+
+Waits see the output as plain text (colours and cursor moves removed), and
+each match consumes the output up to it, so the same prompt is not matched
+twice.
+
 ### Keyword highlighting
 
 A keyword set colours words and patterns in the output: `up` green, `down`
@@ -342,6 +381,7 @@ A sample tree is in [examples/config](examples/config). Try it with
 | `przmterm-transport` | `Transport` trait; SSH, Telnet, serial and local implementations |
 | `przmterm-term` | Escape-sequence parser, grid, scrollback |
 | `przmterm-session` | Session files and inheritance |
+| `przmterm-script` | Rhai scripts that drive a session |
 | `przmterm-cli` | The `przm` binary |
 | `przmterm-app` | The `przmterm` desktop binary |
 

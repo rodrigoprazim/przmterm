@@ -8,6 +8,8 @@
 
 use przmterm_core::triggers::Trigger;
 
+use crate::plain::PlainText;
+
 /// Plain text kept for matching across reads.
 const WINDOW: usize = 4096;
 
@@ -23,17 +25,6 @@ struct Armed {
     fired: bool,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Esc {
-    None,
-    Start,
-    /// `ESC [` … final byte.
-    Csi,
-    /// `ESC ]` … BEL or `ESC \`.
-    Osc,
-    OscEnd,
-}
-
 pub struct TriggerEngine {
     triggers: Vec<Armed>,
     /// Recent plain text.
@@ -41,9 +32,7 @@ pub struct TriggerEngine {
     /// Matches must start at or after this byte of `text` (what came before
     /// has been answered already).
     from: usize,
-    esc: Esc,
-    /// Bytes of a UTF-8 character split across reads.
-    partial: Vec<u8>,
+    plain: PlainText,
 }
 
 impl TriggerEngine {
@@ -78,8 +67,7 @@ impl TriggerEngine {
                 triggers: armed,
                 text: String::new(),
                 from: 0,
-                esc: Esc::None,
-                partial: Vec::new(),
+                plain: PlainText::new(),
             },
             problems,
         )
@@ -93,8 +81,7 @@ impl TriggerEngine {
     pub fn reset(&mut self) {
         self.text.clear();
         self.from = 0;
-        self.esc = Esc::None;
-        self.partial.clear();
+        self.plain.reset();
         for t in &mut self.triggers {
             t.fired = false;
         }
@@ -106,38 +93,7 @@ impl TriggerEngine {
         if self.triggers.is_empty() {
             return Vec::new();
         }
-        let mut data = std::mem::take(&mut self.partial);
-        data.extend_from_slice(bytes);
-        // Keep an incomplete UTF-8 character for the next read.
-        let cut = match std::str::from_utf8(&data) {
-            Ok(_) => data.len(),
-            Err(e) if e.error_len().is_none() => e.valid_up_to(),
-            Err(_) => data.len(),
-        };
-        self.partial = data.split_off(cut);
-        for c in String::from_utf8_lossy(&data).chars() {
-            self.esc = match (self.esc, c) {
-                (Esc::None, '\x1b') => Esc::Start,
-                (Esc::None, '\n' | '\r' | '\t') => {
-                    self.text.push(c);
-                    Esc::None
-                }
-                (Esc::None, c) if c.is_control() => Esc::None,
-                (Esc::None, c) => {
-                    self.text.push(c);
-                    Esc::None
-                }
-                (Esc::Start, '[') => Esc::Csi,
-                (Esc::Start, ']') => Esc::Osc,
-                (Esc::Start, _) => Esc::None,
-                (Esc::Csi, c) if ('\x40'..='\x7e').contains(&c) => Esc::None,
-                (Esc::Csi, _) => Esc::Csi,
-                (Esc::Osc, '\x07') => Esc::None,
-                (Esc::Osc, '\x1b') => Esc::OscEnd,
-                (Esc::Osc, _) => Esc::Osc,
-                (Esc::OscEnd, _) => Esc::None,
-            };
-        }
+        self.plain.push(bytes, &mut self.text);
 
         let mut fired = Vec::new();
         // Answer every trigger that matches, earliest match first, and

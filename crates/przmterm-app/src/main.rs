@@ -55,6 +55,22 @@ enum Layout {
     Rows,
 }
 
+/// A script's question to the user.
+struct ScriptPrompt {
+    script: String,
+    question: String,
+    secret: bool,
+    reply: std::sync::mpsc::Sender<Option<String>>,
+    answer: String,
+    focused: bool,
+}
+
+impl Drop for ScriptPrompt {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.answer);
+    }
+}
+
 /// The "Split" dialog: what goes next to the current session.
 struct SplitDialog {
     layout: Layout,
@@ -246,6 +262,10 @@ enum Action {
     SeparatePane,
     /// Gives every pane of this tab a tab of its own.
     SeparateAll(usize),
+    /// Picks a script and runs it on the active pane of this tab.
+    RunScript(usize),
+    /// Stops the script of the active pane of this tab.
+    StopScript(usize),
     ClosePane,
     FocusPane(usize),
     Reconnect,
@@ -313,6 +333,8 @@ struct PrzmApp {
     font_dialog: Option<usize>,
     /// The "Split" dialog.
     split_dialog: Option<SplitDialog>,
+    /// Questions from scripts, asked one at a time.
+    script_prompts: std::collections::VecDeque<ScriptPrompt>,
     /// A backup or export being restored or imported, and the folder name
     /// for an import.
     bundle_dialog: Option<(przmterm_session::bundle::Bundle, String)>,
@@ -414,6 +436,7 @@ impl PrzmApp {
             tab_rename: None,
             font_dialog: None,
             split_dialog: None,
+            script_prompts: Default::default(),
             bundle_dialog: None,
             quitting: false,
         }
@@ -654,6 +677,25 @@ impl PrzmApp {
                 }
             }
             Action::ToggleButtons => self.buttons.visible = !self.buttons.visible,
+            Action::Macro(press) if press.script.is_some() => {
+                let name = press.script.unwrap_or_default();
+                let path = przmterm_session::script_path(self.config_dir.as_deref(), &name);
+                self.tab_mut().pane_mut().run_script(&path, waker);
+            }
+            Action::RunScript(t) => {
+                let mut picker = rfd::FileDialog::new()
+                    .set_title("Run a script")
+                    .add_filter("Rhai script", &[przmterm_script::EXTENSION]);
+                if let Some(dir) = &self.config_dir {
+                    let scripts = dir.join(przmterm_session::SCRIPTS_DIR);
+                    let _ = std::fs::create_dir_all(&scripts);
+                    picker = picker.set_directory(scripts);
+                }
+                if let Some(path) = picker.pick_file() {
+                    self.tabs[t].pane_mut().run_script(&path, waker);
+                }
+            }
+            Action::StopScript(t) => self.tabs[t].pane_mut().stop_script(),
             Action::Macro(press) => {
                 let pane = self.tab_mut().pane_mut();
                 if pane.transport.is_closed() {
@@ -687,6 +729,31 @@ impl PrzmApp {
     }
 
     /// Sends macro text that is due, and wakes up for the next piece.
+    /// Carries out what running scripts ask; their questions wait in line
+    /// for the prompt dialog.
+    fn run_scripts(&mut self) {
+        for pane in self.tabs.iter_mut().flat_map(|t| &mut t.panes) {
+            for event in pane.poll_script() {
+                match event {
+                    pane::ScriptEvent::Prompt {
+                        script,
+                        question,
+                        secret,
+                        reply,
+                    } => self.script_prompts.push_back(ScriptPrompt {
+                        script,
+                        question,
+                        secret,
+                        reply,
+                        answer: String::new(),
+                        focused: false,
+                    }),
+                    pane::ScriptEvent::Ended(message) => self.notice = Some(message),
+                }
+            }
+        }
+    }
+
     fn run_queues(&mut self, ctx: &egui::Context) {
         let now = std::time::Instant::now();
         let next = self
@@ -767,6 +834,7 @@ impl PrzmApp {
             || self.tab_rename.is_some()
             || self.font_dialog.is_some()
             || self.split_dialog.is_some()
+            || !self.script_prompts.is_empty()
             || self.bundle_dialog.is_some()
             || self.vault.modal()
     }
@@ -1139,6 +1207,51 @@ impl PrzmApp {
                 }
             }
         }
+        if let Some(prompt) = self.script_prompts.front_mut() {
+            let mut answer = None; // Some(true) ok, Some(false) cancel
+            egui::Window::new(format!("Script {}", prompt.script))
+                .pivot(egui::Align2::CENTER_CENTER)
+                .default_pos(center)
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label(&prompt.question);
+                    let field = ui.add(
+                        egui::TextEdit::singleline(&mut prompt.answer)
+                            .password(prompt.secret)
+                            .desired_width(300.0),
+                    );
+                    if !prompt.focused {
+                        if field.has_focus() {
+                            prompt.focused = true;
+                        } else {
+                            field.request_focus();
+                        }
+                    }
+                    if field.lost_focus() && enter {
+                        answer = Some(true);
+                    }
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .button("Stop script")
+                                .on_hover_text("Cancel the question and stop the script")
+                                .clicked()
+                                || escape
+                            {
+                                answer = Some(false);
+                            }
+                            if ui.button("OK").clicked() {
+                                answer = Some(true);
+                            }
+                        });
+                    });
+                });
+            if let Some(ok) = answer {
+                let prompt = self.script_prompts.pop_front().expect("prompt open");
+                let _ = prompt.reply.send(ok.then(|| prompt.answer.clone()));
+            }
+        }
         if let Some(t) = self.font_dialog {
             let mut close = escape;
             if let Some(tab) = self.tabs.get_mut(t) {
@@ -1505,6 +1618,16 @@ fn tab_menu(
     );
     item(ui, true, "Font…", Action::FontTab(i));
     ui.separator();
+    match tab.pane().script_name() {
+        Some(name) => item(
+            ui,
+            true,
+            &format!("Stop Script {name}"),
+            Action::StopScript(i),
+        ),
+        None => item(ui, true, "Run Script…", Action::RunScript(i)),
+    }
+    ui.separator();
     // Typing into every pane of this tab: only for split tabs.
     let split = tab.panes.len() > 1;
     let on = broadcast && i == active;
@@ -1719,6 +1842,7 @@ impl eframe::App for PrzmApp {
         }
         self.run_retries(&ctx);
         self.run_queues(&ctx);
+        self.run_scripts();
         // "Send to all" is for split panes: off when the tab has one pane.
         if self.tab().panes.len() < 2 {
             self.broadcast = false;
@@ -1907,6 +2031,19 @@ impl eframe::App for PrzmApp {
                         .clicked()
                     {
                         actions.push(Action::ToggleButtons);
+                    }
+                    if let Some(name) = pane.script_name() {
+                        if ui
+                            .small_button("■ Stop")
+                            .on_hover_text("Stop the script")
+                            .clicked()
+                        {
+                            actions.push(Action::StopScript(self.active_tab));
+                        }
+                        ui.label(
+                            egui::RichText::new(format!("▶ {name}"))
+                                .color(egui::Color32::from_rgb(110, 200, 255)),
+                        );
                     }
                     if pane.view.offer_break
                         && ui

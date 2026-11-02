@@ -100,6 +100,7 @@ pub struct Editor {
     legacy_algorithms: Option<bool>,
     x11_forwarding: Option<bool>,
     keywords: Option<String>,
+    logon_script: String,
     /// The keyword editor was asked for, for this set (if any).
     keyword_request: Option<Option<String>>,
     /// Tunnels set here; `None` inherits the list from above.
@@ -152,6 +153,7 @@ fn field_label(key: &str) -> &'static str {
         "legacy_algorithms" => "legacy algorithms",
         "x11_forwarding" => "X11 forwarding",
         "keywords" => "keyword highlighting",
+        "logon_script" => "logon script",
         "forward" => "tunnels",
         "trigger" => "triggers",
         "baud_rate" => "baud rate",
@@ -181,6 +183,7 @@ struct Context<'a> {
     protocol: Protocol,
     /// Default log folder, `<config>/logs`.
     logs_dir: String,
+    config_dir: &'a Path,
 }
 
 impl Context<'_> {
@@ -199,6 +202,7 @@ impl Context<'_> {
             "legacy_algorithms" => "no".into(),
             "x11_forwarding" => "no".into(),
             "keywords" => "none".into(),
+            "logon_script" => "none".into(),
             "forward" => "none".into(),
             "trigger" => "none".into(),
             "serial_port" => "/dev/ttyUSB0 or COM3".into(),
@@ -359,6 +363,7 @@ impl Editor {
             legacy_algorithms: s.legacy_algorithms,
             x11_forwarding: s.x11_forwarding,
             keywords: s.keywords.clone(),
+            logon_script: text(&s.logon_script),
             keyword_request: None,
             forwards: s.forwards.clone(),
             triggers: s.triggers.clone(),
@@ -408,6 +413,7 @@ impl Editor {
             legacy_algorithms: self.legacy_algorithms,
             x11_forwarding: self.x11_forwarding,
             keywords: self.keywords.clone(),
+            logon_script: opt(&self.logon_script),
             triggers: match &self.triggers {
                 None => None,
                 Some(list) => {
@@ -547,6 +553,7 @@ impl Editor {
             keyword_sets: przmterm_session::keyword_sets(config_dir),
             protocol,
             logs_dir,
+            config_dir,
         };
         let popup = egui::Popup::is_any_open(ctx);
         let (enter, escape) = ctx.input(|i| {
@@ -1188,6 +1195,24 @@ impl Editor {
              --More-- → space, [confirm] → Enter…",
         );
         self.triggers_ui(ui, cx);
+        ui.end_row();
+
+        ui.label("Logon script").on_hover_text(
+            "A Rhai script run each time the session connects, \
+             e.g. to answer the login prompts",
+        );
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.logon_script)
+                    .hint_text(cx.hint("logon_script"))
+                    .desired_width(200.0),
+            );
+            if ui.button("Browse…").clicked()
+                && let Some(name) = crate::buttonbar::pick_script(Some(cx.config_dir))
+            {
+                self.logon_script = name;
+            }
+        });
         ui.end_row();
 
         ui.label("Auto reconnect").on_hover_text(

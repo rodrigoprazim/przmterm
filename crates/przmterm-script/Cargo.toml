@@ -1,0 +1,15 @@
+[package]
+name = "przmterm-script"
+description = "Rhai scripts that drive PrzmTerm sessions"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+rhai.workspace = true
+
+[lints]
+workspace = true

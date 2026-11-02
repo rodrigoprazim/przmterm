@@ -11,6 +11,8 @@ use przmterm_session::buttons::{
 /// A button was pressed: what to send to the current session.
 pub struct Press {
     pub chunks: Vec<Chunk>,
+    /// Run this script instead (a name in `<config>/scripts` or a path).
+    pub script: Option<String>,
 }
 
 struct ButtonEdit {
@@ -140,6 +142,7 @@ impl ButtonBarUi {
                 if response.clicked() {
                     press = Some(Press {
                         chunks: parse_send(&button.send),
+                        script: (!button.script.trim().is_empty()).then(|| button.script.clone()),
                     });
                 }
                 response.context_menu(|ui| {
@@ -256,6 +259,22 @@ impl ButtonBarUi {
                         ui.end_row();
                         ui.label("");
                         ui.weak("\\r Enter   \\n line feed   \\t Tab   \\e Esc   \\p pause 1 s");
+                        ui.end_row();
+                        ui.label("Script").on_hover_text(
+                            "A Rhai script to run instead of sending the text above",
+                        );
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut edit.button.script)
+                                    .hint_text("none: the button sends the text")
+                                    .desired_width(240.0),
+                            );
+                            if ui.button("Browse…").clicked()
+                                && let Some(name) = pick_script(config_dir)
+                            {
+                                edit.button.script = name;
+                            }
+                        });
                         ui.end_row();
                         ui.label("Description");
                         ui.add(
@@ -397,4 +416,24 @@ impl ButtonBarUi {
             }
         }
     }
+}
+
+/// Picks a script file: a file in `<config>/scripts` is kept by name, any
+/// other by its full path.
+pub fn pick_script(config_dir: Option<&Path>) -> Option<String> {
+    let mut picker = rfd::FileDialog::new()
+        .set_title("Choose a script")
+        .add_filter("Rhai script", &[przmterm_script::EXTENSION]);
+    let scripts = config_dir.map(|d| d.join(przmterm_session::SCRIPTS_DIR));
+    if let Some(dir) = &scripts {
+        let _ = std::fs::create_dir_all(dir);
+        picker = picker.set_directory(dir);
+    }
+    let path = picker.pick_file()?;
+    Some(
+        match scripts.and_then(|d| path.strip_prefix(&d).ok().map(Path::to_path_buf)) {
+            Some(rel) => rel.display().to_string(),
+            None => path.display().to_string(),
+        },
+    )
 }

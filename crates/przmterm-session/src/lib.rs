@@ -51,6 +51,19 @@ pub const DEFAULT_LOG_TEMPLATE: &str = "%S-%Y%M%D-%h%m%s.log";
 pub const LOGS_DIR: &str = "logs";
 /// Keyword highlighting sets, one `<name>.toml` each.
 pub const KEYWORDS_DIR: &str = "keywords";
+/// Scripts named without a folder are looked for here.
+pub const SCRIPTS_DIR: &str = "scripts";
+
+/// Where a script named in a setting or button is: a full path (or `~/…`)
+/// as it is, a bare name in `<config>/scripts`.
+pub fn script_path(config_dir: Option<&Path>, name: &str) -> PathBuf {
+    let name = name.trim();
+    let path = expand_tilde(name);
+    match config_dir {
+        Some(dir) if path.is_relative() => dir.join(SCRIPTS_DIR).join(path),
+        _ => path,
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
@@ -144,6 +157,10 @@ pub struct SessionSettings {
     /// `""` turns an inherited one off.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keywords: Option<String>,
+    /// Script run each time the session connects: a file in
+    /// `<config>/scripts`, or a full path. `""` turns an inherited one off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logon_script: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub serial_port: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -177,7 +194,7 @@ pub struct SessionSettings {
 }
 
 /// Keys of the individual settings, used to compare and copy them.
-pub const FIELDS: [&str; 27] = [
+pub const FIELDS: [&str; 28] = [
     "protocol",
     "host",
     "port",
@@ -192,6 +209,7 @@ pub const FIELDS: [&str; 27] = [
     "legacy_algorithms",
     "x11_forwarding",
     "keywords",
+    "logon_script",
     "forward",
     "trigger",
     "serial_port",
@@ -225,6 +243,7 @@ impl SessionSettings {
             "legacy_algorithms" => self.legacy_algorithms = from.legacy_algorithms,
             "x11_forwarding" => self.x11_forwarding = from.x11_forwarding,
             "keywords" => self.keywords = from.keywords.clone(),
+            "logon_script" => self.logon_script = from.logon_script.clone(),
             "forward" => self.forwards = from.forwards.clone(),
             "trigger" => self.triggers = from.triggers.clone(),
             "serial_port" => self.serial_port = from.serial_port.clone(),
@@ -260,6 +279,7 @@ impl SessionSettings {
             "legacy_algorithms" => self.legacy_algorithms.map(yes_no),
             "x11_forwarding" => self.x11_forwarding.map(yes_no),
             "keywords" => self.keywords.clone(),
+            "logon_script" => self.logon_script.clone(),
             "forward" => self.forwards.as_ref().map(|f| {
                 if f.is_empty() {
                     "none".to_string()
@@ -324,6 +344,7 @@ impl SessionSettings {
             legacy_algorithms: pick(&self.legacy_algorithms, &over.legacy_algorithms),
             x11_forwarding: pick(&self.x11_forwarding, &over.x11_forwarding),
             keywords: pick(&self.keywords, &over.keywords),
+            logon_script: pick(&self.logon_script, &over.logon_script),
             forwards: pick(&self.forwards, &over.forwards),
             triggers: pick(&self.triggers, &over.triggers),
             serial_port: pick(&self.serial_port, &over.serial_port),
@@ -421,6 +442,8 @@ pub struct Session {
     pub x11_forwarding: bool,
     /// Name of the keyword set for highlighting, if any.
     pub keywords: Option<String>,
+    /// See [`SessionSettings::logon_script`]; resolve with [`script_path`].
+    pub logon_script: Option<String>,
     pub term_type: String,
     pub scrollback: usize,
     pub log_enabled: bool,
@@ -506,6 +529,10 @@ impl Session {
             legacy_algorithms: settings.legacy_algorithms.unwrap_or(false),
             x11_forwarding: settings.x11_forwarding.unwrap_or(false),
             keywords: settings.keywords.clone().filter(|k| !k.trim().is_empty()),
+            logon_script: settings
+                .logon_script
+                .clone()
+                .filter(|k| !k.trim().is_empty()),
             jump_host: settings.jump_host.clone().filter(|j| !j.trim().is_empty()),
             triggers: settings.triggers.clone().unwrap_or_default(),
             tunnels: settings
@@ -1711,6 +1738,31 @@ mod tests {
             "{toml}"
         );
         assert_eq!(SessionSettings::from_toml(&toml).unwrap(), own);
+    }
+
+    #[test]
+    fn scripts_are_found_by_name_or_path() {
+        let config = Path::new("/cfg");
+        assert_eq!(
+            script_path(Some(config), "login.rhai"),
+            Path::new("/cfg/scripts/login.rhai")
+        );
+        assert_eq!(
+            script_path(Some(config), "/opt/x.rhai"),
+            Path::new("/opt/x.rhai")
+        );
+        let s = SessionSettings::from_toml("host = 'r1'\nlogon_script = 'cisco.rhai'").unwrap();
+        let session = Session::resolve("r1", Vec::new(), "r1.toml", &s).unwrap();
+        assert_eq!(session.logon_script.as_deref(), Some("cisco.rhai"));
+        let off = s.overlay(&SessionSettings {
+            logon_script: Some(String::new()),
+            ..Default::default()
+        });
+        let session = Session::resolve("r1", Vec::new(), "r1.toml", &off).unwrap();
+        assert_eq!(
+            session.logon_script, None,
+            "\"\" turns an inherited one off"
+        );
     }
 
     #[test]

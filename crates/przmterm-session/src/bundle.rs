@@ -138,6 +138,10 @@ fn add_file(bundle: &mut Bundle, base: &Path, file: &Path) -> Result<(), String>
 
 /// Every `.toml` under `dir`, sorted.
 fn toml_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    files_with(dir, "toml", out);
+}
+
+fn files_with(dir: &Path, extension: &str, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -145,8 +149,8 @@ fn toml_files(dir: &Path, out: &mut Vec<PathBuf>) {
     entries.sort();
     for path in entries {
         if path.is_dir() {
-            toml_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "toml") {
+            files_with(&path, extension, out);
+        } else if path.extension().is_some_and(|e| e == extension) {
             out.push(path);
         }
     }
@@ -165,6 +169,7 @@ pub fn backup(config_dir: &Path) -> Result<Bundle, String> {
     let mut files = Vec::new();
     toml_files(&config_dir.join(SESSIONS_DIR), &mut files);
     toml_files(&config_dir.join(KEYWORDS_DIR), &mut files);
+    files_with(&config_dir.join(crate::SCRIPTS_DIR), "rhai", &mut files);
     for file in files {
         add_file(&mut bundle, config_dir, &file)?;
     }
@@ -282,6 +287,7 @@ mod tests {
         write(dir, "sessions/Lab/folder.toml", "username = 'ops'\n");
         write(dir, "sessions/Lab/sw1.toml", "host = '10.0.1.1'\n");
         write(dir, "keywords/CORES.toml", "[[rule]]\ntext = 'up'\n");
+        write(dir, "scripts/login.rhai", "session.send(\"ops\\r\");\n");
         write(dir, "logs/old.log", "not in backups\n");
     }
 
@@ -297,7 +303,7 @@ mod tests {
                 folders: 1,
                 keyword_sets: 1,
                 vault: false,
-                other: 3
+                other: 4
             }
         );
         assert!(!bundle.files.iter().any(|f| f.path.starts_with("logs")));
@@ -310,7 +316,8 @@ mod tests {
         let there = tempfile::tempdir().unwrap();
         write(there.path(), "sessions/core.toml", "host = 'old'\n");
         let (n, safety) = restore(there.path(), &read).unwrap();
-        assert_eq!(n, 7);
+        assert_eq!(n, 8);
+        assert!(there.path().join("scripts/login.rhai").is_file());
         assert_eq!(
             std::fs::read_to_string(there.path().join("sessions/core.toml")).unwrap(),
             "host = '10.0.0.1'\n"

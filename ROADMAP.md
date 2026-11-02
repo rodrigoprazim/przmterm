@@ -131,9 +131,11 @@ highlighting, triggers, saved credentials) work in PrzmTerm.
 - Keymap editor: assign keyboard shortcuts to sending text, app commands
   (new tab, split, send BREAK…), buttons and scripts
 
-- Embedded scripting with a `session` object (`send`, `wait_for`, `read_until`, `log`, `prompt`).
-  Python via `pyo3` as an optional feature is the current plan; Lua/Rhai is the
-  lighter alternative (decision open)
+- [x] Embedded scripting in Rhai (chosen over Python and Lua: pure Rust,
+  nothing to install) with a `session` object (`send`, `wait_for` with one or
+  several texts and a timeout, `read_until`, `name`, `host`, `username`) and
+  `log`/`print`, `prompt`, `prompt_secret`, `sleep`; run from the tab menu,
+  from a button or as a session's logon script, and stopped at any time
 
 ## 0.8.0 — File transfer
 
@@ -160,13 +162,14 @@ highlighting, triggers, saved credentials) work in PrzmTerm.
 - Signed binaries for macOS (universal), Windows and Linux
 - User guide and scripting reference
 
-**Gate:** real scripts migrated from SecureCRT and no open critical bugs.
+**Gate:** the maintainer's own automation scripts in daily use and no open
+critical bugs.
 
 ## After 1.0
 
 More button functions, as in SecureCRT's *Map Button*: send to the command
 window, credentials, menu and scroll bar functions, Telnet/SSH/VT/TN3270
-functions, switching button bars, running a script, launching an application,
+functions, switching button bars, launching an application,
 and button icon colours.
 
 libssh2 fallback for SSH algorithms `russh` lacks (only if real equipment

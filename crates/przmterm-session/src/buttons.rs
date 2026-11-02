@@ -43,6 +43,9 @@ pub struct MacroButton {
     /// Shown when the pointer rests on the button.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
+    /// Runs this script (see [`crate::script_path`]) instead of sending text.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub script: String,
     /// Accepted and ignored: written by a development build of 0.6.
     #[doc(hidden)]
     #[serde(default, rename = "target", skip_serializing)]
