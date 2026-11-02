@@ -46,6 +46,7 @@ fn ssh_config(session: &Session, env: &Env, depth: usize) -> Result<SshConfig, S
     config.identity_files = session.identity_file.iter().cloned().collect();
     config.debug = session.debug;
     config.keepalive = session.keepalive;
+    config.legacy_algorithms = session.legacy_algorithms;
     // A jump host's own tunnels are not opened.
     config.forwards = if depth == 0 {
         session.tunnels.clone()

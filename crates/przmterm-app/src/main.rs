@@ -754,6 +754,8 @@ impl eframe::App for PrzmApp {
                     }
                     if tab.pane().transport.is_closed() && tab.pane().origin.is_some() {
                         title = format!("○ {title}");
+                    } else if !tab.pane().transport.weak_algorithms().is_empty() {
+                        title = format!("⚠ {title}");
                     }
                     let tab_button = ui.selectable_label(i == self.active_tab, title);
                     if tab_button.clicked() {
@@ -789,6 +791,19 @@ impl eframe::App for PrzmApp {
                 ui.label(&pane.label);
                 if pane.transport.is_closed() {
                     ui.weak("(closed)");
+                }
+                let weak = pane.transport.weak_algorithms();
+                if !weak.is_empty() {
+                    ui.label(
+                        egui::RichText::new(" legacy ")
+                            .color(egui::Color32::BLACK)
+                            .background_color(egui::Color32::from_rgb(240, 170, 60)),
+                    )
+                    .on_hover_text(format!(
+                        "This connection uses old, weak algorithms: {}.\n\
+                         The equipment offers nothing newer.",
+                        weak.join(", ")
+                    ));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Green while logging, red while not; the dot keeps the

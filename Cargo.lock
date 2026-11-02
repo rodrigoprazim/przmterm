@@ -1384,6 +1384,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
+name = "dsa"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c8573b60d07b5b5cecadc1f978c9b71d5504151e703cbb0439ee4ad301338f3"
+dependencies = [
+ "crypto-bigint",
+ "crypto-common 0.2.2",
+ "crypto-primes",
+ "der",
+ "digest 0.11.3",
+ "rfc6979",
+ "sha2 0.11.1",
+ "signature",
+ "zeroize",
+]
+
+[[package]]
 name = "ecdsa"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4336,6 +4353,7 @@ dependencies = [
  "data-encoding",
  "delegate",
  "der",
+ "des",
  "digest 0.11.3",
  "ecdsa",
  "ed25519-dalek",
@@ -4995,6 +5013,7 @@ dependencies = [
  "argon2",
  "bcrypt-pbkdf",
  "ctutils",
+ "dsa",
  "ed25519-dalek",
  "hex",
  "hmac 0.13.0",

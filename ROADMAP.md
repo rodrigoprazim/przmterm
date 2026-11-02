@@ -78,8 +78,10 @@ equipment; the serial console has only been checked against a virtual cable.
   dynamic / SOCKS)
 - X11 forwarding: remote graphical programs shown on the local X server
   (XQuartz on macOS, VcXsrv or similar on Windows)
-- Legacy SSH algorithms enabled per session, with a visible "legacy" badge;
-  libssh2 fallback where `russh` lacks an algorithm
+- [x] Legacy SSH algorithms enabled per session, with a visible "legacy" badge
+      (`russh` covers SHA-1 key exchange, CBC and 3DES, HMAC-SHA1, `ssh-rsa`
+      and DSA; a libssh2 fallback moved to after 1.0, only if equipment needs
+      an algorithm `russh` lacks)
 - [x] Keepalive and automatic reconnect
 
 **Gate:** connects to every device in the reference lab.
@@ -135,5 +137,6 @@ equipment; the serial console has only been checked against a virtual cable.
 
 ## After 1.0
 
-Kerberos/GSSAPI, smart cards (PKCS#11), session sync through
+libssh2 fallback for SSH algorithms `russh` lacks (only if real equipment
+needs one), Kerberos/GSSAPI, smart cards (PKCS#11), session sync through
 Git, inventory import (Ansible, Zabbix, NetBox).

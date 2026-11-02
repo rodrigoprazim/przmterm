@@ -282,6 +282,46 @@ fn start_server_full(
     two_step: bool,
     max_channels: usize,
 ) -> u16 {
+    start_server_with_algorithms(
+        key,
+        connections,
+        methods,
+        client_key,
+        two_step,
+        max_channels,
+        russh::Preferred::default(),
+    )
+}
+
+/// Like an old switch: SHA-1 key exchange, CBC cipher, HMAC-SHA1 only.
+fn start_legacy_server(key: PrivateKey, connections: usize) -> u16 {
+    use russh::{cipher, kex, mac};
+    let preferred = russh::Preferred {
+        kex: vec![kex::DH_G14_SHA1, kex::EXTENSION_SUPPORT_AS_SERVER].into(),
+        cipher: vec![cipher::AES_128_CBC].into(),
+        mac: vec![mac::HMAC_SHA1].into(),
+        ..russh::Preferred::default()
+    };
+    start_server_with_algorithms(
+        key,
+        connections,
+        &[MethodKind::Password],
+        None,
+        false,
+        0,
+        preferred,
+    )
+}
+
+fn start_server_with_algorithms(
+    key: PrivateKey,
+    connections: usize,
+    methods: &[MethodKind],
+    client_key: Option<russh::keys::PublicKey>,
+    two_step: bool,
+    max_channels: usize,
+    preferred: russh::Preferred,
+) -> u16 {
     let methods = methods.to_vec();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -292,6 +332,7 @@ fn start_server_full(
                 methods: MethodSet::from(&methods[..]),
                 auth_rejection_time: Duration::from_millis(10),
                 auth_rejection_time_initial: Some(Duration::ZERO),
+                preferred,
                 ..Default::default()
             });
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -740,6 +781,48 @@ fn logs_in_through_a_jump_host() {
     s.wait_for("welcome");
     s.send("hi");
     s.wait_for("hi");
+}
+
+#[test]
+fn old_equipment_needs_legacy_algorithms_and_gets_a_badge() {
+    let dir = tempfile::tempdir().unwrap();
+    let known_hosts = dir.path().join("known_hosts");
+    let port = start_legacy_server(host_key(), 2);
+
+    // Without legacy algorithms: a clear message, and no retrying.
+    let mut s = Screen::connect(config(port, &known_hosts));
+    s.wait_closed();
+    assert!(
+        s.text
+            .contains("only offers old key exchange algorithms (diffie-hellman-group14-sha1).")
+            && s.text.contains("Legacy algorithms"),
+        "{}",
+        s.text
+    );
+    assert_eq!(
+        s.transport.ending(),
+        Some(przmterm_transport::Ending::Failed)
+    );
+
+    let mut c = config(port, &known_hosts);
+    c.legacy_algorithms = true;
+    let mut s = Screen::connect(c);
+    log_in(&mut s);
+    assert_eq!(
+        s.transport.weak_algorithms(),
+        ["diffie-hellman-group14-sha1", "aes128-cbc", "hmac-sha1"]
+    );
+}
+
+#[test]
+fn modern_servers_get_no_badge() {
+    let dir = tempfile::tempdir().unwrap();
+    let port = start_server(host_key(), 1);
+    let mut c = config(port, &dir.path().join("known_hosts"));
+    c.legacy_algorithms = true; // offered, but a modern server never picks them
+    let mut s = Screen::connect(c);
+    log_in(&mut s);
+    assert!(s.transport.weak_algorithms().is_empty());
 }
 
 #[test]

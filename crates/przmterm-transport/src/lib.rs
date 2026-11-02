@@ -97,6 +97,11 @@ pub trait Transport: Send {
         None
     }
 
+    /// Old, weak algorithms the connection uses (SSH), for a warning badge.
+    fn weak_algorithms(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Another session over the same connection, without logging in again,
     /// if the protocol supports it (SSH channels). `None` otherwise.
     fn duplicate(&self, _size: Size, _waker: Waker) -> Option<Box<dyn Transport>> {

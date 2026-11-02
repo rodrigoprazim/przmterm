@@ -35,7 +35,7 @@ eframe = "0.37"
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "macros", "io-util"] }
 # ring instead of aws-lc-rs: no cmake/nasm needed to build on Windows.
-russh = { version = "0.65", default-features = false, features = ["ring", "rsa", "flate2"] }
+russh = { version = "0.65", default-features = false, features = ["ring", "rsa", "flate2", "des", "dsa"] }
 rand = "0.10"
 # No libudev: Linux port listing reads /sys, so no system library is needed.
 serialport = { version = "4.10", default-features = false }

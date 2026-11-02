@@ -91,6 +91,7 @@ pub struct Editor {
     keepalive: String,
     auto_reconnect: Option<bool>,
     jump_host: String,
+    legacy_algorithms: Option<bool>,
     /// Tunnels set here; `None` inherits the list from above.
     forwards: Option<Vec<Forward>>,
     show_log_help: bool,
@@ -135,6 +136,7 @@ fn field_label(key: &str) -> &'static str {
         "keepalive" => "keepalive",
         "auto_reconnect" => "auto reconnect",
         "jump_host" => "jump host",
+        "legacy_algorithms" => "legacy algorithms",
         "forward" => "tunnels",
         "baud_rate" => "baud rate",
         "data_bits" => "data bits",
@@ -175,6 +177,7 @@ impl Context<'_> {
             "keepalive" => format!("{} (0 = off)", przmterm_session::DEFAULT_KEEPALIVE),
             "auto_reconnect" => "no".into(),
             "jump_host" => "none (direct), or a session name or user@host".into(),
+            "legacy_algorithms" => "no".into(),
             "forward" => "none".into(),
             "serial_port" => "/dev/ttyUSB0 or COM3".into(),
             "baud_rate" => przmterm_session::DEFAULT_BAUD_RATE.to_string(),
@@ -286,6 +289,7 @@ impl Editor {
             keepalive: text(&s.keepalive),
             auto_reconnect: s.auto_reconnect,
             jump_host: text(&s.jump_host),
+            legacy_algorithms: s.legacy_algorithms,
             forwards: s.forwards.clone(),
             show_log_help: false,
             confirm: None,
@@ -319,6 +323,7 @@ impl Editor {
             keepalive: number("Keepalive", &self.keepalive)?,
             auto_reconnect: self.auto_reconnect,
             jump_host: opt(&self.jump_host),
+            legacy_algorithms: self.legacy_algorithms,
             forwards: match &self.forwards {
                 None => None,
                 Some(list) => {
@@ -682,6 +687,22 @@ impl Editor {
             ["yes", "no"],
             None,
             &cx.hint("debug"),
+        );
+        ui.end_row();
+
+        ui.label("Legacy algorithms").on_hover_text(
+            "Also offer old algorithms for equipment that knows nothing newer: \
+             SHA-1 key exchange, CBC and 3DES ciphers, HMAC-SHA1, DSA host keys. \
+             A modern server never picks them; a connection using them shows a \
+             \"legacy\" badge.",
+        );
+        bool_pick(
+            ui,
+            &mut self.legacy_algorithms,
+            cx.inherited.legacy_algorithms.unwrap_or(false),
+            ["yes", "no"],
+            None,
+            &cx.hint("legacy_algorithms"),
         );
         ui.end_row();
 

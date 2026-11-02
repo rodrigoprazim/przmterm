@@ -19,6 +19,14 @@ All notable changes to PrzmTerm are recorded here. The format follows
   and logging. Passwords are not imported (they stay encrypted in SecureCRT);
   sessions with logon scripts, port forwards or unsupported protocols (RDP,
   local shell) are listed in the summary.
+- Legacy SSH algorithms per session (`legacy_algorithms`, *Legacy algorithms*
+  in the editor) for old switches and routers: SHA-1 key exchange
+  (`diffie-hellman-group1/14/exchange-sha1`), CBC and 3DES ciphers,
+  HMAC-SHA1 and DSA host keys, offered after the modern ones. A connection
+  that uses old algorithms shows a **legacy** badge in the status bar and ⚠ on
+  its tab. When a server offers only old algorithms and the option is off,
+  the error says so and which ones it offers.
+- NIST ECDH key exchanges (`ecdh-sha2-nistp256/384/521`) are offered by default.
 - Tunnels (`[[forward]]` in the session file, *Tunnels* in the editor):
   local (`-L`), remote (`-R`) and dynamic SOCKS 4/4a/5 (`-D`) port
   forwarding, opened after login and closed with the session. A port already

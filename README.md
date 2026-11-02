@@ -96,6 +96,15 @@ The editor has the same under *Jump host* and *Tunnels*. A jump host's own
 `jump_host` is followed too, so chains work. Tunnels open after login and
 close with the session.
 
+### Old equipment
+
+Switches and routers that only know old SSH algorithms connect with
+**Legacy algorithms** on (`legacy_algorithms = true`): SHA-1 key exchange,
+CBC and 3DES ciphers, HMAC-SHA1 and DSA host keys are then offered after the
+modern ones. Such a connection shows a **legacy** badge in the status bar and
+⚠ on its tab. Without the option, the error names the algorithms the server
+offers.
+
 ### Keepalive and reconnect
 
 Sessions send a keepalive every 30 s (`keepalive`, 0 turns it off). With
@@ -174,6 +183,7 @@ save_password = true       # keychain: unset asks, true always, false never
 debug = true               # show each step of the SSH login (like ssh -v)
 keepalive = 30             # seconds between keepalives, 0 = off
 auto_reconnect = true      # reconnect when the connection drops
+legacy_algorithms = true   # also offer old SSH algorithms (old switches)
 serial_port = "/dev/ttyUSB0"   # COM3 on Windows, /dev/cu.usbserial-… on macOS
 baud_rate = 9600
 data_bits = 8              # 5-8

@@ -88,6 +88,106 @@ pub struct SshConfig {
     pub jump: Option<Box<SshConfig>>,
     /// Tunnels opened once logged in.
     pub forwards: Vec<Tunnel>,
+    /// Also offer old algorithms (SHA-1 key exchange, CBC and 3DES ciphers,
+    /// HMAC-SHA1, DSA host keys) for equipment that knows nothing newer.
+    pub legacy_algorithms: bool,
+    /// Old algorithms the connection ended up using, for the "legacy" badge.
+    pub(crate) weak: WeakAlgorithms,
+}
+
+/// Names of the old algorithms a connection negotiated.
+pub(crate) type WeakAlgorithms = Arc<std::sync::Mutex<Vec<String>>>;
+
+/// Algorithms offered only with [`SshConfig::legacy_algorithms`], or used by
+/// default but weak (`ssh-rsa` signs with SHA-1): shown in the badge.
+pub const LEGACY_ALGORITHMS: [&str; 12] = [
+    "diffie-hellman-group1-sha1",
+    "diffie-hellman-group14-sha1",
+    "diffie-hellman-group-exchange-sha1",
+    "aes128-cbc",
+    "aes192-cbc",
+    "aes256-cbc",
+    "3des-cbc",
+    "hmac-sha1",
+    "hmac-sha1-etm@openssh.com",
+    "ssh-rsa",
+    "ssh-dss",
+    "none",
+];
+
+/// The algorithms offered: russh's safe defaults plus the NIST ECDH key
+/// exchanges (common on network equipment, and in OpenSSH's defaults), and
+/// with `legacy` the old ones after them, so a modern server never picks them.
+fn preferred(legacy: bool) -> russh::Preferred {
+    use russh::{cipher, kex, mac};
+    let base = russh::Preferred::DEFAULT;
+    let (mut kexes, extensions): (Vec<kex::Name>, Vec<kex::Name>) =
+        base.kex.iter().partition(|k| {
+            !k.as_ref().starts_with("ext-info") && !k.as_ref().starts_with("kex-strict")
+        });
+    kexes.extend([
+        kex::ECDH_SHA2_NISTP256,
+        kex::ECDH_SHA2_NISTP384,
+        kex::ECDH_SHA2_NISTP521,
+    ]);
+    let mut ciphers = base.cipher.to_vec();
+    let mut macs = base.mac.to_vec();
+    let mut keys = base.key.to_vec();
+    if legacy {
+        kexes.extend([kex::DH_G14_SHA1, kex::DH_GEX_SHA1, kex::DH_G1_SHA1]);
+        ciphers.extend([
+            cipher::AES_128_CBC,
+            cipher::AES_192_CBC,
+            cipher::AES_256_CBC,
+            cipher::TRIPLE_DES_CBC,
+        ]);
+        macs.extend([mac::HMAC_SHA1_ETM, mac::HMAC_SHA1]);
+        keys.push(keys::Algorithm::Dsa);
+    }
+    kexes.extend(extensions);
+    russh::Preferred {
+        kex: kexes.into(),
+        cipher: ciphers.into(),
+        mac: macs.into(),
+        key: keys.into(),
+        ..base
+    }
+}
+
+/// Explains a failed algorithm negotiation: whether "legacy algorithms"
+/// would help, or the server offers nothing PrzmTerm knows.
+fn no_common_algorithm(kind: &russh::AlgorithmKind, theirs: &[String], legacy: bool) -> String {
+    let what = match kind {
+        russh::AlgorithmKind::Kex => "key exchange",
+        russh::AlgorithmKind::Key => "host key",
+        russh::AlgorithmKind::Cipher => "cipher",
+        russh::AlgorithmKind::Mac => "MAC",
+        russh::AlgorithmKind::Compression => "compression",
+    };
+    // Protocol extensions travel in the key exchange list; they are not algorithms.
+    let theirs: Vec<String> = theirs
+        .iter()
+        .filter(|t| !t.starts_with("ext-info") && !t.starts_with("kex-strict"))
+        .cloned()
+        .collect();
+    let offered = theirs.join(", ");
+    let ours = preferred(true);
+    let known: Vec<String> = ours
+        .kex
+        .iter()
+        .map(|k| k.as_ref().to_string())
+        .chain(ours.cipher.iter().map(|c| c.as_ref().to_string()))
+        .chain(ours.mac.iter().map(|m| m.as_ref().to_string()))
+        .chain(ours.key.iter().map(|k| k.as_str().to_string()))
+        .collect();
+    if !legacy && theirs.iter().any(|t| known.contains(t)) {
+        format!(
+            "The server only offers old {what} algorithms ({offered}). Turn on \
+             \"Legacy algorithms\" in the session settings to connect."
+        )
+    } else {
+        format!("No {what} algorithm in common with the server, which offers: {offered}.")
+    }
 }
 
 impl SshConfig {
@@ -113,6 +213,8 @@ impl SshConfig {
             debug: false,
             jump: None,
             forwards: Vec::new(),
+            legacy_algorithms: false,
+            weak: WeakAlgorithms::default(),
         }
     }
 }
@@ -208,6 +310,14 @@ impl Transport for SshTransport {
 
     fn ending(&self) -> Option<Ending> {
         self.pipe.ending()
+    }
+
+    fn weak_algorithms(&self) -> Vec<String> {
+        self.config
+            .weak
+            .lock()
+            .map(|w| w.clone())
+            .unwrap_or_default()
     }
 
     fn duplicate(&self, size: Size, waker: Waker) -> Option<Box<dyn Transport>> {
@@ -419,6 +529,9 @@ pub(crate) struct ClientHandler {
     out: Output,
     /// Where connections to our remote forwards go.
     remote: RemoteTargets,
+    /// Where to record old algorithms in use (the session's own connection,
+    /// not its jump hosts).
+    weak: Option<WeakAlgorithms>,
     /// The jump host this connection runs through, kept alive with it.
     _jump: Option<Arc<Handle>>,
 }
@@ -577,6 +690,27 @@ impl client::Handler for ClientHandler {
         names: &russh::Names,
         session: &mut client::Session,
     ) -> Result<(), Self::Error> {
+        if let Some(weak) = &self.weak {
+            let cipher = names.cipher.as_ref();
+            let mut used = vec![names.kex.as_ref(), names.key.as_str(), cipher];
+            // An AEAD cipher authenticates on its own; the MAC is unused.
+            if !cipher.contains("poly1305") && !cipher.contains("gcm") {
+                used.extend([names.client_mac.as_ref(), names.server_mac.as_ref()]);
+            }
+            let mut old: Vec<String> = Vec::new();
+            for name in used {
+                if LEGACY_ALGORITHMS.contains(&name) && !old.iter().any(|o| o == name) {
+                    old.push(name.to_string());
+                }
+            }
+            if !old.is_empty() {
+                self.out
+                    .debug(&format!("Old algorithms in use: {}", old.join(", ")));
+            }
+            if let Ok(mut w) = weak.lock() {
+                *w = old;
+            }
+        }
         if self.out.debugging() {
             self.out.debug(&format!(
                 "Server version: {}",
@@ -844,7 +978,11 @@ fn login<'a>(
             out.debug(&format!("Keepalive every {} s", every.as_secs()));
         }
 
+        if config.legacy_algorithms {
+            out.debug("Old algorithms are offered too (legacy algorithms on)");
+        }
         let ssh_config = Arc::new(client::Config {
+            preferred: preferred(config.legacy_algorithms),
             keepalive_interval: config.keepalive,
             keepalive_max: 3,
             inactivity_timeout: None,
@@ -859,12 +997,20 @@ fn login<'a>(
             input: input.clone(),
             out: out.clone(),
             remote,
+            weak: (!is_jump).then(|| config.weak.clone()),
             _jump: jump,
         };
         let mut handle = match client::connect_stream(ssh_config, stream, handler).await {
             Ok(h) => h,
             Err(russh::Error::UnknownKey) => {
                 return Err(End::Failed("Host key verification failed.".into()));
+            }
+            Err(russh::Error::NoCommonAlgo { kind, theirs, .. }) => {
+                return Err(End::Failed(no_common_algorithm(
+                    &kind,
+                    &theirs,
+                    config.legacy_algorithms,
+                )));
             }
             Err(e) => return Err(End::Unreachable(format!("SSH handshake failed: {e}"))),
         };

@@ -122,6 +122,10 @@ pub struct SessionSettings {
     /// or `user@host:port`. Its own jump host is used too (chained).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jump_host: Option<String>,
+    /// SSH: also offer old algorithms (SHA-1 key exchange, CBC, HMAC-SHA1,
+    /// DSA) for equipment that knows nothing newer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legacy_algorithms: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub serial_port: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -151,7 +155,7 @@ pub struct SessionSettings {
 }
 
 /// Keys of the individual settings, used to compare and copy them.
-pub const FIELDS: [&str; 22] = [
+pub const FIELDS: [&str; 23] = [
     "protocol",
     "host",
     "port",
@@ -162,6 +166,7 @@ pub const FIELDS: [&str; 22] = [
     "keepalive",
     "auto_reconnect",
     "jump_host",
+    "legacy_algorithms",
     "forward",
     "serial_port",
     "baud_rate",
@@ -190,6 +195,7 @@ impl SessionSettings {
             "keepalive" => self.keepalive = from.keepalive,
             "auto_reconnect" => self.auto_reconnect = from.auto_reconnect,
             "jump_host" => self.jump_host = from.jump_host.clone(),
+            "legacy_algorithms" => self.legacy_algorithms = from.legacy_algorithms,
             "forward" => self.forwards = from.forwards.clone(),
             "serial_port" => self.serial_port = from.serial_port.clone(),
             "baud_rate" => self.baud_rate = from.baud_rate,
@@ -220,6 +226,7 @@ impl SessionSettings {
             "keepalive" => self.keepalive.map(|v| v.to_string()),
             "auto_reconnect" => self.auto_reconnect.map(yes_no),
             "jump_host" => self.jump_host.clone(),
+            "legacy_algorithms" => self.legacy_algorithms.map(yes_no),
             "forward" => self.forwards.as_ref().map(|f| {
                 if f.is_empty() {
                     "none".to_string()
@@ -270,6 +277,7 @@ impl SessionSettings {
             keepalive: pick(&self.keepalive, &over.keepalive),
             auto_reconnect: pick(&self.auto_reconnect, &over.auto_reconnect),
             jump_host: pick(&self.jump_host, &over.jump_host),
+            legacy_algorithms: pick(&self.legacy_algorithms, &over.legacy_algorithms),
             forwards: pick(&self.forwards, &over.forwards),
             serial_port: pick(&self.serial_port, &over.serial_port),
             baud_rate: pick(&self.baud_rate, &over.baud_rate),
@@ -308,6 +316,7 @@ impl SessionSettings {
             "debug" => s.debug = Some(false),
             "keepalive" => s.keepalive = Some(DEFAULT_KEEPALIVE),
             "auto_reconnect" => s.auto_reconnect = Some(false),
+            "legacy_algorithms" => s.legacy_algorithms = Some(false),
             "log.path" => s.log.path = Some(DEFAULT_LOG_TEMPLATE.into()),
             _ => return None,
         }
@@ -357,6 +366,7 @@ pub struct Session {
     /// See [`SessionSettings::jump_host`].
     pub jump_host: Option<String>,
     pub tunnels: Vec<Tunnel>,
+    pub legacy_algorithms: bool,
     pub term_type: String,
     pub scrollback: usize,
     pub log_enabled: bool,
@@ -438,6 +448,7 @@ impl Session {
                 secs => Some(std::time::Duration::from_secs(u64::from(secs))),
             },
             auto_reconnect: settings.auto_reconnect.unwrap_or(false),
+            legacy_algorithms: settings.legacy_algorithms.unwrap_or(false),
             jump_host: settings.jump_host.clone().filter(|j| !j.trim().is_empty()),
             tunnels: settings
                 .forwards
