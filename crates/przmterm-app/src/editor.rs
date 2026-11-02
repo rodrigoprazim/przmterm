@@ -1147,10 +1147,8 @@ impl Editor {
     }
 
     fn terminal_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
-        ui.label("Keywords").on_hover_text(
-            "Highlight words and patterns in the output with a keyword set \
-             (<config>/keywords/*.toml; SecureCRT keyword lists can be imported)",
-        );
+        ui.label("Keywords")
+            .on_hover_text("Highlight words and patterns in the output with a keyword set");
         ui.horizontal(|ui| {
             let shown_name = self.keywords.as_ref().map(|k| {
                 if k.is_empty() {

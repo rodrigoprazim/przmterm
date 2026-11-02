@@ -53,6 +53,70 @@ enum Layout {
     Rows,
 }
 
+/// The "Split" dialog: what goes next to the current session.
+struct SplitDialog {
+    layout: Layout,
+    /// A new pane on the current session.
+    this: bool,
+    /// Panes of other tabs (tab, pane) and whether they are picked.
+    others: Vec<(usize, usize, bool)>,
+}
+
+/// The session's name, with the title the remote side set when it differs.
+fn pane_name(pane: &Pane) -> String {
+    let title = pane.title();
+    match &pane.origin {
+        Some(s) if s.name != title => format!("{} — {title}", s.name),
+        _ => title,
+    }
+}
+
+/// Moves the panes `picks` (tab, pane) of other tabs into the tab `into`,
+/// after its active pane, and drops the tabs left empty. Returns the new
+/// index of `into`.
+fn merge_panes(tabs: &mut Vec<Tab>, into: usize, picks: &[(usize, usize)]) -> usize {
+    let mut picks: Vec<(usize, usize)> = picks
+        .iter()
+        .copied()
+        .filter(|&(t, p)| t != into && t < tabs.len() && p < tabs[t].panes.len())
+        .collect();
+    picks.sort_unstable();
+    picks.dedup();
+    // Take from the back so the indices stay right, then keep the order.
+    let mut moved = Vec::new();
+    for &(t, p) in picks.iter().rev() {
+        let tab = &mut tabs[t];
+        moved.push(tab.panes.remove(p));
+        if tab.active >= tab.panes.len() {
+            tab.active = tab.panes.len().saturating_sub(1);
+        } else if tab.active > p {
+            tab.active -= 1;
+        }
+    }
+    moved.reverse();
+    let target = &mut tabs[into];
+    let at = target.active + 1;
+    let count = moved.len();
+    for (i, pane) in moved.into_iter().enumerate() {
+        target.panes.insert(at + i, pane);
+    }
+    if count > 0 {
+        target.active = at + count - 1;
+    }
+    let mut into = into;
+    let mut t = tabs.len();
+    while t > 0 {
+        t -= 1;
+        if tabs[t].panes.is_empty() {
+            tabs.remove(t);
+            if t < into {
+                into -= 1;
+            }
+        }
+    }
+    into
+}
+
 /// A tab: one or more panes, one of them active.
 struct Tab {
     panes: Vec<Pane>,
@@ -105,7 +169,15 @@ enum Action {
     NewTab,
     CloseTab(usize),
     SelectTab(usize),
+    /// Asks what to put next to the current session.
     Split(Layout),
+    /// Splits the current tab: a new pane on its session (`this`) and the
+    /// panes `others` (tab, pane) moved in from other tabs.
+    SplitWith {
+        layout: Layout,
+        this: bool,
+        others: Vec<(usize, usize)>,
+    },
     ClosePane,
     FocusPane(usize),
     Reconnect,
@@ -171,6 +243,8 @@ struct PrzmApp {
     tab_rename: Option<(usize, String)>,
     /// The "Font…" dialog, for this tab.
     font_dialog: Option<usize>,
+    /// The "Split" dialog.
+    split_dialog: Option<SplitDialog>,
     /// A backup or export being restored or imported, and the folder name
     /// for an import.
     bundle_dialog: Option<(przmterm_session::bundle::Bundle, String)>,
@@ -271,6 +345,7 @@ impl PrzmApp {
             confirm_close: None,
             tab_rename: None,
             font_dialog: None,
+            split_dialog: None,
             bundle_dialog: None,
             quitting: false,
         }
@@ -402,11 +477,39 @@ impl PrzmApp {
                 self.broadcast = false;
             }
             Action::Split(layout) => {
-                let pane = self.tab().pane().clone_session(&env, waker);
-                let tab = self.tab_mut();
-                tab.layout = layout;
-                tab.panes.insert(tab.active + 1, pane);
-                tab.active += 1;
+                let others: Vec<(usize, usize, bool)> = self
+                    .tabs
+                    .iter()
+                    .enumerate()
+                    .filter(|&(t, _)| t != self.active_tab)
+                    .flat_map(|(t, tab)| {
+                        tab.panes
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, p)| p.origin.is_some())
+                            .map(move |(p, _)| (t, p, false))
+                    })
+                    .collect();
+                self.split_dialog = Some(SplitDialog {
+                    layout,
+                    // Alone, the current session is the obvious choice.
+                    this: others.is_empty(),
+                    others,
+                });
+            }
+            Action::SplitWith {
+                layout,
+                this,
+                others,
+            } => {
+                if this {
+                    let pane = self.tab().pane().clone_session(&env, waker);
+                    let tab = self.tab_mut();
+                    tab.panes.insert(tab.active + 1, pane);
+                    tab.active += 1;
+                }
+                self.active_tab = merge_panes(&mut self.tabs, self.active_tab, &others);
+                self.tab_mut().layout = layout;
             }
             Action::ClosePane => {
                 let tab = self.tab_mut();
@@ -594,6 +697,7 @@ impl PrzmApp {
             || self.confirm_close.is_some()
             || self.tab_rename.is_some()
             || self.font_dialog.is_some()
+            || self.split_dialog.is_some()
             || self.bundle_dialog.is_some()
             || self.vault.modal()
     }
@@ -629,7 +733,7 @@ impl PrzmApp {
             match przmterm_session::bundle::backup(&dir)
                 .and_then(|b| przmterm_session::bundle::write_bundle(&path, &b).map(|()| b))
             {
-                Ok(b) => format!("Backed up {} file(s) to {}.", b.files.len(), path.display()),
+                Ok(b) => format!("Backed up {} file(s).", b.files.len()),
                 Err(e) => format!("Backup failed: {e}"),
             },
         );
@@ -651,9 +755,8 @@ impl PrzmApp {
                 .and_then(|b| przmterm_session::bundle::write_bundle(&target, &b).map(|()| b))
             {
                 Ok(b) => format!(
-                    "Exported {} file(s) to {}. Passwords are not included.",
-                    b.files.len(),
-                    target.display()
+                    "Exported {} file(s). Passwords are not included.",
+                    b.files.len()
                 ),
                 Err(e) => format!("Export failed: {e}"),
             },
@@ -679,7 +782,7 @@ impl PrzmApp {
                 przmterm_session::strip_forbidden(&mut folder);
                 self.bundle_dialog = Some((bundle, folder));
             }
-            Err(e) => self.notice = Some(format!("Cannot open {}: {e}", path.display())),
+            Err(e) => self.notice = Some(format!("Cannot open the file: {e}")),
         }
     }
 
@@ -852,7 +955,7 @@ impl PrzmApp {
                         ui.colored_label(
                             ui.visuals().warn_fg_color,
                             "Files with the same name are replaced. Your current settings \
-                             are saved first in the backups folder of the configuration.",
+                             are saved first.",
                         );
                     }
                     Kind::Export => {
@@ -882,11 +985,8 @@ impl PrzmApp {
                 if go && let Some(dir) = self.config_dir.clone() {
                     let result = match bundle.kind {
                         Kind::Backup => {
-                            przmterm_session::bundle::restore(&dir, &bundle).map(|(n, safety)| {
-                                format!(
-                                    "Restored {n} file(s). The previous settings are in {}.",
-                                    safety.display()
-                                )
+                            przmterm_session::bundle::restore(&dir, &bundle).map(|(n, _)| {
+                                format!("Restored {n} file(s); the previous settings were kept.")
                             })
                         }
                         Kind::Export => przmterm_session::bundle::import(&dir, &bundle, &folder)
@@ -899,6 +999,85 @@ impl PrzmApp {
                     self.buttons = buttonbar::ButtonBarUi::load(Some(&dir));
                     // The vault file may have been replaced.
                     self.vault.lock();
+                }
+            }
+        }
+        if let Some(dialog) = &mut self.split_dialog {
+            let tabs = &self.tabs;
+            dialog
+                .others
+                .retain(|&(t, p, _)| t < tabs.len() && p < tabs[t].panes.len());
+            let mut answer = None; // Some(true) split, Some(false) cancel
+            let current = pane_name(self.tabs[self.active_tab].pane());
+            egui::Window::new(match dialog.layout {
+                Layout::Columns => "Split side by side",
+                Layout::Rows => "Split one above the other",
+            })
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(center)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label("Show next to this session:");
+                ui.add_space(4.0);
+                ui.checkbox(
+                    &mut dialog.this,
+                    format!("{current} (itself, in a new pane)"),
+                );
+                if !dialog.others.is_empty() {
+                    ui.add_space(4.0);
+                    ui.weak("Open in other tabs (moved here):");
+                    egui::ScrollArea::vertical()
+                        .max_height(300.0)
+                        .show(ui, |ui| {
+                            for (t, p, picked) in &mut dialog.others {
+                                let pane = &self.tabs[*t].panes[*p];
+                                let state = if pane.transport.is_closed() {
+                                    " (disconnected)"
+                                } else {
+                                    ""
+                                };
+                                ui.checkbox(
+                                    picked,
+                                    format!("Tab {}: {}{state}", *t + 1, pane_name(pane)),
+                                );
+                            }
+                        });
+                }
+                ui.add_space(6.0);
+                let any = dialog.this || dialog.others.iter().any(|o| o.2);
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Cancel").clicked() || escape {
+                            answer = Some(false);
+                        }
+                        if ui
+                            .add_enabled(any, egui::Button::new("Split"))
+                            .on_disabled_hover_text("Choose at least one session")
+                            .clicked()
+                            || (enter && any)
+                        {
+                            answer = Some(true);
+                        }
+                    });
+                });
+            });
+            if let Some(go) = answer {
+                let dialog = self.split_dialog.take().expect("dialog open");
+                if go {
+                    self.apply(
+                        Action::SplitWith {
+                            layout: dialog.layout,
+                            this: dialog.this,
+                            others: dialog
+                                .others
+                                .iter()
+                                .filter(|o| o.2)
+                                .map(|&(t, p, _)| (t, p))
+                                .collect(),
+                        },
+                        ctx,
+                    );
                 }
             }
         }
@@ -1116,10 +1295,7 @@ impl PrzmApp {
         if let Some(deletion) = self.confirm_delete.clone() {
             let mut keep_open = true;
             let (title, question) = match &deletion {
-                Deletion::Session(s) => (
-                    "Delete session",
-                    format!("Delete “{}”?\n{}", s.name, s.path.display()),
-                ),
+                Deletion::Session(s) => ("Delete session", format!("Delete “{}”?", s.name)),
                 Deletion::Folder { name, sessions, .. } => (
                     "Delete folder",
                     match sessions {
@@ -1555,10 +1731,10 @@ impl eframe::App for PrzmApp {
                     // Green while logging, red while not; the dot keeps the
                     // state readable without colour.
                     let (text, fill, hover) = match &pane.log {
-                        Some(log) => (
+                        Some(_) => (
                             "● Log",
                             egui::Color32::from_rgb(40, 135, 65),
-                            format!("Logging to {}\nClick to stop", log.path.display()),
+                            "Logging to a file. Click to stop".to_string(),
                         ),
                         None => (
                             "○ Log",
@@ -1791,11 +1967,8 @@ impl eframe::App for PrzmApp {
                     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                     if self.sessions.root.all_sessions().is_empty() {
                         let hint = match &self.config_dir {
-                            Some(d) => format!(
-                                "No sessions yet.\nAdd .toml files to\n{}",
-                                d.join(przmterm_session::SESSIONS_DIR).display()
-                            ),
-                            None => "No configuration directory.".to_string(),
+                            Some(_) => "No sessions yet.\n+ › New session… adds one.",
+                            None => "No configuration directory.",
                         };
                         ui.weak(hint);
                     } else {
@@ -2083,5 +2256,43 @@ impl eframe::App for PrzmApp {
         if self.notice.is_some() {
             ctx.request_repaint();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tab(labels: &[&str]) -> Tab {
+        let mut panes = labels.iter().map(|l| {
+            let mut p = Pane::demo();
+            p.label = l.to_string();
+            p
+        });
+        let mut tab = Tab::new(panes.next().unwrap());
+        tab.panes.extend(panes);
+        tab
+    }
+
+    fn labels(tabs: &[Tab]) -> Vec<Vec<String>> {
+        tabs.iter()
+            .map(|t| t.panes.iter().map(|p| p.label.clone()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn split_moves_panes_from_other_tabs_and_drops_empty_tabs() {
+        let mut tabs = vec![tab(&["a"]), tab(&["b1", "b2"]), tab(&["c"]), tab(&["d"])];
+        tabs[1].active = 1;
+        // Into "c": all of tab 0, the first pane of tab 1.
+        let into = merge_panes(&mut tabs, 2, &[(1, 0), (0, 0), (2, 0), (9, 9)]);
+        assert_eq!(
+            labels(&tabs),
+            [vec!["b2"], vec!["c", "a", "b1"], vec!["d"]],
+            "picks keep the tab order; its own pane and bad indices are ignored"
+        );
+        assert_eq!(into, 1);
+        assert_eq!(tabs[1].active, 2, "the last pane moved in is active");
+        assert_eq!(tabs[0].active, 0, "the tab that lost a pane stays valid");
     }
 }

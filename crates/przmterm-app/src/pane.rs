@@ -449,23 +449,15 @@ impl Pane {
             .unwrap_or_else(|| Session::quick_connect("demo").expect("valid quick-connect"));
         let path = session.log_file(env.config_dir.as_deref(), &chrono::Local::now());
         match SessionLog::start(path.clone(), &session.name) {
-            Ok(log) => {
-                self.term
-                    .feed(format!("\x1b[2m[Logging to {}]\x1b[0m\r\n", path.display()).as_bytes());
-                self.log = Some(log);
-            }
-            Err(e) => self.term.feed(
-                format!("\x1b[31m[Cannot log to {}: {e}]\x1b[0m\r\n", path.display()).as_bytes(),
-            ),
+            Ok(log) => self.log = Some(log),
+            Err(e) => self
+                .term
+                .feed(format!("\x1b[31m[Cannot write the log file: {e}]\x1b[0m\r\n").as_bytes()),
         }
     }
 
     pub fn stop_log(&mut self) {
-        if let Some(log) = self.log.take() {
-            self.term.feed(
-                format!("\x1b[2m[Log saved to {}]\x1b[0m\r\n", log.path.display()).as_bytes(),
-            );
-        }
+        self.log = None;
     }
 
     pub fn size(&self) -> Size {

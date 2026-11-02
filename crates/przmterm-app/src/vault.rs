@@ -244,7 +244,7 @@ impl VaultUi {
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
-            .default_width(520.0)
+            .default_width(560.0)
             .show(ctx, |ui| {
                 if self.vault.is_some() {
                     self.entries_ui(ui, config_dir);
@@ -278,8 +278,7 @@ impl VaultUi {
     fn create_ui(&mut self, ui: &mut egui::Ui, config_dir: &Path, enter: bool) {
         ui.label(
             "The vault keeps user names, passwords and key passphrases in one \
-             encrypted file. Sessions and folders choose an entry under Vault entry \
-             in their settings, so a changed password is changed in one place.",
+             encrypted file.",
         );
         ui.add_space(4.0);
         ui.label(
@@ -337,34 +336,75 @@ impl VaultUi {
         if entries.is_empty() {
             ui.weak("No entries yet.");
         } else {
+            // Columns share the whole width; the buttons sit at the right edge.
+            let gap = ui.spacing().item_spacing.x;
+            let width = ui.available_width();
+            let share = [0.27, 0.25, 0.14, 0.16];
+            let columns: Vec<f32> = share.iter().map(|s| (width - 4.0 * gap) * s).collect();
+            let last = width - 4.0 * gap - columns.iter().sum::<f32>();
+            let row_height = ui.spacing().interact_size.y;
+            let cell = |ui: &mut egui::Ui, w: f32, add: &mut dyn FnMut(&mut egui::Ui)| {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(w, row_height),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.set_min_width(w);
+                        add(ui);
+                    },
+                );
+            };
+            ui.horizontal(|ui| {
+                for (i, title) in ["Entry", "User name", "Password", "Key passphrase"]
+                    .into_iter()
+                    .enumerate()
+                {
+                    cell(ui, columns[i], &mut |ui| {
+                        ui.strong(title);
+                    });
+                }
+            });
             egui::ScrollArea::vertical()
                 .max_height(320.0)
+                .auto_shrink([false, true])
                 .show(ui, |ui| {
-                    egui::Grid::new("vault-entries")
-                        .num_columns(5)
-                        .striped(true)
-                        .spacing([16.0, 6.0])
-                        .show(ui, |ui| {
-                            ui.strong("Entry");
-                            ui.strong("User name");
-                            ui.strong("Password");
-                            ui.strong("Key passphrase");
-                            ui.label("");
-                            ui.end_row();
-                            for entry in entries {
+                    for (row, entry) in entries.into_iter().enumerate() {
+                        let rect = egui::Rect::from_min_size(
+                            ui.cursor().min,
+                            egui::vec2(width, row_height),
+                        );
+                        if row % 2 == 0 {
+                            ui.painter()
+                                .rect_filled(rect, 2.0, ui.visuals().faint_bg_color);
+                        }
+                        ui.horizontal(|ui| {
+                            let hidden = |s: &str| {
+                                if s.is_empty() {
+                                    "—"
+                                } else {
+                                    "••••••"
+                                }
+                            };
+                            cell(ui, columns[0], &mut |ui| {
                                 ui.label(&entry.name);
+                            });
+                            cell(ui, columns[1], &mut |ui| {
                                 ui.label(&entry.username);
-                                ui.label(if entry.password.is_empty() {
-                                    "—"
-                                } else {
-                                    "••••••"
-                                });
-                                ui.label(if entry.passphrase.is_empty() {
-                                    "—"
-                                } else {
-                                    "••••••"
-                                });
-                                ui.horizontal(|ui| {
+                            });
+                            cell(ui, columns[2], &mut |ui| {
+                                ui.label(hidden(&entry.password));
+                            });
+                            cell(ui, columns[3], &mut |ui| {
+                                ui.label(hidden(&entry.passphrase));
+                            });
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(last, row_height),
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.set_min_width(last);
+                                    if ui.small_button("Delete…").clicked() {
+                                        let users = files_using(config_dir, &entry.name).len();
+                                        self.delete = Some((entry.name.clone(), users));
+                                    }
                                     if ui.small_button("Edit…").clicked() {
                                         self.edit = Some(EntryEdit {
                                             old_name: Some(entry.name.clone()),
@@ -374,35 +414,32 @@ impl VaultUi {
                                             focused: false,
                                         });
                                     }
-                                    if ui.small_button("Delete…").clicked() {
-                                        let users = files_using(config_dir, &entry.name).len();
-                                        self.delete = Some((entry.name.clone(), users));
-                                    }
-                                });
-                                ui.end_row();
-                            }
+                                },
+                            );
                         });
+                    }
                 });
         }
         ui.add_space(6.0);
+        // Lock on the left; Change master password and New entry on the right.
         ui.horizontal(|ui| {
-            if ui.button("New entry…").clicked() {
-                self.edit = Some(EntryEdit {
-                    old_name: None,
-                    entry: VaultEntry::default(),
-                    show: false,
-                    error: None,
-                    focused: false,
-                });
+            if ui
+                .button("Lock")
+                .on_hover_text("Forget the entries until the master password is typed again")
+                .clicked()
+            {
+                self.lock();
+                self.notice = Some("Vault locked.".into());
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .button("Lock")
-                    .on_hover_text("Forget the entries until the master password is typed again")
-                    .clicked()
-                {
-                    self.lock();
-                    self.notice = Some("Vault locked.".into());
+                if ui.button("New entry…").clicked() {
+                    self.edit = Some(EntryEdit {
+                        old_name: None,
+                        entry: VaultEntry::default(),
+                        show: false,
+                        error: None,
+                        focused: false,
+                    });
                 }
                 if ui.button("Change master password…").clicked() {
                     self.change = Some(ChangeMaster {
@@ -414,11 +451,6 @@ impl VaultUi {
                 }
             });
         });
-        ui.weak(format!(
-            "Sessions and folders use an entry under Vault entry in their settings. \
-             The vault file: {}",
-            vault_path(config_dir).display()
-        ));
     }
 
     fn entry_dialog(&mut self, ctx: &egui::Context, config_dir: &Path, enter: bool, escape: bool) {

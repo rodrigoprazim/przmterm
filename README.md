@@ -123,6 +123,11 @@ send = 'copy run start\r\p\r'   # single quotes keep the backslashes
 description = "Saves the running configuration"
 ```
 
+**◫ Split** / **⊟ Split** at the top right ask what to show next to the
+current session: the session itself again (a new pane, on the same
+connection when it is live) and any session open in another tab, which moves
+into this one. Several can be picked at once.
+
 In a split tab, **⇶ Send to all** in the status bar sends what you type to
 every pane of the tab (after a warning) until you turn it off.
 

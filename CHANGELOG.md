@@ -66,6 +66,16 @@ All notable changes to PrzmTerm are recorded here. The format follows
   vault still encrypted; exports never do. The OS keychain stays available
   for sessions without an entry.
 
+### Changed
+
+- *Split* (side by side or stacked) asks what goes next to the current
+  session: a new pane on the session itself and/or sessions open in other
+  tabs, which move into this tab (several at once). A tab left empty closes.
+- The password vault window: entry rows use the whole width; *Lock* is on
+  the left, *Change master password…* and *New entry…* on the right.
+- Messages no longer say where files are kept (log files, backups, the
+  vault, session files); error messages still name a file that fails.
+
 ## [0.5.0] - 2026-11-02
 
 ### Added
