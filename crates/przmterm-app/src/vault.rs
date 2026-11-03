@@ -206,12 +206,12 @@ impl VaultUi {
                         ui.colored_label(ui.visuals().error_fg_color, err);
                     }
                     ui.horizontal(|ui| {
-                        if ui.button("Cancel").clicked() || escape {
-                            done = Some(false);
-                        }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.button("Unlock").clicked() {
                                 done = Some(true);
+                            }
+                            if ui.button("Cancel").clicked() || escape {
+                                done = Some(false);
                             }
                         });
                     });
@@ -515,12 +515,12 @@ impl VaultUi {
                 ui.colored_label(ui.visuals().error_fg_color, err);
             }
             ui.horizontal(|ui| {
-                if ui.button("Cancel").clicked() || escape {
-                    done = Some(false);
-                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Save").clicked() || enter {
                         done = Some(true);
+                    }
+                    if ui.button("Cancel").clicked() || escape {
+                        done = Some(false);
                     }
                 });
             });
@@ -577,12 +577,12 @@ impl VaultUi {
                     );
                 }
                 ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() || escape {
-                        done = Some(false);
-                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("Delete").clicked() {
                             done = Some(true);
+                        }
+                        if ui.button("Cancel").clicked() || escape {
+                            done = Some(false);
                         }
                     });
                 });
@@ -641,12 +641,12 @@ impl VaultUi {
                     ui.colored_label(ui.visuals().error_fg_color, err);
                 }
                 ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() || escape {
-                        done = Some(false);
-                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("Change").clicked() || enter {
                             done = Some(true);
+                        }
+                        if ui.button("Cancel").clicked() || escape {
+                            done = Some(false);
                         }
                     });
                 });

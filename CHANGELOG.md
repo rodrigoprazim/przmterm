@@ -31,9 +31,16 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Changed
 
-- Dialogs put the action that backs out (*Cancel*, *Back*, *Close*) on the
-  left and the one that goes ahead (*Save*, *OK*, *Delete*, *Split*…) on the
-  right.
+- Dialog buttons sit on the right, the one that goes ahead (*Save*, *OK*,
+  *Delete*, *Split*…) last and the one that backs out (*Cancel*, *Back*,
+  *Close*) just before it.
+- The *File transfer* dialog's *Send* and *Receive* tabs share its whole
+  width.
+- While *Send to all* is on, the status bar button reads *⇶ Typing to all*
+  in an amber outline, and every pane that gets the keys is framed in amber
+  with a *typing to all* tag in its caption.
+- Symbols in the interface (⇱, ⇶, ⇅, ◫, ▤…) no longer show as empty squares
+  on systems whose fonts lack them.
 - In a split tab, **⇱ Separate** at the top right gives each pane its tab
   back; it replaces *× Pane* (closing a pane stays on Ctrl+Shift+W / ⌘⇧W).
 - The SFTP window opens in the middle of the window; dragging over the list

@@ -143,15 +143,19 @@ impl TransferDialog {
             .resizable(false)
             .min_width(420.0)
             .show(ctx, |ui| {
-                // Send and Receive as tabs.
+                // Send and Receive as tabs, half the row each.
                 ui.horizontal(|ui| {
-                    if ui.selectable_label(self.sending, "Send").clicked() {
-                        self.sending = true;
-                        self.error = None;
-                    }
-                    if ui.selectable_label(!self.sending, "Receive").clicked() {
-                        self.sending = false;
-                        self.error = None;
+                    let gap = ui.spacing().item_spacing.x;
+                    let size = egui::vec2(
+                        (ui.available_width() - gap) / 2.0,
+                        ui.spacing().interact_size.y + 4.0,
+                    );
+                    for (sending, text) in [(true, "Send"), (false, "Receive")] {
+                        let tab = egui::Button::selectable(self.sending == sending, text);
+                        if ui.add_sized(size, tab).clicked() {
+                            self.sending = sending;
+                            self.error = None;
+                        }
                     }
                 });
                 ui.separator();
@@ -251,9 +255,6 @@ impl TransferDialog {
                     ui.colored_label(ui.visuals().error_fg_color, e);
                 }
                 ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() || escape {
-                        answer = Answer::Cancel;
-                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("Start").clicked() {
                             if self.sending && self.files.is_empty() {
@@ -279,6 +280,9 @@ impl TransferDialog {
                                     }
                                 });
                             }
+                        }
+                        if ui.button("Cancel").clicked() || escape {
+                            answer = Answer::Cancel;
                         }
                     });
                 });

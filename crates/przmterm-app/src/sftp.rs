@@ -682,9 +682,6 @@ impl SftpBrowser {
                     }
                 }
                 ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() || escape {
-                        done = Some(false);
-                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let ok = match ask {
                             Ask::Delete(_) => "Delete",
@@ -693,6 +690,9 @@ impl SftpBrowser {
                         };
                         if ui.button(ok).clicked() || enter {
                             done = Some(true);
+                        }
+                        if ui.button("Cancel").clicked() || escape {
+                            done = Some(false);
                         }
                     });
                 });

@@ -296,14 +296,6 @@ impl KeywordEditor {
             );
             // Back out on the left, go on on the right.
             ui.horizontal(|ui| {
-                if ui.button("Back").clicked() {
-                    self.pending = None;
-                }
-                if ui.button("Discard changes").clicked() {
-                    self.pending = None;
-                    self.discard();
-                    self.perform(action.clone());
-                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Save and go on").clicked() {
                         match self.save() {
@@ -316,6 +308,14 @@ impl KeywordEditor {
                                 self.pending = None;
                             }
                         }
+                    }
+                    if ui.button("Discard changes").clicked() {
+                        self.pending = None;
+                        self.discard();
+                        self.perform(action.clone());
+                    }
+                    if ui.button("Back").clicked() {
+                        self.pending = None;
                     }
                 });
             });
@@ -398,22 +398,22 @@ impl KeywordEditor {
         }
         ui.horizontal(|ui| {
             let dirty = self.dirty();
-            if ui.button("Close").clicked() {
-                *close = true;
-            }
-            if ui
-                .add_enabled(dirty, egui::Button::new("Cancel"))
-                .on_hover_text("Throw away the changes since the last save")
-                .clicked()
-            {
-                self.discard();
-            }
             if dirty {
                 ui.colored_label(ui.visuals().warn_fg_color, "Unsaved changes");
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.add_enabled(dirty, egui::Button::new("Save")).clicked() {
                     self.error = self.save().err();
+                }
+                if ui
+                    .add_enabled(dirty, egui::Button::new("Cancel"))
+                    .on_hover_text("Throw away the changes since the last save")
+                    .clicked()
+                {
+                    self.discard();
+                }
+                if ui.button("Close").clicked() {
+                    *close = true;
                 }
             });
         });

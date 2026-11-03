@@ -44,8 +44,24 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "PrzmTerm",
         options,
-        Box::new(|_cc| Ok(Box::new(PrzmApp::new()))),
+        Box::new(|cc| {
+            symbol_fallback(&cc.egui_ctx);
+            Ok(Box::new(PrzmApp::new()))
+        }),
     )
+}
+
+/// The interface text falls back to the monospace font for symbols the
+/// proportional one lacks (arrows such as ⇶ and ⇅, boxes such as ◫ and ▤),
+/// so they show the same on every system instead of as empty squares.
+fn symbol_fallback(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional)
+        && !family.iter().any(|f| f == "Hack")
+    {
+        family.push("Hack".to_owned());
+    }
+    ctx.set_fonts(fonts);
 }
 
 /// How the panes of a tab are arranged.
@@ -1201,12 +1217,12 @@ impl PrzmApp {
                     ui.label(text);
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        if ui.button("Cancel").clicked() || escape {
-                            answer = Some(false);
-                        }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.button("Close").clicked() || enter {
                                 answer = Some(true);
+                            }
+                            if ui.button("Cancel").clicked() || escape {
+                                answer = Some(false);
                             }
                         });
                     });
@@ -1239,12 +1255,12 @@ impl PrzmApp {
                         .request_focus();
                     ui.weak("Only the tab changes; the session keeps its name.");
                     ui.horizontal(|ui| {
-                        if ui.button("Cancel").clicked() || escape {
-                            answer = Some(false);
-                        }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.button("OK").clicked() || enter {
                                 answer = Some(true);
+                            }
+                            if ui.button("Cancel").clicked() || escape {
+                                answer = Some(false);
                             }
                         });
                     });
@@ -1313,12 +1329,12 @@ impl PrzmApp {
                         Kind::Backup => "Restore",
                         Kind::Export => "Import",
                     };
-                    if ui.button("Cancel").clicked() || escape {
-                        answer = Some(false);
-                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button(go).clicked() {
                             answer = Some(true);
+                        }
+                        if ui.button("Cancel").clicked() || escape {
+                            answer = Some(false);
                         }
                     });
                 });
@@ -1380,9 +1396,6 @@ impl PrzmApp {
                     ui.add_space(6.0);
                     let any = dialog.others.iter().any(|o| o.2);
                     ui.horizontal(|ui| {
-                        if ui.button("Cancel").clicked() || escape {
-                            answer = Some(false);
-                        }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui
                                 .add_enabled(any, egui::Button::new("Split"))
@@ -1391,6 +1404,9 @@ impl PrzmApp {
                                 || (enter && any)
                             {
                                 answer = Some(true);
+                            }
+                            if ui.button("Cancel").clicked() || escape {
+                                answer = Some(false);
                             }
                         });
                     });
@@ -1475,17 +1491,17 @@ impl PrzmApp {
                         answer = Some(true);
                     }
                     ui.horizontal(|ui| {
-                        if ui
-                            .button("Stop script")
-                            .on_hover_text("Cancel the question and stop the script")
-                            .clicked()
-                            || escape
-                        {
-                            answer = Some(false);
-                        }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.button("OK").clicked() {
                                 answer = Some(true);
+                            }
+                            if ui
+                                .button("Stop script")
+                                .on_hover_text("Cancel the question and stop the script")
+                                .clicked()
+                                || escape
+                            {
+                                answer = Some(false);
                             }
                         });
                     });
@@ -1539,14 +1555,14 @@ impl PrzmApp {
                     ));
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        if ui.button("Cancel").clicked()
-                            || ctx.input(|i| i.key_pressed(egui::Key::Escape))
-                        {
-                            answer = Some(false);
-                        }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.button("Quit").clicked() {
                                 answer = Some(true);
+                            }
+                            if ui.button("Cancel").clicked()
+                                || ctx.input(|i| i.key_pressed(egui::Key::Escape))
+                            {
+                                answer = Some(false);
                             }
                         });
                     });
@@ -1580,14 +1596,14 @@ impl PrzmApp {
                     );
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        if ui.button("Cancel").clicked()
-                            || ctx.input(|i| i.key_pressed(egui::Key::Escape))
-                        {
-                            answer = Some(false);
-                        }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.button("Turn on").clicked() {
                                 answer = Some(true);
+                            }
+                            if ui.button("Cancel").clicked()
+                                || ctx.input(|i| i.key_pressed(egui::Key::Escape))
+                            {
+                                answer = Some(false);
                             }
                         });
                     });
@@ -1683,10 +1699,6 @@ impl PrzmApp {
                         ui.colored_label(ui.visuals().error_fg_color, err);
                     }
                     ui.horizontal(|ui| {
-                        if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(Key::Escape))
-                        {
-                            close = true;
-                        }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.button("OK").clicked() || enter {
                                 let result = if dialog.rename {
@@ -1698,6 +1710,11 @@ impl PrzmApp {
                                     Ok(_) => done = Some(dialog.value.trim().to_string()),
                                     Err(e) => dialog.error = Some(e.to_string()),
                                 }
+                            }
+                            if ui.button("Cancel").clicked()
+                                || ui.input(|i| i.key_pressed(Key::Escape))
+                            {
+                                close = true;
                             }
                         });
                     });
@@ -1736,9 +1753,6 @@ impl PrzmApp {
                         keep_open = false;
                     }
                     ui.horizontal(|ui| {
-                        if ui.button("Cancel").clicked() {
-                            keep_open = false;
-                        }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.button("Delete").clicked() {
                                 let result = match &deletion {
@@ -1762,6 +1776,9 @@ impl PrzmApp {
                                 });
                                 keep_open = false;
                                 self.reload_sessions();
+                            }
+                            if ui.button("Cancel").clicked() {
+                                keep_open = false;
                             }
                         });
                     });
@@ -1905,6 +1922,16 @@ fn tab_menu(
         }
         actions.push(Action::ToggleBroadcast);
         ui.close();
+    }
+}
+
+/// The colour that marks "send to all": the status bar button and the
+/// frame of every pane that gets the keys.
+fn broadcast_color(visuals: &egui::Visuals) -> egui::Color32 {
+    if visuals.dark_mode {
+        egui::Color32::from_rgb(240, 170, 60)
+    } else {
+        egui::Color32::from_rgb(190, 110, 0)
     }
 }
 
@@ -2276,22 +2303,26 @@ impl eframe::App for PrzmApp {
                         actions.push(Action::ToggleLog);
                     }
                     let split = self.tabs[self.active_tab].panes.len() > 1;
-                    let broadcast = split
-                        && ui
-                            .selectable_label(
-                                self.broadcast,
-                                if self.broadcast {
-                                    egui::RichText::new(" ⇶ Typing to all ")
-                                        .color(egui::Color32::BLACK)
-                                        .background_color(egui::Color32::from_rgb(240, 170, 60))
-                                } else {
-                                    egui::RichText::new("⇶ Send to all")
-                                },
+                    let broadcast = split && {
+                        let button = if self.broadcast {
+                            // Outlined in the same colour as the panes it types into.
+                            let amber = broadcast_color(ui.visuals());
+                            egui::Button::new(
+                                egui::RichText::new("⇶ Typing to all").color(amber).strong(),
                             )
-                            .on_hover_text(
-                                "When on, what you type goes to every session in this tab",
-                            )
-                            .clicked();
+                            .fill(amber.gamma_multiply(0.12))
+                            .stroke(egui::Stroke::new(1.0, amber))
+                        } else {
+                            egui::Button::selectable(false, "⇶ Send to all")
+                        };
+                        ui.add(button)
+                            .on_hover_text(if self.broadcast {
+                                "What you type goes to every session in this tab. Click to stop."
+                            } else {
+                                "When on, what you type goes to every session in this tab"
+                            })
+                            .clicked()
+                    };
                     if broadcast {
                         actions.push(Action::ToggleBroadcast);
                     }
@@ -2769,7 +2800,9 @@ impl eframe::App for PrzmApp {
         let modal = self.modal_open();
         // What was typed in the active pane, for "send to all".
         let mut typed: Option<Vec<u8>> = None;
+        let broadcast = self.broadcast;
         egui::CentralPanel::no_frame().show(ui, |ui| {
+            let amber = broadcast_color(ui.visuals());
             let tab = &mut self.tabs[self.active_tab];
             let area = ui.available_rect_before_wrap();
             let n = tab.panes.len();
@@ -2803,6 +2836,16 @@ impl eframe::App for PrzmApp {
                         egui::FontId::proportional(12.0),
                         text,
                     );
+                    // Typing to all: every pane that gets the keys says so.
+                    if broadcast && !pane.transport.is_closed() {
+                        ui.painter().with_clip_rect(caption).text(
+                            caption.right_center() - egui::vec2(6.0, 0.0),
+                            egui::Align2::RIGHT_CENTER,
+                            "⇶ typing to all",
+                            egui::FontId::proportional(11.0),
+                            amber,
+                        );
+                    }
                     if ui
                         .interact(
                             caption,
@@ -2821,7 +2864,16 @@ impl eframe::App for PrzmApp {
                         pane.view.show(ui, &mut pane.term, active && !modal)
                     })
                     .inner;
-                if n > 1 && active {
+                if n > 1 && broadcast {
+                    // The caption and the terminal framed together.
+                    let framed = rect.with_min_y(rect.min.y - PANE_CAPTION);
+                    ui.painter().rect_stroke(
+                        framed,
+                        egui::CornerRadius::ZERO,
+                        egui::Stroke::new(if active { 2.0 } else { 1.0 }, amber),
+                        egui::StrokeKind::Inside,
+                    );
+                } else if n > 1 && active {
                     ui.painter().rect_stroke(
                         rect,
                         egui::CornerRadius::ZERO,
