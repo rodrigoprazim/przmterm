@@ -854,6 +854,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn events() -> Events {
         let (tx, _rx) = std_mpsc::channel();
         Events {
