@@ -108,6 +108,8 @@ pub struct Editor {
     /// Triggers set here; `None` inherits the list from above.
     triggers: Option<Vec<Trigger>>,
     show_log_help: bool,
+    /// Scroll to the log settings when the window first shows.
+    scroll_to_log: bool,
     confirm: Option<Confirm>,
     error: Option<String>,
 }
@@ -296,6 +298,13 @@ impl Editor {
         )
     }
 
+    /// Like [`Editor::edit`], opened at the log settings.
+    pub fn edit_log(session: &Session) -> Self {
+        let mut editor = Self::edit(session);
+        editor.scroll_to_log = true;
+        editor
+    }
+
     pub fn duplicate(session: &Session) -> Self {
         let settings = przmterm_session::read_session_settings(&session.path).unwrap_or_default();
         Self::from_settings(
@@ -368,6 +377,7 @@ impl Editor {
             forwards: s.forwards.clone(),
             triggers: s.triggers.clone(),
             show_log_help: false,
+            scroll_to_log: false,
             confirm: None,
             error: None,
         }
@@ -1258,7 +1268,10 @@ impl Editor {
             &cx.hint("terminal.scrollback"),
         );
 
-        ui.label("Log to file");
+        let row = ui.label("Log to file");
+        if std::mem::take(&mut self.scroll_to_log) {
+            row.scroll_to_me(Some(egui::Align::Center));
+        }
         bool_pick(
             ui,
             &mut self.log,

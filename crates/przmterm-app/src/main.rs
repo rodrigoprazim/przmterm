@@ -2,6 +2,7 @@
 
 mod buttonbar;
 mod demo;
+mod desktop;
 mod editor;
 mod input;
 mod keychain;
@@ -300,6 +301,12 @@ enum Action {
     FocusPane(usize),
     Reconnect,
     ToggleLog,
+    /// Opens the active pane's log file (the running one, or the last).
+    OpenLog,
+    /// Shows that file in Finder / Explorer.
+    RevealLog,
+    /// Opens the session editor, where the log file is set.
+    LogSettings,
     SendBreak,
     Macro(buttonbar::Press),
     ToggleBroadcast,
@@ -827,6 +834,26 @@ impl PrzmApp {
                     pane.start_log(&env);
                 }
             }
+            Action::OpenLog | Action::RevealLog => {
+                let open = matches!(action, Action::OpenLog);
+                if let Some(path) = self.tab().pane().log_path.clone() {
+                    let done = if open {
+                        desktop::open_text(&path)
+                    } else {
+                        desktop::reveal(&path)
+                    };
+                    if let Err(e) = done {
+                        self.notice = Some(format!("Could not open the log: {e}"));
+                    }
+                }
+            }
+            Action::LogSettings => {
+                if let Some(session) = self.tab().pane().origin.clone()
+                    && session.path.is_file()
+                {
+                    self.editor = Some(Editor::edit_log(&session));
+                }
+            }
             Action::Reconnect => self.tab_mut().pane_mut().reconnect(&env, waker),
         }
         let tab = self.tab_mut();
@@ -1025,6 +1052,96 @@ impl PrzmApp {
     }
 
     /// The shortcut of an app command, for tooltips: ` (⌘⇧T)`.
+    /// The status bar's log button: click starts or stops logging, and
+    /// right-click offers the rest. While logging it names the file.
+    fn log_button(&self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        let pane = self.tab().pane();
+        let name = pane
+            .log_path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned());
+        let logging = pane.log.is_some();
+        let green = if ui.visuals().dark_mode {
+            egui::Color32::from_rgb(90, 200, 120)
+        } else {
+            egui::Color32::from_rgb(30, 130, 60)
+        };
+        let button = if logging {
+            let text = format!("● Log  {}", short_name(name.as_deref().unwrap_or("")));
+            egui::Button::new(egui::RichText::new(text).color(green))
+                .fill(green.gamma_multiply(0.12))
+                .stroke(egui::Stroke::new(1.0, green))
+        } else {
+            egui::Button::selectable(false, "○ Log")
+        };
+        let response = ui.add(button).on_hover_text(match (&name, logging) {
+            (Some(name), true) => format!(
+                "Logging to {name}.\nClick to stop{}; right-click for more.",
+                self.keys_hint("toggle_log")
+            ),
+            _ => format!(
+                "Not logging.\nClick to start{}; right-click for more.",
+                self.keys_hint("toggle_log")
+            ),
+        });
+        if response.clicked() {
+            actions.push(Action::ToggleLog);
+        }
+        response.context_menu(|ui| {
+            ui.set_min_width(220.0);
+            match (&name, logging) {
+                (Some(name), true) => {
+                    ui.label(egui::RichText::new(format!("● {name}")).color(green))
+                }
+                (Some(name), false) => ui.weak(format!("Last log: {name}")),
+                (None, _) => ui.weak("Not logging"),
+            };
+            ui.separator();
+            let keys = self.shortcuts.label_for("toggle_log").unwrap_or_default();
+            let toggle = if logging {
+                "Stop Logging"
+            } else {
+                "Start Logging"
+            };
+            if ui
+                .add(egui::Button::new(toggle).shortcut_text(keys))
+                .clicked()
+            {
+                actions.push(Action::ToggleLog);
+                ui.close();
+            }
+            let exists = pane.log_path.as_ref().is_some_and(|p| p.is_file());
+            if ui
+                .add_enabled(exists, egui::Button::new("Open Log"))
+                .on_disabled_hover_text("No log file yet: start logging first")
+                .clicked()
+            {
+                actions.push(Action::OpenLog);
+                ui.close();
+            }
+            if ui
+                .add_enabled(exists, egui::Button::new(desktop::file_manager()))
+                .on_disabled_hover_text("No log file yet: start logging first")
+                .clicked()
+            {
+                actions.push(Action::RevealLog);
+                ui.close();
+            }
+            ui.separator();
+            let saved = pane.origin.as_ref().is_some_and(|s| s.path.is_file());
+            if ui
+                .add_enabled(saved, egui::Button::new("Log Settings…"))
+                .on_hover_text("The log folder and file name, in the session's settings")
+                .on_disabled_hover_text("Only for saved sessions")
+                .clicked()
+            {
+                actions.push(Action::LogSettings);
+                ui.close();
+            }
+        });
+    }
+
     fn keys_hint(&self, id: &str) -> String {
         self.shortcuts
             .label_for(id)
@@ -1925,6 +2042,18 @@ fn tab_menu(
     }
 }
 
+/// A file name cut to fit the status bar: the start and the end stay.
+fn short_name(name: &str) -> String {
+    const MAX: usize = 32;
+    let chars: Vec<char> = name.chars().collect();
+    if chars.len() <= MAX {
+        return name.to_string();
+    }
+    let head: String = chars[..MAX / 2 - 1].iter().collect();
+    let tail: String = chars[chars.len() - (MAX / 2 - 1)..].iter().collect();
+    format!("{head}…{tail}")
+}
+
 /// The colour that marks "send to all": the status bar button and the
 /// frame of every pane that gets the keys.
 fn broadcast_color(visuals: &egui::Visuals) -> egui::Color32 {
@@ -2281,27 +2410,7 @@ impl eframe::App for PrzmApp {
                     ));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // Green while logging, red while not; the dot keeps the
-                    // state readable without colour.
-                    let (text, fill, hover) = match &pane.log {
-                        Some(_) => (
-                            "● Log",
-                            egui::Color32::from_rgb(40, 135, 65),
-                            "Logging to a file. Click to stop".to_string(),
-                        ),
-                        None => (
-                            "○ Log",
-                            egui::Color32::from_rgb(170, 55, 55),
-                            "Not logging. Click to start".into(),
-                        ),
-                    };
-                    let button =
-                        egui::Button::new(egui::RichText::new(text).color(egui::Color32::WHITE))
-                            .fill(fill)
-                            .small();
-                    if ui.add(button).on_hover_text(hover).clicked() {
-                        actions.push(Action::ToggleLog);
-                    }
+                    self.log_button(ui, &mut actions);
                     let split = self.tabs[self.active_tab].panes.len() > 1;
                     let broadcast = split && {
                         let button = if self.broadcast {
@@ -2966,6 +3075,15 @@ mod tests {
         let mut tab = Tab::new(panes.next().unwrap());
         tab.panes.extend(panes);
         tab
+    }
+
+    #[test]
+    fn long_log_names_keep_both_ends() {
+        assert_eq!(short_name("sw-20261102.log"), "sw-20261102.log");
+        let long = "core-switch-datacenter-sao-paulo-20261102-221500.log";
+        let short = short_name(long);
+        assert_eq!(short.chars().count(), 31);
+        assert!(short.starts_with("core-switch-dat") && short.ends_with("1102-221500.log"));
     }
 
     fn labels(tabs: &[Tab]) -> Vec<Vec<String>> {

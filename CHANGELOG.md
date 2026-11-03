@@ -39,6 +39,12 @@ All notable changes to PrzmTerm are recorded here. The format follows
 - While *Send to all* is on, the status bar button reads *⇶ Typing to all*
   in an amber outline, and every pane that gets the keys is framed in amber
   with a *typing to all* tag in its caption.
+- The status bar *Log* button: while logging it reads *● Log* with the log
+  file's name, outlined in green; when not, a plain *○ Log*. Click still
+  starts or stops logging. Right-click opens a menu with the file's name,
+  *Start/Stop Logging*, *Open Log* (in the default text editor), *Show in
+  Finder* (Explorer, or the folder on Linux) and *Log Settings…*, which opens
+  the session editor at its log options.
 - Symbols in the interface (⇱, ⇶, ⇅, ◫, ▤…) no longer show as empty squares
   on systems whose fonts lack them.
 - In a split tab, **⇱ Separate** at the top right gives each pane its tab

@@ -245,6 +245,8 @@ pub struct Pane {
     /// The session to reconnect to, if any.
     pub origin: Option<Session>,
     pub log: Option<SessionLog>,
+    /// The file of the log running now or, once stopped, of the last one.
+    pub log_path: Option<PathBuf>,
     closed_announced: bool,
     /// A pending automatic reconnect.
     retry: Option<Retry>,
@@ -328,6 +330,7 @@ impl Pane {
             label,
             origin,
             log: None,
+            log_path: None,
             closed_announced: false,
             retry: None,
             attempts: 0,
@@ -852,7 +855,10 @@ impl Pane {
             .unwrap_or_else(|| Session::quick_connect("demo").expect("valid quick-connect"));
         let path = session.log_file(env.config_dir.as_deref(), &chrono::Local::now());
         match SessionLog::start(path.clone(), &session.name) {
-            Ok(log) => self.log = Some(log),
+            Ok(log) => {
+                self.log_path = Some(log.path.clone());
+                self.log = Some(log);
+            }
             Err(e) => self
                 .term
                 .feed(format!("\x1b[31m[Cannot write the log file: {e}]\x1b[0m\r\n").as_bytes()),
