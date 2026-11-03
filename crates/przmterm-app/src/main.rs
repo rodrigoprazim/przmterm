@@ -291,6 +291,9 @@ enum Action {
     ScriptGuide,
     /// Opens an SFTP browser on the active pane's connection of this tab.
     OpenSftp(usize),
+    /// Opens an SCP browser on the active pane's connection of this tab,
+    /// in the session's SCP shell.
+    OpenScp(usize),
     /// Connects a session and opens an SFTP browser once logged in.
     SftpFor(Box<Session>),
     /// The Xmodem/Ymodem/Zmodem dialog for this tab: sending or receiving.
@@ -769,11 +772,35 @@ impl PrzmApp {
                             name,
                             self.sftp_next,
                             client,
+                            "SFTP",
                         ));
                     }
                     None => {
                         self.notice =
                             Some("SFTP needs a connected SSH session (log in first).".into())
+                    }
+                }
+            }
+            Action::OpenScp(t) => {
+                let pane = self.tabs[t].pane();
+                let name = pane
+                    .origin
+                    .as_ref()
+                    .map_or_else(|| pane.title(), |s| s.name.clone());
+                let shell = pane.origin.as_ref().and_then(|s| s.scp_shell.clone());
+                match pane.transport.scp_browser(shell, waker) {
+                    Some(client) => {
+                        self.sftp_next += 1;
+                        self.sftp_windows.push(sftp::SftpBrowser::new(
+                            name,
+                            self.sftp_next,
+                            client,
+                            "SCP",
+                        ));
+                    }
+                    None => {
+                        self.notice =
+                            Some("SCP needs a connected SSH session (log in first).".into())
                     }
                 }
             }
@@ -802,8 +829,9 @@ impl PrzmApp {
                     );
                     // SCP runs on a channel of the same SSH connection.
                     let ssh = pane.transport.protocol() == przmterm_core::Protocol::Ssh;
+                    let shell = pane.origin.as_ref().and_then(|s| s.scp_shell.clone());
                     self.transfer_dialog =
-                        Some(transfer::TransferDialog::new(t, sending, unix, ssh));
+                        Some(transfer::TransferDialog::new(t, sending, unix, ssh, shell));
                 }
             }
             Action::CancelTransfer(t) => self.tabs[t].pane_mut().cancel_transfer(),
@@ -924,7 +952,7 @@ impl PrzmApp {
                 .unwrap_or_default();
             self.sftp_next += 1;
             self.sftp_windows
-                .push(sftp::SftpBrowser::new(name, self.sftp_next, client));
+                .push(sftp::SftpBrowser::new(name, self.sftp_next, client, "SFTP"));
             self.sftp_pending = None;
         } else {
             // Not logged in yet.
@@ -1032,6 +1060,7 @@ impl PrzmApp {
                 "stop_script" => Action::StopScript(t),
                 "script_guide" => Action::ScriptGuide,
                 "open_sftp" => Action::OpenSftp(t),
+                "open_scp" => Action::OpenScp(t),
                 "send_files" => Action::TransferDialog(t, true),
                 "receive_files" => Action::TransferDialog(t, false),
                 _ => return None,
@@ -2028,6 +2057,7 @@ fn tab_menu(
         .is_some_and(|s| s.protocol == przmterm_core::Protocol::Ssh)
         && !tab.pane().transport.is_closed();
     item(ui, ssh_live, "Connect SFTP Session", Action::OpenSftp(i));
+    item(ui, ssh_live, "Connect SCP Session", Action::OpenScp(i));
 
     ui.separator();
     // Typing into every pane of this tab: only for split tabs.

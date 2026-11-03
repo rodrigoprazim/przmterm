@@ -151,8 +151,9 @@ highlighting, triggers, saved credentials) work in PrzmTerm.
 - [x] Xmodem, Xmodem-1K, Ymodem and Zmodem, sending and receiving, checked
   against lrzsz; a Zmodem start from `sz` or `rz` on the other side is
   picked up on its own
-- [x] SCP on a channel of the same SSH connection, sending and receiving
-  files and folders, as the login user or as root through `sudo` or `su -`
+- [x] SCP on the same SSH connection: a file browser like the SFTP one
+  ("Connect SCP Session") and transfers from the File transfer dialog, with
+  the commands run in a shell chosen per session (`/bin/bash`, `sudo su -`…)
 
 **Gate:** files moved to and from the maintainer's servers (SFTP, Zmodem)
 and, when a device is at hand, a serial console (Xmodem or Ymodem).

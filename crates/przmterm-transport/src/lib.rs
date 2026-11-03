@@ -12,6 +12,7 @@ mod forward;
 pub mod modem;
 mod pipe;
 pub mod scp;
+mod scpfs;
 pub mod serial;
 pub mod sftp;
 pub mod ssh;
@@ -121,6 +122,12 @@ pub trait Transport: Send {
     /// An SCP transfer on a channel of its own over the same connection, if
     /// the protocol has one and the connection is logged in (SSH).
     fn scp(&self, _request: scp::Request, _waker: Waker) -> Option<scp::ScpTransfer> {
+        None
+    }
+
+    /// A file browser session over SCP (folders listed with `ls`), its
+    /// commands run in `shell` (see [`scp::shell_from`]); SSH only.
+    fn scp_browser(&self, _shell: Option<String>, _waker: Waker) -> Option<sftp::SftpClient> {
         None
     }
 }

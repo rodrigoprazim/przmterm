@@ -16,7 +16,7 @@ pub struct Command {
     pub default: Option<&'static str>,
 }
 
-pub const COMMANDS: [Command; 22] = [
+pub const COMMANDS: [Command; 23] = [
     Command {
         id: "new_tab",
         label: "New tab (same session)",
@@ -115,6 +115,11 @@ pub const COMMANDS: [Command; 22] = [
     Command {
         id: "open_sftp",
         label: "Connect SFTP session",
+        default: None,
+    },
+    Command {
+        id: "open_scp",
+        label: "Connect SCP session",
         default: None,
     },
     Command {

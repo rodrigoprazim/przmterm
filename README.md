@@ -112,14 +112,17 @@ Xmodem and Ymodem wait for an answer after each block.
 
 ### SCP, also as root
 
-On an SSH session, **⇅ Transfer** › protocol *SCP* sends files or folders to a
-remote folder, or fetches a remote file or folder, on a channel of its own:
-the terminal stays free and the status bar shows the progress. *Run as*
-picks the login user, root with `sudo` (your password, if sudo asks) or root
-with `su -` (root's password), so files can go where only root writes — the
-same as typing `sudo su` first. The other side needs `scp`, which Unix hosts
-and much network equipment have; with *the login user* nothing else is
-typed, so routers and switches with an SCP server work too.
+*Connect SCP Session* in a tab's menu opens the same file browser as SFTP,
+over SCP on the same connection: folders are listed with `ls` and changed
+with `mkdir`, `rm` and `mv`, and files move with `scp`, as in WinSCP's SCP
+mode. The commands run in the session's **SCP shell** (session settings,
+*Shells ▾*: *Default* is the login shell; `/bin/bash`, `/bin/ksh`, or
+`sudo su -` and `su -` to work as root — the same as typing `sudo su -`
+first). When the shell asks for a password, the browser asks for it once.
+**⇅ Transfer** › protocol *SCP* sends or fetches files the same way, beside
+the terminal, with the progress in the status bar. The other side needs
+`scp`; with the *Default* shell nothing else is typed, so routers and
+switches with an SCP server work too.
 
 ### Backup and sharing sessions
 

@@ -366,6 +366,14 @@ impl Transport for SshTransport {
         }
         Some(crate::scp::start(handle, request, waker))
     }
+
+    fn scp_browser(&self, shell: Option<String>, waker: Waker) -> Option<crate::sftp::SftpClient> {
+        let handle = self.shared.lock().ok()?.as_ref()?.upgrade()?;
+        if handle.is_closed() {
+            return None;
+        }
+        Some(crate::scpfs::start(handle, shell, waker))
+    }
 }
 
 /// User-bound side of the task: keystrokes and resizes from the GUI.

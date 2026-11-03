@@ -49,9 +49,12 @@ pub enum SftpEvent {
     Failed { what: String, error: String },
     /// The session ended.
     Closed(String),
+    /// SCP: the shell (`sudo su -`…) asks for a password; answer with
+    /// [`SftpClient::set_password`]. The text says why (asked, or wrong).
+    PasswordNeeded(String),
 }
 
-enum Job {
+pub(crate) enum Job {
     List(String),
     Download {
         id: u64,
@@ -72,9 +75,12 @@ enum Job {
         from: String,
         to: String,
     },
+    /// For the shell of an SCP session.
+    Password(zeroize::Zeroizing<String>),
 }
 
-/// The GUI's handle on an SFTP session.
+/// The GUI's handle on an SFTP session (or an SCP one, which takes the
+/// same requests).
 pub struct SftpClient {
     jobs: mpsc::UnboundedSender<Job>,
     events: std_mpsc::Receiver<SftpEvent>,
@@ -123,6 +129,14 @@ impl SftpClient {
         });
     }
 
+    /// The password the SCP shell asked for (see
+    /// [`SftpEvent::PasswordNeeded`]).
+    pub fn set_password(&self, password: &str) {
+        let _ = self
+            .jobs
+            .send(Job::Password(zeroize::Zeroizing::new(password.to_string())));
+    }
+
     pub fn cancel(&self, id: u64) {
         if let Ok(mut c) = self.cancelled.lock() {
             c.insert(id);
@@ -153,30 +167,41 @@ pub fn parent(path: &str) -> String {
 }
 
 #[derive(Clone)]
-struct Events {
+pub(crate) struct Events {
     tx: std_mpsc::Sender<SftpEvent>,
     waker: Waker,
 }
 
 impl Events {
-    fn send(&self, e: SftpEvent) {
+    pub(crate) fn send(&self, e: SftpEvent) {
         let _ = self.tx.send(e);
         (self.waker)();
     }
 }
 
-/// Opens an SFTP channel on `handle`'s connection.
-pub(crate) fn start(handle: Arc<Handle>, waker: Waker) -> SftpClient {
+/// Cancelled transfers, by id.
+pub(crate) type Cancelled = Arc<Mutex<HashSet<u64>>>;
+
+/// A client and the worker's ends of it.
+pub(crate) fn client(
+    waker: Waker,
+) -> (SftpClient, mpsc::UnboundedReceiver<Job>, Events, Cancelled) {
     let (jobs, rx) = mpsc::unbounded_channel();
     let (tx, events) = std_mpsc::channel();
-    let cancelled: Arc<Mutex<HashSet<u64>>> = Arc::default();
-    let ev = Events { tx, waker };
-    runtime().spawn(run(handle, rx, ev, cancelled.clone()));
-    SftpClient {
+    let cancelled: Cancelled = Arc::default();
+    let client = SftpClient {
         jobs,
         events,
-        cancelled,
-    }
+        cancelled: cancelled.clone(),
+    };
+    (client, rx, Events { tx, waker }, cancelled)
+}
+
+/// Opens an SFTP channel on `handle`'s connection.
+pub(crate) fn start(handle: Arc<Handle>, waker: Waker) -> SftpClient {
+    let (client, rx, ev, cancelled) = client(waker);
+    runtime().spawn(run(handle, rx, ev, cancelled));
+    client
 }
 
 async fn open(handle: &Handle) -> Result<SftpSession, String> {
@@ -267,6 +292,7 @@ async fn run(
                 let r = sftp.rename(from.clone(), to).await;
                 done(&ev, r.map_err(|e| e.to_string()), "Cannot rename", &from);
             }
+            Job::Password(_) => {}
         }
     }
     let _ = sftp.close().await;
@@ -352,7 +378,7 @@ async fn remote_tree(
     Ok((files, dirs))
 }
 
-fn is_cancelled(cancelled: &Mutex<HashSet<u64>>, id: u64) -> bool {
+pub(crate) fn is_cancelled(cancelled: &Mutex<HashSet<u64>>, id: u64) -> bool {
     cancelled.lock().map(|c| c.contains(&id)).unwrap_or(false)
 }
 

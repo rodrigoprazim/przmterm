@@ -28,12 +28,16 @@ All notable changes to PrzmTerm are recorded here. The format follows
   cancelled one is removed. When the typed command does not exist on the
   other side ("command not found", "Unknown command"…), nothing is sent to
   the shell and a note says to install lrzsz or use SFTP.
-- SCP in the *File transfer* dialog (SSH sessions): sends files and folders
-  to a remote folder or fetches a remote file or folder, on a channel of its
-  own so the terminal stays free, with progress and *Cancel* in the status
-  bar. *Run as* the login user, root with `sudo` or root with `su -`:
-  PrzmTerm answers the password prompt, and a wrong password is reported.
-  Received files never overwrite others.
+- SCP on SSH sessions, as in WinSCP. *Connect SCP Session* in a tab's menu
+  opens the file browser (the same as for SFTP) over SCP: folders listed with
+  `ls`, new folder, rename and delete with `mkdir`, `mv` and `rm`, uploads
+  and downloads with `scp`. The *File transfer* dialog has *SCP* too, beside
+  the terminal, with progress and *Cancel* in the status bar.
+- *SCP shell* in the session settings: *Default* (the login shell),
+  `/bin/bash`, `/bin/ksh`, `sudo su -`, `su -` or any other. With `sudo su -`
+  or `su -` everything runs as root; PrzmTerm answers the password prompt
+  (asked once per window) and reports a wrong password. Received files never
+  overwrite others.
 
 ### Changed
 

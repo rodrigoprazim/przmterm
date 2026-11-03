@@ -162,6 +162,10 @@ pub struct SessionSettings {
     /// `<config>/scripts`, or a full path. `""` turns an inherited one off.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logon_script: Option<String>,
+    /// The shell SCP sessions run their commands in: `Default` (the login
+    /// shell), `/bin/bash`, `sudo su -`… `""` turns an inherited one off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scp_shell: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub serial_port: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -195,7 +199,7 @@ pub struct SessionSettings {
 }
 
 /// Keys of the individual settings, used to compare and copy them.
-pub const FIELDS: [&str; 28] = [
+pub const FIELDS: [&str; 29] = [
     "protocol",
     "host",
     "port",
@@ -211,6 +215,7 @@ pub const FIELDS: [&str; 28] = [
     "x11_forwarding",
     "keywords",
     "logon_script",
+    "scp_shell",
     "forward",
     "trigger",
     "serial_port",
@@ -245,6 +250,7 @@ impl SessionSettings {
             "x11_forwarding" => self.x11_forwarding = from.x11_forwarding,
             "keywords" => self.keywords = from.keywords.clone(),
             "logon_script" => self.logon_script = from.logon_script.clone(),
+            "scp_shell" => self.scp_shell = from.scp_shell.clone(),
             "forward" => self.forwards = from.forwards.clone(),
             "trigger" => self.triggers = from.triggers.clone(),
             "serial_port" => self.serial_port = from.serial_port.clone(),
@@ -281,6 +287,7 @@ impl SessionSettings {
             "x11_forwarding" => self.x11_forwarding.map(yes_no),
             "keywords" => self.keywords.clone(),
             "logon_script" => self.logon_script.clone(),
+            "scp_shell" => self.scp_shell.clone(),
             "forward" => self.forwards.as_ref().map(|f| {
                 if f.is_empty() {
                     "none".to_string()
@@ -346,6 +353,7 @@ impl SessionSettings {
             x11_forwarding: pick(&self.x11_forwarding, &over.x11_forwarding),
             keywords: pick(&self.keywords, &over.keywords),
             logon_script: pick(&self.logon_script, &over.logon_script),
+            scp_shell: pick(&self.scp_shell, &over.scp_shell),
             forwards: pick(&self.forwards, &over.forwards),
             triggers: pick(&self.triggers, &over.triggers),
             serial_port: pick(&self.serial_port, &over.serial_port),
@@ -445,6 +453,8 @@ pub struct Session {
     pub keywords: Option<String>,
     /// See [`SessionSettings::logon_script`]; resolve with [`script_path`].
     pub logon_script: Option<String>,
+    /// See [`SessionSettings::scp_shell`]; `None` is the login shell.
+    pub scp_shell: Option<String>,
     pub term_type: String,
     pub scrollback: usize,
     pub log_enabled: bool,
@@ -534,6 +544,11 @@ impl Session {
                 .logon_script
                 .clone()
                 .filter(|k| !k.trim().is_empty()),
+            scp_shell: settings
+                .scp_shell
+                .clone()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("default")),
             jump_host: settings.jump_host.clone().filter(|j| !j.trim().is_empty()),
             triggers: settings.triggers.clone().unwrap_or_default(),
             tunnels: settings

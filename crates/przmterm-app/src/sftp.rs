@@ -1,4 +1,4 @@
-//! The SFTP browser: a window per SFTP session to move around the remote
+//! The SFTP browser (also for SCP sessions): a window per session to move around the remote
 //! folders, upload (also by dropping files on it) and download files or
 //! folders, create folders, rename and delete.
 
@@ -24,14 +24,24 @@ struct Transfer {
 
 /// What a dialog of the browser is asking.
 enum Ask {
+    /// The SCP shell (`sudo su -`…) asks for a password; the text says why.
+    Password {
+        why: String,
+        text: zeroize::Zeroizing<String>,
+    },
     NewFolder(String),
-    Rename { from: String, to: String },
+    Rename {
+        from: String,
+        to: String,
+    },
     Delete(Vec<(String, bool)>),
 }
 
 pub struct SftpBrowser {
     /// The session's name, for the title.
     pub name: String,
+    /// `SFTP` or `SCP`, for the title.
+    protocol: &'static str,
     id: u64,
     client: SftpClient,
     ready: bool,
@@ -85,9 +95,10 @@ pub fn mode_text(mode: u32, is_dir: bool) -> String {
 }
 
 impl SftpBrowser {
-    pub fn new(name: String, id: u64, client: SftpClient) -> Self {
+    pub fn new(name: String, id: u64, client: SftpClient, protocol: &'static str) -> Self {
         Self {
             name,
+            protocol,
             id,
             client,
             ready: false,
@@ -208,6 +219,12 @@ impl SftpBrowser {
             }
             SftpEvent::Failed { what, error } => self.error = Some(format!("{what}: {error}")),
             SftpEvent::Closed(why) => self.closed = Some(why),
+            SftpEvent::PasswordNeeded(why) => {
+                self.ask = Some(Ask::Password {
+                    why,
+                    text: zeroize::Zeroizing::new(String::new()),
+                });
+            }
         }
     }
 
@@ -218,7 +235,7 @@ impl SftpBrowser {
             self.handle(event);
         }
         let mut open = true;
-        let response = egui::Window::new(format!("SFTP: {}", self.name))
+        let response = egui::Window::new(format!("{}: {}", self.protocol, self.name))
             .id(egui::Id::unique(("sftp", self.id)))
             .open(&mut open)
             .default_size([760.0, 520.0])
@@ -260,13 +277,13 @@ impl SftpBrowser {
         if let Some(why) = &self.closed {
             ui.colored_label(
                 ui.visuals().error_fg_color,
-                format!("The SFTP session ended: {why}"),
+                format!("The {} session ended: {why}", self.protocol),
             );
         }
         if !self.ready && self.closed.is_none() {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label("Opening SFTP…");
+                ui.label(format!("Opening {}…", self.protocol));
             });
             return;
         }
@@ -648,6 +665,7 @@ impl SftpBrowser {
         });
         let mut done = None;
         let title = match ask {
+            Ask::Password { .. } => "Password",
             Ask::NewFolder(_) => "New folder",
             Ask::Rename { .. } => "Rename",
             Ask::Delete(_) => "Delete",
@@ -662,6 +680,15 @@ impl SftpBrowser {
             .resizable(false)
             .show(ctx, |ui| {
                 match ask {
+                    Ask::Password { why, text } => {
+                        ui.label(why.as_str());
+                        ui.add(
+                            egui::TextEdit::singleline(&mut **text)
+                                .password(true)
+                                .desired_width(260.0),
+                        )
+                        .request_focus();
+                    }
                     Ask::NewFolder(name) | Ask::Rename { to: name, .. } => {
                         ui.add(egui::TextEdit::singleline(name).desired_width(260.0))
                             .request_focus();
@@ -684,6 +711,7 @@ impl SftpBrowser {
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let ok = match ask {
+                            Ask::Password { .. } => "OK",
                             Ask::Delete(_) => "Delete",
                             Ask::Rename { .. } => "Rename",
                             Ask::NewFolder(_) => "Create",
@@ -699,6 +727,14 @@ impl SftpBrowser {
             });
         match done {
             Some(true) => match self.ask.take() {
+                Some(Ask::Password { text, .. }) => {
+                    self.client.set_password(&text);
+                    // Once connected, what failed was a listing or a change.
+                    if self.ready {
+                        let dir = self.dir.clone();
+                        self.go(&dir);
+                    }
+                }
                 Some(Ask::NewFolder(name)) if !name.trim().is_empty() => {
                     self.client.mkdir(&join(&self.dir, name.trim()));
                 }
@@ -714,7 +750,12 @@ impl SftpBrowser {
                 }
                 _ => {}
             },
-            Some(false) => self.ask = None,
+            Some(false) => {
+                let password = matches!(self.ask.take(), Some(Ask::Password { .. }));
+                if password && !self.ready {
+                    self.error = Some("Not connected: the shell needs its password.".into());
+                }
+            }
             None => {}
         }
     }

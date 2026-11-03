@@ -101,6 +101,7 @@ pub struct Editor {
     x11_forwarding: Option<bool>,
     keywords: Option<String>,
     logon_script: String,
+    scp_shell: String,
     /// The keyword editor was asked for, for this set (if any).
     keyword_request: Option<Option<String>>,
     /// Tunnels set here; `None` inherits the list from above.
@@ -156,6 +157,7 @@ fn field_label(key: &str) -> &'static str {
         "x11_forwarding" => "X11 forwarding",
         "keywords" => "keyword highlighting",
         "logon_script" => "logon script",
+        "scp_shell" => "SCP shell",
         "forward" => "tunnels",
         "trigger" => "triggers",
         "baud_rate" => "baud rate",
@@ -205,6 +207,7 @@ impl Context<'_> {
             "x11_forwarding" => "no".into(),
             "keywords" => "none".into(),
             "logon_script" => "none".into(),
+            "scp_shell" => "Default".into(),
             "forward" => "none".into(),
             "trigger" => "none".into(),
             "serial_port" => "/dev/ttyUSB0 or COM3".into(),
@@ -373,6 +376,7 @@ impl Editor {
             x11_forwarding: s.x11_forwarding,
             keywords: s.keywords.clone(),
             logon_script: text(&s.logon_script),
+            scp_shell: text(&s.scp_shell),
             keyword_request: None,
             forwards: s.forwards.clone(),
             triggers: s.triggers.clone(),
@@ -424,6 +428,7 @@ impl Editor {
             x11_forwarding: self.x11_forwarding,
             keywords: self.keywords.clone(),
             logon_script: opt(&self.logon_script),
+            scp_shell: opt(&self.scp_shell),
             triggers: match &self.triggers {
                 None => None,
                 Some(list) => {
@@ -840,6 +845,37 @@ impl Editor {
             None,
             &cx.hint("x11_forwarding"),
         );
+        ui.end_row();
+
+        ui.label("SCP shell").on_hover_text(
+            "Where Connect SCP Session and SCP transfers run their commands. \
+             Default is the login shell; sudo su - or su - work as root (the \
+             password is asked when needed)",
+        );
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.scp_shell)
+                    .hint_text(cx.hint("scp_shell"))
+                    .desired_width(200.0),
+            );
+            ui.menu_button("Shells ▾", |ui| {
+                for shell in przmterm_transport::scp::SHELLS {
+                    let current = if shell == "Default" {
+                        self.scp_shell.is_empty()
+                    } else {
+                        self.scp_shell == shell
+                    };
+                    if ui.selectable_label(current, shell).clicked() {
+                        self.scp_shell = if shell == "Default" {
+                            String::new()
+                        } else {
+                            shell.to_string()
+                        };
+                        ui.close();
+                    }
+                }
+            });
+        });
         ui.end_row();
 
         ui.label("Jump host")

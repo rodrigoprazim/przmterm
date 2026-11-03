@@ -4,10 +4,10 @@
 //!
 //! It talks the classic protocol to the remote `scp -t` (receive) or
 //! `scp -f` (send), which Unix hosts and much network equipment (Cisco,
-//! Huawei, Juniper…) answer. The remote end can run as root through `sudo`
-//! or `su -`: the command then gets a terminal of its own, PrzmTerm answers
-//! the password prompt, and switches that terminal to raw mode before the
-//! transfer begins.
+//! Huawei, Juniper…) answer. Like WinSCP, the remote commands can run in a
+//! chosen shell — `/bin/bash`, or `sudo su -` to work as root: the shell
+//! gets a terminal of its own, PrzmTerm answers its password prompt, and
+//! types the commands into it (the terminal made raw before a transfer).
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -24,29 +24,19 @@ use crate::modem::Progress;
 use crate::pipe::runtime;
 use crate::ssh::Handle;
 
-/// Who the remote `scp` runs as.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum RunAs {
-    /// The user that logged in.
-    #[default]
-    Me,
-    /// Root, through `sudo` (the user's own password, if it asks).
-    Sudo,
-    /// Root, through `su -` (root's password).
-    Su,
+/// Shells offered for SCP, as in WinSCP. `Default` is the login shell.
+pub const SHELLS: [&str; 5] = ["Default", "/bin/bash", "/bin/ksh", "sudo su -", "su -"];
+
+/// The shell to use, from a setting: `None` for the login shell.
+pub fn shell_from(text: &str) -> Option<String> {
+    let text = text.trim();
+    (!text.is_empty() && !text.eq_ignore_ascii_case("default")).then(|| text.to_string())
 }
 
-impl RunAs {
-    pub const ALL: [RunAs; 3] = [RunAs::Me, RunAs::Sudo, RunAs::Su];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            RunAs::Me => "the login user",
-            RunAs::Sudo => "root, with sudo",
-            RunAs::Su => "root, with su -",
-        }
-    }
-}
+/// Returned when the shell asks for a password and none was given.
+pub const PASSWORD_NEEDED: &str = "the shell asks for a password";
+/// Returned when the shell asked again after the password.
+pub const WRONG_PASSWORD: &str = "wrong password";
 
 /// What to transfer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,8 +54,9 @@ pub enum Direction {
 
 pub struct Request {
     pub direction: Direction,
-    pub run_as: RunAs,
-    /// For the password prompt of `sudo` or `su`.
+    /// See [`shell_from`]; `None` runs `scp` directly.
+    pub shell: Option<String>,
+    /// For the shell's password prompt (`sudo su -`, `su -`).
     pub password: Zeroizing<String>,
 }
 
@@ -96,65 +87,72 @@ impl ScpTransfer {
 pub(crate) fn start(handle: Arc<Handle>, request: Request, waker: Waker) -> ScpTransfer {
     let (tx, events) = std_mpsc::channel();
     let cancel = Arc::new(AtomicBool::new(false));
-    let ev = Events { tx, waker };
     let stop = cancel.clone();
     runtime().spawn(async move {
-        let work = run_over_ssh(&handle, &request, &ev, &stop);
-        // The work sees a cancel between chunks; one stuck waiting for the
-        // other side is dropped (closing its channel) a moment later.
-        let stuck = async {
-            while !stop.load(Ordering::Relaxed) {
-                tokio::time::sleep(Duration::from_millis(200)).await;
-            }
-            tokio::time::sleep(Duration::from_secs(2)).await;
+        let send = |e: ScpEvent| {
+            let _ = tx.send(e);
+            waker();
         };
-        let result = tokio::select! {
-            result = work => result,
-            () = stuck => Err("cancelled".to_string()),
-        };
-        ev.send(ScpEvent::Done(result));
+        let report = |p: &Progress| send(ScpEvent::Progress(p.clone()));
+        let work = transfer(
+            &handle,
+            &request.direction,
+            request.shell.as_deref(),
+            &request.password,
+            &report,
+            &stop,
+        );
+        let result = until_cancelled(work, &stop).await;
+        send(ScpEvent::Done(result));
         crate::ssh::release(handle).await;
     });
     ScpTransfer { events, cancel }
 }
 
-#[derive(Clone)]
-struct Events {
-    tx: std_mpsc::Sender<ScpEvent>,
-    waker: Waker,
-}
-
-impl Events {
-    fn send(&self, e: ScpEvent) {
-        let _ = self.tx.send(e);
-        (self.waker)();
+/// Runs `work`; the work sees a cancel between chunks, and one stuck
+/// waiting for the other side is dropped (closing its channel) a moment
+/// after.
+pub(crate) async fn until_cancelled<T>(
+    work: impl std::future::Future<Output = Result<T, String>>,
+    stop: &AtomicBool,
+) -> Result<T, String> {
+    let stuck = async {
+        while !stop.load(Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    };
+    tokio::select! {
+        result = work => result,
+        () = stuck => Err("cancelled".to_string()),
     }
 }
 
-async fn run_over_ssh(
+/// Sends or fetches, as `direction` says.
+pub(crate) async fn transfer(
     handle: &Handle,
-    request: &Request,
-    ev: &Events,
+    direction: &Direction,
+    shell: Option<&str>,
+    password: &str,
+    report: &(dyn Fn(&Progress) + Sync),
     cancel: &AtomicBool,
 ) -> Result<Vec<PathBuf>, String> {
-    match &request.direction {
+    match direction {
         Direction::Upload { files, remote_dir } => {
             let recursive = files.iter().any(|f| f.is_dir());
-            let command = command(request.run_as, &scp_args(true, recursive, remote_dir));
-            let mut conn = Conn::new(open_channel(handle, request.run_as, &command).await?);
-            conn.elevate(request.run_as, &request.password).await?;
-            let sent = send(&mut conn, files, ev, cancel).await;
-            conn.link.finish(request.run_as).await;
+            let scp = scp_args(true, recursive, remote_dir);
+            let mut conn = open_scp(handle, shell, password, &scp).await?;
+            let sent = send(&mut conn, files, report, cancel).await;
+            conn.link.finish(shell.is_none()).await;
             sent
         }
         Direction::Download { remote, local_dir } => {
             // Without -r first: some equipment does not know it. A folder
             // then answers "not a regular file", and -r follows.
             for recursive in [false, true] {
-                let command = command(request.run_as, &scp_args(false, recursive, remote));
-                let mut conn = Conn::new(open_channel(handle, request.run_as, &command).await?);
-                conn.elevate(request.run_as, &request.password).await?;
-                match receive(&mut conn, local_dir, ev, cancel).await {
+                let scp = scp_args(false, recursive, remote);
+                let mut conn = open_scp(handle, shell, password, &scp).await?;
+                match receive(&mut conn, local_dir, report, cancel).await {
                     Err(e) if !recursive && e.contains("not a regular file") => continue,
                     other => return other,
                 }
@@ -164,10 +162,39 @@ async fn run_over_ssh(
     }
 }
 
-/// Printed by the shell once `sudo`/`su` let it run, just before `scp`.
-const READY: &str = "PRZMTERM-SCP-READY";
-/// The prompt asked of `sudo`, so it is recognised whatever the language.
-const SUDO_PROMPT: &str = "[przmterm] password:";
+/// The remote `scp`, ready for the protocol.
+async fn open_scp(
+    handle: &Handle,
+    shell: Option<&str>,
+    password: &str,
+    scp: &str,
+) -> Result<Conn<ChanLink>, String> {
+    let Some(shell) = shell else {
+        return Ok(Conn::new(open_channel(handle, None, scp).await?));
+    };
+    let mut conn = Conn::new(open_channel(handle, Some(shell), shell).await?);
+    conn.enter_shell(password).await?;
+    conn.send(scp_line(scp).as_bytes()).await?;
+    conn.wait_for(SCP_READY.as_bytes()).await?;
+    Ok(conn)
+}
+
+/// Typed into the shell: raw terminal, a marker, then `scp` in its place.
+fn scp_line(scp: &str) -> String {
+    // On a terminal scp would draw its progress meter into the transfer:
+    // -q keeps it quiet.
+    let quiet = scp.replacen("scp ", "scp -q ", 1);
+    format!("stty raw -echo; printf '%s%s\\n' {SCP_READY_A} {SCP_READY_B}; exec {quiet}\n")
+}
+
+// Markers printed by the shell. Each is typed in two halves, so the
+// terminal's echo of the typed line is never taken for the output.
+const SHELL_READY_A: &str = "PRZMTERM-SHELL-";
+const SHELL_READY_B: &str = "READY";
+const SHELL_READY: &str = "PRZMTERM-SHELL-READY";
+const SCP_READY_A: &str = "PRZMTERM-SCP-";
+const SCP_READY_B: &str = "READY";
+const SCP_READY: &str = "PRZMTERM-SCP-READY";
 
 /// The `scp` command line for the remote side.
 fn scp_args(upload: bool, recursive: bool, path: &str) -> String {
@@ -184,27 +211,9 @@ fn scp_args(upload: bool, recursive: bool, path: &str) -> String {
     )
 }
 
-/// The command to run: `scp …` as it is, or through `sudo`/`su` with the
-/// terminal made raw first.
-fn command(run_as: RunAs, scp: &str) -> String {
-    // On a terminal scp would draw its progress meter into the transfer:
-    // -q keeps it quiet.
-    let quiet = scp.replacen("scp ", "scp -q ", 1);
-    let inner = format!("stty raw -echo; printf '%s\\n' {READY}; exec {quiet}");
-    match run_as {
-        RunAs::Me => scp.to_string(),
-        RunAs::Sudo => format!(
-            "sudo -k -p {} sh -c {}",
-            quote(&format!("{SUDO_PROMPT} ")),
-            quote(&inner)
-        ),
-        RunAs::Su => format!("su - root -c {}", quote(&inner)),
-    }
-}
-
 /// `s` as one shell word; left bare when that is safe, so equipment
 /// without a Unix shell still understands plain paths (`flash:/x.bin`).
-fn quote(s: &str) -> String {
+pub(crate) fn quote(s: &str) -> String {
     let safe = !s.is_empty()
         && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || "_-./:@%+=,~".contains(c));
@@ -215,22 +224,27 @@ fn quote(s: &str) -> String {
     }
 }
 
-async fn open_channel(handle: &Handle, run_as: RunAs, command: &str) -> Result<ChanLink, String> {
+/// A channel running `command`; with a shell, on a terminal of its own
+/// (sudo and su read the password from one).
+pub(crate) async fn open_channel(
+    handle: &Handle,
+    shell: Option<&str>,
+    command: &str,
+) -> Result<ChanLink, String> {
     let channel = handle
         .channel_open_session()
         .await
         .map_err(|e| format!("cannot open a channel: {e}"))?;
-    if run_as != RunAs::Me {
-        // sudo and su read the password from a terminal.
+    if shell.is_some() {
         channel
-            .request_pty(false, "dumb", 200, 24, 0, 0, &[])
+            .request_pty(false, "dumb", 250, 24, 0, 0, &[])
             .await
             .map_err(|e| format!("the server refused a terminal: {e}"))?;
     }
     channel
         .exec(true, command)
         .await
-        .map_err(|e| format!("the server refused to run scp: {e}"))?;
+        .map_err(|e| format!("the server refused to run {command}: {e}"))?;
     Ok(ChanLink {
         channel,
         stderr: String::new(),
@@ -238,7 +252,7 @@ async fn open_channel(handle: &Handle, run_as: RunAs, command: &str) -> Result<C
 }
 
 /// A byte pipe to the remote `scp`.
-trait Link {
+pub(crate) trait Link {
     /// The next bytes, or `None` once the other side is done.
     async fn recv(&mut self) -> Option<Vec<u8>>;
     async fn send(&mut self, data: &[u8]) -> Result<(), String>;
@@ -246,17 +260,17 @@ trait Link {
     fn stderr(&self) -> &str;
 }
 
-struct ChanLink {
+pub(crate) struct ChanLink {
     channel: russh::Channel<russh::client::Msg>,
     stderr: String,
 }
 
 impl ChanLink {
-    /// Ends the channel. A plain `scp -t` stops at end of input; behind
-    /// sudo/su its terminal does not pass that on, so the channel closes
+    /// Ends the channel. A plain `scp -t` stops at end of input; behind a
+    /// shell its terminal does not pass that on, so the channel closes
     /// (every file is complete once acknowledged).
-    async fn finish(&mut self, run_as: RunAs) {
-        if run_as == RunAs::Me {
+    pub(crate) async fn finish(&mut self, plain: bool) {
+        if plain {
             let _ = self.channel.eof().await;
             let wait = async { while self.channel.wait().await.is_some() {} };
             let _ = tokio::time::timeout(Duration::from_secs(3), wait).await;
@@ -292,14 +306,14 @@ impl Link for ChanLink {
 }
 
 /// The protocol's reading side over a [`Link`].
-struct Conn<L> {
+pub(crate) struct Conn<L> {
     link: L,
     buf: VecDeque<u8>,
     eof: bool,
 }
 
 impl<L: Link> Conn<L> {
-    fn new(link: L) -> Self {
+    pub(crate) fn new(link: L) -> Self {
         Self {
             link,
             buf: VecDeque::new(),
@@ -375,7 +389,7 @@ impl<L: Link> Conn<L> {
         self.buf.iter().take(80).copied().collect()
     }
 
-    async fn send(&mut self, data: &[u8]) -> Result<(), String> {
+    pub(crate) async fn send(&mut self, data: &[u8]) -> Result<(), String> {
         self.link.send(data).await
     }
 
@@ -384,22 +398,19 @@ impl<L: Link> Conn<L> {
         self.buf.is_empty() && !self.fill().await
     }
 
-    /// With `sudo` or `su`: answers the password prompt and waits until the
-    /// shell says `scp` is about to start.
-    async fn elevate(&mut self, run_as: RunAs, password: &str) -> Result<(), String> {
-        if run_as == RunAs::Me {
-            return Ok(());
-        }
+    /// In a shell just started (`sudo su -`, `/bin/bash`…): answers its
+    /// password prompt and waits until it runs what is typed.
+    pub(crate) async fn enter_shell(&mut self, password: &str) -> Result<(), String> {
         let deadline = Instant::now() + Duration::from_secs(30);
-        // Output since the password was answered (or since the start).
+        // Output since the start, or since the password was answered.
         let mut seen: Vec<u8> = Vec::new();
         let mut answered = false;
         let mut quiet = false;
+        let mut probed: Option<Instant> = None;
         loop {
             seen.extend(self.buf.drain(..));
-            if let Some(at) = find(&seen, READY.as_bytes()) {
-                // What follows the marker line belongs to scp.
-                let mut rest = &seen[at + READY.len()..];
+            if let Some(at) = find(&seen, SHELL_READY.as_bytes()) {
+                let mut rest = &seen[at + SHELL_READY.len()..];
                 while let [b'\r' | b'\n', tail @ ..] = rest {
                     rest = tail;
                 }
@@ -407,33 +418,38 @@ impl<L: Link> Conn<L> {
                 return Ok(());
             }
             let text = String::from_utf8_lossy(&seen).into_owned();
-            let prompt = text.trim_end();
-            // sudo is asked for a prompt of ours; su's depends on the
-            // language, so a line ending in ':' that then waits will do.
-            let asks = prompt.ends_with(SUDO_PROMPT)
-                || (run_as == RunAs::Su && quiet && prompt.ends_with(':'));
-            if asks {
-                if answered {
-                    return Err("wrong password".into());
+            if quiet {
+                // A line ending in ':' that then waits: a password prompt
+                // (whatever the language).
+                if text.trim_end().ends_with(':') {
+                    if answered {
+                        return Err(WRONG_PASSWORD.into());
+                    }
+                    if password.is_empty() {
+                        return Err(PASSWORD_NEEDED.into());
+                    }
+                    let mut line = Zeroizing::new(password.as_bytes().to_vec());
+                    line.push(b'\n');
+                    self.send(&line).await?;
+                    answered = true;
+                    seen.clear();
+                    probed = None;
+                    quiet = false;
+                    continue;
                 }
-                if password.is_empty() {
-                    return Err(match run_as {
-                        RunAs::Sudo => "sudo asks for a password: fill it in".into(),
-                        _ => "su asks for root's password: fill it in".into(),
-                    });
+                // Ask the shell to answer. Typed again now and then: what
+                // is typed while sudo or su switch over can be thrown away.
+                if probed.is_none_or(|t| t.elapsed() >= Duration::from_millis(1500)) {
+                    let probe = format!("printf '%s%s\\n' {SHELL_READY_A} {SHELL_READY_B}\n");
+                    self.send(probe.as_bytes()).await?;
+                    probed = Some(Instant::now());
                 }
-                let mut line = Zeroizing::new(password.as_bytes().to_vec());
-                line.push(b'\n');
-                self.send(&line).await?;
-                answered = true;
-                seen.clear();
-                continue;
             }
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
-                return Err("no answer from sudo/su".into());
+                return Err("the shell did not answer".into());
             }
-            match tokio::time::timeout(left.min(Duration::from_millis(300)), self.fill()).await {
+            match tokio::time::timeout(left.min(Duration::from_millis(400)), self.fill()).await {
                 Ok(true) => quiet = false,
                 Err(_) => quiet = true,
                 Ok(false) => {
@@ -443,6 +459,47 @@ impl<L: Link> Conn<L> {
             }
         }
     }
+
+    /// Reads up to and past the line with `marker`; what came before is
+    /// dropped (or, at the end, is the error).
+    pub(crate) async fn wait_for(&mut self, marker: &[u8]) -> Result<(), String> {
+        let mut seen: Vec<u8> = Vec::new();
+        loop {
+            seen.extend(self.buf.drain(..));
+            if let Some(at) = find(&seen, marker) {
+                let mut rest = &seen[at + marker.len()..];
+                while let [b'\r' | b'\n', tail @ ..] = rest {
+                    rest = tail;
+                }
+                self.buf.extend(rest);
+                return Ok(());
+            }
+            if !self.fill().await {
+                let said = clean(&String::from_utf8_lossy(&seen));
+                return Err(if said.is_empty() { self.closed() } else { said });
+            }
+        }
+    }
+
+    /// What is read but not taken yet.
+    pub(crate) fn take_buffered(&mut self) -> Vec<u8> {
+        self.buf.drain(..).collect()
+    }
+
+    /// Reads more; false at the end.
+    pub(crate) async fn more(&mut self) -> bool {
+        self.fill().await
+    }
+
+    /// Everything until the other side is done.
+    pub(crate) async fn read_all(&mut self) -> Vec<u8> {
+        while self.fill().await {}
+        self.buf.drain(..).collect()
+    }
+
+    pub(crate) fn stderr(&self) -> &str {
+        self.link.stderr()
+    }
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -450,7 +507,7 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 /// A message from the other side, without terminal noise.
-fn clean(text: &str) -> String {
+pub(crate) fn clean(text: &str) -> String {
     text.lines()
         .map(str::trim)
         .rfind(|l| !l.is_empty())
@@ -469,7 +526,7 @@ fn cancelled(cancel: &AtomicBool) -> Result<(), String> {
 }
 
 struct Report<'a> {
-    ev: &'a Events,
+    report: &'a (dyn Fn(&Progress) + Sync),
     progress: Progress,
     last: Instant,
 }
@@ -478,7 +535,7 @@ impl Report<'_> {
     fn update(&mut self, force: bool) {
         if force || self.last.elapsed() >= Duration::from_millis(100) {
             self.last = Instant::now();
-            self.ev.send(ScpEvent::Progress(self.progress.clone()));
+            (self.report)(&self.progress);
         }
     }
 }
@@ -554,7 +611,7 @@ fn plan(path: &Path, items: &mut Vec<Item>) -> Result<(), String> {
 async fn send<L: Link>(
     conn: &mut Conn<L>,
     files: &[PathBuf],
-    ev: &Events,
+    report: &(dyn Fn(&Progress) + Sync),
     cancel: &AtomicBool,
 ) -> Result<Vec<PathBuf>, String> {
     let mut items = Vec::new();
@@ -569,7 +626,7 @@ async fn send<L: Link>(
         })
         .sum();
     let mut report = Report {
-        ev,
+        report,
         progress: Progress {
             total: Some(total),
             ..Progress::default()
@@ -654,11 +711,11 @@ fn parse_record(line: &str) -> Result<(u64, &str), String> {
 async fn receive<L: Link>(
     conn: &mut Conn<L>,
     dir: &Path,
-    ev: &Events,
+    report: &(dyn Fn(&Progress) + Sync),
     cancel: &AtomicBool,
 ) -> Result<Vec<PathBuf>, String> {
     let mut report = Report {
-        ev,
+        report,
         progress: Progress::default(),
         last: Instant::now(),
     };
@@ -700,8 +757,7 @@ async fn receive<L: Link>(
                         continue;
                     }
                     report.progress.file = name.to_string();
-                    report.progress.done = 0;
-                    report.progress.total = Some(size);
+                    report.progress.total = Some(report.progress.total.unwrap_or(0) + size);
                     report.update(true);
                     let mut file = tokio::fs::File::create(&path)
                         .await
@@ -789,12 +845,17 @@ mod tests {
             "scp -f flash:/fw.bin"
         );
         assert_eq!(scp_args(false, false, "-x"), "scp -f ./-x");
-        assert_eq!(command(RunAs::Me, "scp -t ."), "scp -t .");
-        let sudo = command(RunAs::Sudo, "scp -t /etc");
-        assert!(sudo.starts_with("sudo -k -p '[przmterm] password: ' sh -c '"));
-        assert!(sudo.contains("stty raw -echo") && sudo.contains("exec scp -q -t /etc"));
-        assert!(command(RunAs::Su, "scp -t /etc").starts_with("su - root -c '"));
+        let line = scp_line("scp -t /etc");
+        assert!(line.starts_with("stty raw -echo; printf '%s%s\\n' PRZMTERM-SCP- READY;"));
+        assert!(line.ends_with("exec scp -q -t /etc\n"));
+        assert!(
+            !line.contains(SCP_READY),
+            "the echo must not look like the marker"
+        );
         assert_eq!(quote("it's"), r"'it'\''s'");
+        assert_eq!(shell_from(" Default "), None);
+        assert_eq!(shell_from(""), None);
+        assert_eq!(shell_from("sudo su -").as_deref(), Some("sudo su -"));
     }
 
     #[test]
@@ -854,15 +915,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
-    fn events() -> Events {
-        let (tx, _rx) = std_mpsc::channel();
-        Events {
-            tx,
-            waker: Arc::new(|| {}),
-        }
-    }
-
     fn rt() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -889,7 +941,7 @@ mod tests {
         std::fs::write(src.path().join("tree/sub/b.txt"), "beta").unwrap();
         let remote = tempfile::tempdir().unwrap();
         let cancel = AtomicBool::new(false);
-        let ev = events();
+        let ev = |_: &Progress| {};
         rt().block_on(async {
             // Upload: the remote side is `scp -r -t DIR`.
             let dest = remote.path().to_str().unwrap();
@@ -996,49 +1048,69 @@ mod tests {
     #[test]
     fn answers_the_password_prompt() {
         rt().block_on(async {
+            // su: a prompt in Portuguese, then the shell answers the probe.
             let link = Scripted {
                 replies: VecDeque::from(vec![
                     b"Senha: ".to_vec(),
                     Vec::new(),
                     b"\r\n".to_vec(),
-                    format!("{READY}\n\0").into_bytes(),
+                    Vec::new(),
+                    format!("{SHELL_READY}\r\n\0").into_bytes(),
                 ]),
                 sent: Vec::new(),
             };
             let mut conn = Conn::new(link);
-            conn.elevate(RunAs::Su, "s3cret").await.unwrap();
-            assert_eq!(conn.link.sent, b"s3cret\n");
-            assert_eq!(conn.byte().await.unwrap(), 0, "scp's first answer is kept");
+            conn.enter_shell("s3cret").await.unwrap();
+            let sent = String::from_utf8(conn.link.sent.clone()).unwrap();
+            assert!(sent.starts_with("s3cret\n"), "{sent:?}");
+            assert!(sent.contains("printf '%s%s\\n' PRZMTERM-SHELL- READY"));
+            assert_eq!(conn.byte().await.unwrap(), 0, "what follows is kept");
+
+            // sudo asking again: a wrong password.
+            let link = Scripted {
+                replies: VecDeque::from(vec![
+                    b"[sudo] password for przm: ".to_vec(),
+                    Vec::new(),
+                    b"\r\nSorry, try again.\r\n[sudo] password for przm: ".to_vec(),
+                    Vec::new(),
+                ]),
+                sent: Vec::new(),
+            };
+            let mut conn = Conn::new(link);
+            assert_eq!(conn.enter_shell("nope").await.unwrap_err(), WRONG_PASSWORD);
+
+            // A prompt and no password to give.
+            let link = Scripted {
+                replies: VecDeque::from(vec![b"Password: ".to_vec(), Vec::new()]),
+                sent: Vec::new(),
+            };
+            let mut conn = Conn::new(link);
+            assert_eq!(conn.enter_shell("").await.unwrap_err(), PASSWORD_NEEDED);
+
+            // No password needed (NOPASSWD, /bin/bash…).
+            let link = Scripted {
+                replies: VecDeque::from(vec![
+                    b"root@vm:~# ".to_vec(),
+                    Vec::new(),
+                    format!("printf '%s%s\\n' PRZMTERM-SHELL- READY\r\n{SHELL_READY}\r\n")
+                        .into_bytes(),
+                ]),
+                sent: Vec::new(),
+            };
+            let mut conn = Conn::new(link);
+            conn.enter_shell("").await.unwrap();
 
             let link = Scripted {
                 replies: VecDeque::from(vec![
-                    format!("{SUDO_PROMPT} ").into_bytes(),
-                    format!("\r\nSorry, try again.\r\n{SUDO_PROMPT} ").into_bytes(),
+                    b"Password: ".to_vec(),
+                    Vec::new(),
+                    b"\r\nsu: Authentication failure\r\n".to_vec(),
                 ]),
                 sent: Vec::new(),
             };
             let mut conn = Conn::new(link);
             assert_eq!(
-                conn.elevate(RunAs::Sudo, "nope").await.unwrap_err(),
-                "wrong password"
-            );
-
-            // No password needed (NOPASSWD, or already root).
-            let link = Scripted {
-                replies: VecDeque::from(vec![format!("{READY}\n").into_bytes()]),
-                sent: Vec::new(),
-            };
-            let mut conn = Conn::new(link);
-            conn.elevate(RunAs::Sudo, "").await.unwrap();
-            assert!(conn.link.sent.is_empty());
-
-            let link = Scripted {
-                replies: VecDeque::from(vec![b"su: Authentication failure\r\n".to_vec()]),
-                sent: Vec::new(),
-            };
-            let mut conn = Conn::new(link);
-            assert_eq!(
-                conn.elevate(RunAs::Su, "x").await.unwrap_err(),
+                conn.enter_shell("x").await.unwrap_err(),
                 "su: Authentication failure"
             );
         });

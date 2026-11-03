@@ -528,13 +528,13 @@ impl Pane {
 
     /// Starts an SCP transfer on a channel of its own.
     fn start_scp(&mut self, request: przmterm_transport::scp::Request, waker: Waker) {
-        use przmterm_transport::scp::{Direction, RunAs};
+        use przmterm_transport::scp::Direction;
         let sending = matches!(request.direction, Direction::Upload { .. });
-        let who = match request.run_as {
-            RunAs::Me => "",
-            RunAs::Sudo => " as root (sudo)",
-            RunAs::Su => " as root (su)",
-        };
+        let who = request
+            .shell
+            .as_ref()
+            .map(|s| format!(" in {s}"))
+            .unwrap_or_default();
         match self.transport.scp(request, waker) {
             // The terminal is left alone: the shell keeps its prompt, and
             // the status bar shows the progress and the end.

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use eframe::egui;
 use przmterm_transport::modem::Kind;
-use przmterm_transport::scp::{self, RunAs};
+use przmterm_transport::scp;
 use zeroize::Zeroizing;
 
 /// What to start, once the dialog is answered.
@@ -91,8 +91,10 @@ pub struct TransferDialog {
     scp: bool,
     /// SCP: the remote folder to send into, or the file to fetch.
     remote: String,
-    run_as: RunAs,
-    /// For sudo's or su's prompt.
+    /// SCP: the shell its commands run in (`sudo su -`…); empty: the login
+    /// shell.
+    shell: String,
+    /// For the shell's password prompt.
     password: Zeroizing<String>,
     error: Option<String>,
 }
@@ -104,7 +106,7 @@ pub enum Answer {
 }
 
 impl TransferDialog {
-    pub fn new(tab: usize, sending: bool, unix: bool, ssh: bool) -> Self {
+    pub fn new(tab: usize, sending: bool, unix: bool, ssh: bool, shell: Option<String>) -> Self {
         Self {
             tab,
             sending,
@@ -116,7 +118,7 @@ impl TransferDialog {
             ssh,
             scp: false,
             remote: String::new(),
-            run_as: RunAs::Me,
+            shell: shell.unwrap_or_default(),
             password: Zeroizing::new(String::new()),
             error: None,
         }
@@ -145,14 +147,15 @@ impl TransferDialog {
                 local_dir: self.dir.clone(),
             }
         };
+        let shell = scp::shell_from(&self.shell);
         Ok(scp::Request {
             direction,
-            run_as: self.run_as,
-            password: if self.run_as == RunAs::Me {
+            password: if shell.is_none() {
                 Zeroizing::new(String::new())
             } else {
                 self.password.clone()
             },
+            shell,
         })
     }
 
@@ -207,35 +210,42 @@ impl TransferDialog {
             ui.end_row();
             self.save_to_row(ui);
         }
-        ui.label("Run as");
-        egui::ComboBox::from_id_salt("transfer-run-as")
-            .width(160.0)
-            .selected_text(self.run_as.label())
-            .show_ui(ui, |ui| {
-                for r in RunAs::ALL {
-                    ui.selectable_value(&mut self.run_as, r, r.label());
+        ui.label("Shell").on_hover_text(
+            "Where scp runs on the other side: Default is the login shell; \
+             sudo su - or su - work as root",
+        );
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.shell)
+                    .hint_text("Default")
+                    .desired_width(160.0),
+            );
+            ui.menu_button("▾", |ui| {
+                for shell in scp::SHELLS {
+                    let pick = if shell == "Default" { "" } else { shell };
+                    if ui.selectable_label(self.shell == pick, shell).clicked() {
+                        self.shell = pick.to_string();
+                        ui.close();
+                    }
                 }
             });
+        });
         ui.end_row();
-        if self.run_as != RunAs::Me {
+        let shell = scp::shell_from(&self.shell);
+        if shell.is_some() {
             ui.label("Password");
             ui.add(
                 egui::TextEdit::singleline(&mut *self.password)
                     .password(true)
-                    .hint_text(if self.run_as == RunAs::Sudo {
-                        "yours, if sudo asks"
-                    } else {
-                        "root's password"
-                    })
+                    .hint_text("if the shell asks for one")
                     .desired_width(240.0),
             );
             ui.end_row();
         }
         ui.label("");
-        ui.weak(if self.run_as == RunAs::Me {
-            "Runs scp on the other side, beside the terminal."
-        } else {
-            "Runs scp as root, beside the terminal; needs scp there."
+        ui.weak(match shell {
+            None => "Runs scp on the other side, beside the terminal.".to_string(),
+            Some(s) => format!("Runs scp in {s}, beside the terminal."),
         });
         ui.end_row();
     }
@@ -453,17 +463,17 @@ mod tests {
 
     #[test]
     fn commands_for_the_other_side() {
-        let mut d = TransferDialog::new(0, true, true, true);
+        let mut d = TransferDialog::new(0, true, true, true, None);
         assert_eq!(d.command().as_deref(), Some("rz"));
         d.kind = Kind::Xmodem;
         d.files = vec![PathBuf::from("/tmp/it's.bin")];
         assert_eq!(d.command().as_deref(), Some(r"rx 'it'\''s.bin'"));
-        let mut d = TransferDialog::new(0, false, true, true);
+        let mut d = TransferDialog::new(0, false, true, true, None);
         d.name = "fw.bin".into();
         assert_eq!(d.command().as_deref(), Some("sz 'fw.bin'"));
         d.command = false;
         assert_eq!(d.command(), None);
-        let d = TransferDialog::new(0, true, false, false);
+        let d = TransferDialog::new(0, true, false, false, None);
         assert_eq!(d.kind, Kind::Zmodem, "Zmodem first");
         assert!(!d.command, "devices: nothing typed");
     }

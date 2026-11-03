@@ -6,7 +6,8 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use przmterm_transport::scp::{Direction, Request, RunAs, ScpEvent};
+use przmterm_transport::scp::{Direction, Request, ScpEvent};
+use przmterm_transport::sftp::{SftpClient, SftpEvent};
 use przmterm_transport::ssh::{Credential, SshConfig, SshTransport};
 use przmterm_transport::{Size, Transport, noop_waker};
 use zeroize::Zeroizing;
@@ -80,7 +81,7 @@ fn upload_and_download_as_user_and_root() {
                 files: vec![local.clone()],
                 remote_dir: "/tmp".into(),
             },
-            run_as: RunAs::Me,
+            shell: None,
             password: none(),
         },
     );
@@ -93,7 +94,7 @@ fn upload_and_download_as_user_and_root() {
                 remote: "/tmp/przm-scp-test".into(),
                 local_dir: back.clone(),
             },
-            run_as: RunAs::Me,
+            shell: None,
             password: none(),
         },
     );
@@ -111,7 +112,7 @@ fn upload_and_download_as_user_and_root() {
                 remote: format!("{remote}/missing"),
                 local_dir: back.clone(),
             },
-            run_as: RunAs::Me,
+            shell: None,
             password: none(),
         },
     );
@@ -121,7 +122,11 @@ fn upload_and_download_as_user_and_root() {
         return;
     };
     let file = local.join("sub/data.bin");
-    for (run_as, pw) in [(RunAs::Sudo, password.to_string()), (RunAs::Su, root_pw)] {
+    for (shell, pw) in [
+        ("sudo su -", password.to_string()),
+        ("su -", root_pw.clone()),
+    ] {
+        let run_as = Some(shell.to_string());
         let r = transfer(
             &t,
             Request {
@@ -129,12 +134,12 @@ fn upload_and_download_as_user_and_root() {
                     files: vec![file.clone()],
                     remote_dir: "/root".into(),
                 },
-                run_as,
+                shell: run_as.clone(),
                 password: Zeroizing::new(pw.clone()),
             },
         );
         assert!(r.is_ok(), "{run_as:?}: {r:?}");
-        let got = dir.path().join(format!("{run_as:?}"));
+        let got = dir.path().join(shell.replace(' ', "_"));
         let r = transfer(
             &t,
             Request {
@@ -142,7 +147,7 @@ fn upload_and_download_as_user_and_root() {
                     remote: "/root/data.bin".into(),
                     local_dir: got.clone(),
                 },
-                run_as,
+                shell: run_as.clone(),
                 password: Zeroizing::new(pw.clone()),
             },
         );
@@ -159,11 +164,84 @@ fn upload_and_download_as_user_and_root() {
                     files: vec![file.clone()],
                     remote_dir: "/root".into(),
                 },
-                run_as,
+                shell: run_as.clone(),
                 password: Zeroizing::new("wrong-password".into()),
             },
         );
         assert!(r.is_err(), "{run_as:?} with a wrong password");
         eprintln!("{run_as:?} wrong password: {:?}", r.unwrap_err());
+    }
+
+    // The browser as root: asks for the password, then works in /root.
+    let client = t
+        .scp_browser(Some("sudo su -".into()), noop_waker())
+        .unwrap();
+    let seen = wait(&client, |e| matches!(e, SftpEvent::PasswordNeeded(_)));
+    eprintln!("asked: {:?}", seen.last());
+    client.set_password(password);
+    let home = match wait(&client, |e| matches!(e, SftpEvent::Ready { .. })).pop() {
+        Some(SftpEvent::Ready { home }) => home,
+        e => panic!("{e:?}"),
+    };
+    assert_eq!(home, "/root");
+    client.list(&home);
+    let entries = match wait(&client, |e| matches!(e, SftpEvent::Listing { .. })).pop() {
+        Some(SftpEvent::Listing { entries, .. }) => entries,
+        e => panic!("{e:?}"),
+    };
+    let data = entries
+        .iter()
+        .find(|e| e.name == "data.bin")
+        .expect("data.bin");
+    assert_eq!(data.size, 300_000);
+    client.mkdir("/root/przm new dir");
+    wait(&client, |e| matches!(e, SftpEvent::Changed { .. }));
+    client.rename("/root/przm new dir", "/root/przm-renamed");
+    wait(&client, |e| matches!(e, SftpEvent::Changed { .. }));
+    client.remove("/root/przm-renamed", true);
+    wait(&client, |e| matches!(e, SftpEvent::Changed { .. }));
+    client.remove("/root/data.bin", false);
+    wait(&client, |e| matches!(e, SftpEvent::Changed { .. }));
+    client.list("/nowhere");
+    let seen = wait(&client, |e| matches!(e, SftpEvent::Failed { .. }));
+    eprintln!("missing folder: {:?}", seen.last());
+    let back = dir.path().join("browser");
+    std::fs::create_dir_all(&back).unwrap();
+    client.upload(7, local.join("sub/data.bin"), "/root");
+    wait(&client, |e| matches!(e, SftpEvent::TransferDone { .. }));
+    client.download(8, "/root/data.bin", back.join("data.bin"));
+    let seen = wait(&client, |e| {
+        matches!(e, SftpEvent::TransferDone { id: 8, .. })
+    });
+    assert!(
+        matches!(
+            seen.last(),
+            Some(SftpEvent::TransferDone { result: Ok(()), .. })
+        ),
+        "{seen:?}"
+    );
+    assert_eq!(
+        std::fs::read(back.join("data.bin")).unwrap(),
+        data_bytes(&local)
+    );
+}
+
+fn data_bytes(local: &std::path::Path) -> Vec<u8> {
+    std::fs::read(local.join("sub/data.bin")).unwrap()
+}
+
+fn wait(client: &SftpClient, mut want: impl FnMut(&SftpEvent) -> bool) -> Vec<SftpEvent> {
+    let deadline = Instant::now() + Duration::from_secs(40);
+    let mut seen = Vec::new();
+    loop {
+        for e in client.poll() {
+            let stop = want(&e);
+            seen.push(e);
+            if stop {
+                return seen;
+            }
+        }
+        assert!(Instant::now() < deadline, "timed out; got {seen:?}");
+        std::thread::sleep(Duration::from_millis(20));
     }
 }
