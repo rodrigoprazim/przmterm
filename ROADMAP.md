@@ -158,6 +158,9 @@ highlighting, triggers, saved credentials) work in PrzmTerm.
 **Gate:** files moved to and from the maintainer's servers (SFTP, Zmodem)
 and, when a device is at hand, a serial console (Xmodem or Ymodem).
 
+- [x] Gate checked on macOS by the maintainer: SFTP, Zmodem (with lrzsz)
+      and SCP on his servers; no serial device at hand for this release
+
 ## 0.9.0 — Automation and hardening
 
 - Tabs and windows: tab groups (close a group, move tabs to a new group, send
