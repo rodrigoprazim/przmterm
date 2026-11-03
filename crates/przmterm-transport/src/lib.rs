@@ -11,6 +11,7 @@
 mod forward;
 pub mod modem;
 mod pipe;
+pub mod scp;
 pub mod serial;
 pub mod sftp;
 pub mod ssh;
@@ -114,6 +115,12 @@ pub trait Transport: Send {
     /// An SFTP session on the same connection, if the protocol has one and
     /// the connection is logged in (SSH). `None` otherwise.
     fn sftp(&self, _waker: Waker) -> Option<sftp::SftpClient> {
+        None
+    }
+
+    /// An SCP transfer on a channel of its own over the same connection, if
+    /// the protocol has one and the connection is logged in (SSH).
+    fn scp(&self, _request: scp::Request, _waker: Waker) -> Option<scp::ScpTransfer> {
         None
     }
 }

@@ -281,8 +281,49 @@ pub struct Pane {
 
 pub struct Transfer {
     engine: Box<dyn modem::Engine>,
-    pub kind: modem::Kind,
+    /// The protocol, for messages: `Zmodem`, `SCP`…
+    pub label: &'static str,
     pub sending: bool,
+    /// Runs through the terminal (X/Y/Zmodem): the session's output goes
+    /// to it and typing waits. SCP has a channel of its own.
+    in_band: bool,
+}
+
+/// An SCP transfer seen as an [`modem::Engine`], so it shows and ends like
+/// the others.
+struct ScpEngine {
+    transfer: przmterm_transport::scp::ScpTransfer,
+    progress: modem::Progress,
+    status: modem::Status,
+}
+
+impl modem::Engine for ScpEngine {
+    fn input(&mut self, _: &[u8], _: std::time::Instant) {}
+    fn output(&mut self) -> Vec<u8> {
+        Vec::new()
+    }
+    fn tick(&mut self, _: std::time::Instant) {
+        use przmterm_transport::scp::ScpEvent;
+        for event in self.transfer.poll() {
+            match event {
+                ScpEvent::Progress(p) => self.progress = p,
+                ScpEvent::Done(Ok(files)) => self.status = modem::Status::Finished(files),
+                ScpEvent::Done(Err(e)) if e == "cancelled" => {
+                    self.status = modem::Status::Cancelled;
+                }
+                ScpEvent::Done(Err(e)) => self.status = modem::Status::Failed(e),
+            }
+        }
+    }
+    fn progress(&self) -> modem::Progress {
+        self.progress.clone()
+    }
+    fn status(&self) -> modem::Status {
+        self.status.clone()
+    }
+    fn cancel(&mut self) {
+        self.transfer.cancel();
+    }
 }
 
 /// What a transfer needs from the application.
@@ -406,10 +447,11 @@ impl Pane {
     }
 
     /// Starts what the transfer dialog asked for.
-    pub fn begin(&mut self, start: crate::transfer::Start) {
+    pub fn begin(&mut self, start: crate::transfer::Start, waker: Waker) {
         use crate::transfer::Start;
         let now = std::time::Instant::now();
         match start {
+            Start::Scp(request) => self.start_scp(request, waker),
             // Zmodem's own start (from rz/sz) begins the transfer, so the
             // shell never sees protocol bytes.
             Start::Send {
@@ -473,13 +515,45 @@ impl Pane {
                 );
                 self.transfer = Some(Transfer {
                     engine,
-                    kind,
+                    label: kind.label(),
                     sending: true,
+                    in_band: true,
                 });
             }
             Err(e) => self
                 .transfer_events
                 .push(TransferEvent::Ended(format!("Cannot send: {e}"))),
+        }
+    }
+
+    /// Starts an SCP transfer on a channel of its own.
+    fn start_scp(&mut self, request: przmterm_transport::scp::Request, waker: Waker) {
+        use przmterm_transport::scp::{Direction, RunAs};
+        let sending = matches!(request.direction, Direction::Upload { .. });
+        let who = match request.run_as {
+            RunAs::Me => "",
+            RunAs::Sudo => " as root (sudo)",
+            RunAs::Su => " as root (su)",
+        };
+        match self.transport.scp(request, waker) {
+            // The terminal is left alone: the shell keeps its prompt, and
+            // the status bar shows the progress and the end.
+            Some(transfer) => {
+                tracing::info!("SCP started{who}");
+                self.transfer = Some(Transfer {
+                    engine: Box::new(ScpEngine {
+                        transfer,
+                        progress: modem::Progress::default(),
+                        status: modem::Status::Running,
+                    }),
+                    label: "SCP",
+                    sending,
+                    in_band: false,
+                });
+            }
+            None => self.transfer_events.push(TransferEvent::Ended(
+                "SCP needs a connected SSH session.".into(),
+            )),
         }
     }
 
@@ -489,9 +563,15 @@ impl Pane {
             .feed(format!("\r\n\x1b[2m[{} download started]\x1b[0m\r\n", kind.label()).as_bytes());
         self.transfer = Some(Transfer {
             engine: modem::receive(kind, dir, name, std::time::Instant::now()),
-            kind,
+            label: kind.label(),
             sending: false,
+            in_band: true,
         });
+    }
+
+    /// A transfer runs through the terminal (X/Y/Zmodem).
+    fn in_band_transfer(&self) -> bool {
+        self.transfer.as_ref().is_some_and(|t| t.in_band)
     }
 
     /// The running transfer and how far it is.
@@ -537,7 +617,7 @@ impl Pane {
         if status == modem::Status::Running {
             return;
         }
-        let (kind, sending) = (t.kind.label(), t.sending);
+        let (kind, sending) = (t.label, t.sending);
         let names = |files: &[std::path::PathBuf]| {
             files
                 .iter()
@@ -561,8 +641,10 @@ impl Pane {
             modem::Status::Failed(e) => format!("{kind}: transfer failed: {e}"),
             modem::Status::Running => unreachable!(),
         };
-        self.term
-            .feed(format!("\r\n\x1b[2m[{message}]\x1b[0m\r\n").as_bytes());
+        if t.in_band {
+            self.term
+                .feed(format!("\r\n\x1b[2m[{message}]\x1b[0m\r\n").as_bytes());
+        }
         self.transfer = None;
         self.upload_asked = false;
         self.watching = None;
@@ -888,7 +970,7 @@ impl Pane {
                 Ok(n) => {
                     got = true;
                     let now = std::time::Instant::now();
-                    if let Some(t) = &mut self.transfer {
+                    if let Some(t) = self.transfer.as_mut().filter(|t| t.in_band) {
                         t.engine.input(&buf[..n], now);
                         // Data moving: the command ran. File contents must
                         // not be read as an error message.
@@ -959,7 +1041,7 @@ impl Pane {
             }
         }
         let replies = self.term.take_output();
-        if !replies.is_empty() && self.transfer.is_none() {
+        if !replies.is_empty() && !self.in_band_transfer() {
             self.send(&replies);
         }
         if self.watching.is_some() {
@@ -989,7 +1071,7 @@ impl Pane {
 
     pub fn send(&mut self, bytes: &[u8]) {
         // Typing during a transfer would break it; Ctrl+C stops it.
-        if self.transfer.is_some() {
+        if self.in_band_transfer() {
             if bytes.contains(&3) {
                 self.cancel_transfer();
             }

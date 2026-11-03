@@ -28,6 +28,12 @@ All notable changes to PrzmTerm are recorded here. The format follows
   cancelled one is removed. When the typed command does not exist on the
   other side ("command not found", "Unknown command"…), nothing is sent to
   the shell and a note says to install lrzsz or use SFTP.
+- SCP in the *File transfer* dialog (SSH sessions): sends files and folders
+  to a remote folder or fetches a remote file or folder, on a channel of its
+  own so the terminal stays free, with progress and *Cancel* in the status
+  bar. *Run as* the login user, root with `sudo` or root with `su -`:
+  PrzmTerm answers the password prompt, and a wrong password is reported.
+  Received files never overwrite others.
 
 ### Changed
 
@@ -39,8 +45,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
 - While *Send to all* is on, the status bar button reads *⇶ Typing to all*
   in an amber outline, and every pane that gets the keys is framed in amber
   with a *typing to all* tag in its caption.
-- The status bar *Log* button: while logging it reads *● Log* with the log
-  file's name, outlined in green; when not, a plain *○ Log*. Click still
+- The status bar *Log* button names the log file while logging (*● Log*
+  and the file's name, still green; *○ Log* in red when not). Click still
   starts or stops logging. Right-click opens a menu with the file's name,
   *Start/Stop Logging*, *Open Log* (in the default text editor), *Show in
   Finder* (Explorer, or the folder on Linux) and *Log Settings…*, which opens

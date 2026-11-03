@@ -110,6 +110,17 @@ the files, with *Start the other side for me* off. The status bar shows the
 progress and *Cancel*. Zmodem streams and is much faster over a network;
 Xmodem and Ymodem wait for an answer after each block.
 
+### SCP, also as root
+
+On an SSH session, **⇅ Transfer** › protocol *SCP* sends files or folders to a
+remote folder, or fetches a remote file or folder, on a channel of its own:
+the terminal stays free and the status bar shows the progress. *Run as*
+picks the login user, root with `sudo` (your password, if sudo asks) or root
+with `su -` (root's password), so files can go where only root writes — the
+same as typing `sudo su` first. The other side needs `scp`, which Unix hosts
+and much network equipment have; with *the login user* nothing else is
+typed, so routers and switches with an SCP server work too.
+
 ### Backup and sharing sessions
 
 **+** next to *Sessions* › *Back up settings…* writes one `.przm` file with

@@ -800,7 +800,10 @@ impl PrzmApp {
                         pane.transport.protocol(),
                         przmterm_core::Protocol::Ssh | przmterm_core::Protocol::Telnet
                     );
-                    self.transfer_dialog = Some(transfer::TransferDialog::new(t, sending, unix));
+                    // SCP runs on a channel of the same SSH connection.
+                    let ssh = pane.transport.protocol() == przmterm_core::Protocol::Ssh;
+                    self.transfer_dialog =
+                        Some(transfer::TransferDialog::new(t, sending, unix, ssh));
                 }
             }
             Action::CancelTransfer(t) => self.tabs[t].pane_mut().cancel_transfer(),
@@ -1062,19 +1065,21 @@ impl PrzmApp {
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned());
         let logging = pane.log.is_some();
-        let green = if ui.visuals().dark_mode {
-            egui::Color32::from_rgb(90, 200, 120)
+        // Filled green while logging, red while not, as before; the dot
+        // keeps the state readable without colour.
+        let green = egui::Color32::from_rgb(40, 135, 65);
+        let red = egui::Color32::from_rgb(170, 55, 55);
+        let (text, fill) = if logging {
+            (
+                format!("● Log  {}", short_name(name.as_deref().unwrap_or(""))),
+                green,
+            )
         } else {
-            egui::Color32::from_rgb(30, 130, 60)
+            ("○ Log".to_string(), red)
         };
-        let button = if logging {
-            let text = format!("● Log  {}", short_name(name.as_deref().unwrap_or("")));
-            egui::Button::new(egui::RichText::new(text).color(green))
-                .fill(green.gamma_multiply(0.12))
-                .stroke(egui::Stroke::new(1.0, green))
-        } else {
-            egui::Button::selectable(false, "○ Log")
-        };
+        let button = egui::Button::new(egui::RichText::new(text).color(egui::Color32::WHITE))
+            .fill(fill)
+            .small();
         let response = ui.add(button).on_hover_text(match (&name, logging) {
             (Some(name), true) => format!(
                 "Logging to {name}.\nClick to stop{}; right-click for more.",
@@ -1560,8 +1565,10 @@ impl PrzmApp {
                 transfer::Answer::Start(start) => {
                     let t = dialog.tab;
                     self.transfer_dialog = None;
+                    let ctx2 = ctx.clone();
+                    let waker: Waker = Arc::new(move || ctx2.request_repaint());
                     if let Some(tab) = self.tabs.get_mut(t) {
-                        tab.pane_mut().begin(start);
+                        tab.pane_mut().begin(start, waker);
                     }
                 }
             }
@@ -2472,12 +2479,8 @@ impl eframe::App for PrzmApp {
                         };
                         let arrow = if t.sending { "↑" } else { "↓" };
                         ui.label(
-                            egui::RichText::new(format!(
-                                "{arrow} {} {} {amount}",
-                                t.kind.label(),
-                                p.file
-                            ))
-                            .color(egui::Color32::from_rgb(110, 200, 255)),
+                            egui::RichText::new(format!("{arrow} {} {} {amount}", t.label, p.file))
+                                .color(egui::Color32::from_rgb(110, 200, 255)),
                         );
                     }
                     if let Some(name) = pane.script_name() {

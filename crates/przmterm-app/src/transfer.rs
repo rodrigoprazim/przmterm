@@ -1,9 +1,12 @@
-//! The "Send File" / "Receive File" dialog for Xmodem, Ymodem and Zmodem.
+//! The "File transfer" dialog: Zmodem, Ymodem and Xmodem through the
+//! terminal, and SCP on a channel of its own (SSH).
 
 use std::path::PathBuf;
 
 use eframe::egui;
 use przmterm_transport::modem::Kind;
+use przmterm_transport::scp::{self, RunAs};
+use zeroize::Zeroizing;
 
 /// What to start, once the dialog is answered.
 pub enum Start {
@@ -20,6 +23,8 @@ pub enum Start {
         /// Typed first to start the sender (`sz NAME`…).
         command: Option<String>,
     },
+    /// SCP on a channel of the same SSH connection.
+    Scp(scp::Request),
 }
 
 /// Where received files go unless chosen: the Downloads folder.
@@ -80,6 +85,15 @@ pub struct TransferDialog {
     dir: PathBuf,
     /// Type the lrzsz command on the other side (Unix hosts).
     command: bool,
+    /// The session is SSH, so SCP is offered.
+    ssh: bool,
+    /// SCP chosen instead of `kind`.
+    scp: bool,
+    /// SCP: the remote folder to send into, or the file to fetch.
+    remote: String,
+    run_as: RunAs,
+    /// For sudo's or su's prompt.
+    password: Zeroizing<String>,
     error: Option<String>,
 }
 
@@ -90,7 +104,7 @@ pub enum Answer {
 }
 
 impl TransferDialog {
-    pub fn new(tab: usize, sending: bool, unix: bool) -> Self {
+    pub fn new(tab: usize, sending: bool, unix: bool, ssh: bool) -> Self {
         Self {
             tab,
             sending,
@@ -99,8 +113,47 @@ impl TransferDialog {
             name: String::new(),
             dir: downloads(),
             command: unix,
+            ssh,
+            scp: false,
+            remote: String::new(),
+            run_as: RunAs::Me,
+            password: Zeroizing::new(String::new()),
             error: None,
         }
+    }
+
+    fn protocol_label(&self) -> &'static str {
+        if self.scp { "SCP" } else { self.kind.label() }
+    }
+
+    /// The SCP request, or what is missing.
+    fn scp_request(&self) -> Result<scp::Request, String> {
+        let direction = if self.sending {
+            if self.files.is_empty() {
+                return Err("Choose the files to send.".into());
+            }
+            scp::Direction::Upload {
+                files: self.files.clone(),
+                remote_dir: self.remote.trim().to_string(),
+            }
+        } else {
+            if self.remote.trim().is_empty() {
+                return Err("Give the remote file or folder.".into());
+            }
+            scp::Direction::Download {
+                remote: self.remote.trim().to_string(),
+                local_dir: self.dir.clone(),
+            }
+        };
+        Ok(scp::Request {
+            direction,
+            run_as: self.run_as,
+            password: if self.run_as == RunAs::Me {
+                Zeroizing::new(String::new())
+            } else {
+                self.password.clone()
+            },
+        })
     }
 
     fn command(&self) -> Option<String> {
@@ -131,6 +184,105 @@ impl TransferDialog {
             };
             format!("{tool} {}", quote(self.name.trim()))
         })
+    }
+
+    /// The rows for SCP, after the protocol.
+    fn scp_rows(&mut self, ui: &mut egui::Ui) {
+        if self.sending {
+            self.files_row(ui);
+            ui.label("Remote folder");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.remote)
+                    .hint_text("home folder")
+                    .desired_width(240.0),
+            );
+            ui.end_row();
+        } else {
+            ui.label("Remote file");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.remote)
+                    .hint_text("/var/log/messages, or a folder")
+                    .desired_width(240.0),
+            );
+            ui.end_row();
+            self.save_to_row(ui);
+        }
+        ui.label("Run as");
+        egui::ComboBox::from_id_salt("transfer-run-as")
+            .width(160.0)
+            .selected_text(self.run_as.label())
+            .show_ui(ui, |ui| {
+                for r in RunAs::ALL {
+                    ui.selectable_value(&mut self.run_as, r, r.label());
+                }
+            });
+        ui.end_row();
+        if self.run_as != RunAs::Me {
+            ui.label("Password");
+            ui.add(
+                egui::TextEdit::singleline(&mut *self.password)
+                    .password(true)
+                    .hint_text(if self.run_as == RunAs::Sudo {
+                        "yours, if sudo asks"
+                    } else {
+                        "root's password"
+                    })
+                    .desired_width(240.0),
+            );
+            ui.end_row();
+        }
+        ui.label("");
+        ui.weak(if self.run_as == RunAs::Me {
+            "Runs scp on the other side, beside the terminal."
+        } else {
+            "Runs scp as root, beside the terminal; needs scp there."
+        });
+        ui.end_row();
+    }
+
+    fn files_row(&mut self, ui: &mut egui::Ui) {
+        ui.label("Files");
+        ui.horizontal(|ui| {
+            let shown = match self.files.len() {
+                0 => "none".to_string(),
+                1 => self.files[0]
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                n => format!("{n} files"),
+            };
+            ui.label(shown);
+            if ui.button("Choose…").clicked()
+                && let Some(files) = rfd::FileDialog::new()
+                    .set_title("Files to send")
+                    .pick_files()
+            {
+                self.files = files;
+                self.error = None;
+            }
+        });
+        ui.end_row();
+    }
+
+    fn save_to_row(&mut self, ui: &mut egui::Ui) {
+        ui.label("Save to");
+        ui.horizontal(|ui| {
+            let folder = self
+                .dir
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "folder".into());
+            ui.label(folder);
+            if ui.button("Choose…").clicked()
+                && let Some(dir) = rfd::FileDialog::new()
+                    .set_title("Save received files here")
+                    .set_directory(&self.dir)
+                    .pick_folder()
+            {
+                self.dir = dir;
+            }
+        });
+        ui.end_row();
     }
 
     pub fn show(&mut self, ctx: &egui::Context) -> Answer {
@@ -166,35 +318,38 @@ impl TransferDialog {
                         ui.label("Protocol");
                         egui::ComboBox::from_id_salt("transfer-protocol")
                             .width(160.0)
-                            .selected_text(self.kind.label())
+                            .selected_text(self.protocol_label())
                             .show_ui(ui, |ui| {
                                 for k in Kind::ALL {
-                                    ui.selectable_value(&mut self.kind, k, k.label());
+                                    if ui
+                                        .selectable_label(!self.scp && self.kind == k, k.label())
+                                        .clicked()
+                                    {
+                                        self.kind = k;
+                                        self.scp = false;
+                                    }
+                                    // SCP right after Zmodem, for SSH sessions.
+                                    if k == Kind::Zmodem
+                                        && self.ssh
+                                        && ui
+                                            .selectable_label(self.scp, "SCP")
+                                            .on_hover_text(
+                                                "On a channel of its own: the terminal stays \
+                                                 free, and it can run as root (sudo or su)",
+                                            )
+                                            .clicked()
+                                    {
+                                        self.scp = true;
+                                    }
                                 }
                             });
                         ui.end_row();
+                        if self.scp {
+                            self.scp_rows(ui);
+                            return;
+                        }
                         if self.sending {
-                            ui.label("Files");
-                            ui.horizontal(|ui| {
-                                let shown = match self.files.len() {
-                                    0 => "none".to_string(),
-                                    1 => self.files[0]
-                                        .file_name()
-                                        .map(|n| n.to_string_lossy().into_owned())
-                                        .unwrap_or_default(),
-                                    n => format!("{n} files"),
-                                };
-                                ui.label(shown);
-                                if ui.button("Choose…").clicked()
-                                    && let Some(files) = rfd::FileDialog::new()
-                                        .set_title("Files to send")
-                                        .pick_files()
-                                {
-                                    self.files = files;
-                                    self.error = None;
-                                }
-                            });
-                            ui.end_row();
+                            self.files_row(ui);
                             if !self.kind.sends_names() && self.files.len() > 1 {
                                 ui.label("");
                                 ui.colored_label(
@@ -204,24 +359,7 @@ impl TransferDialog {
                                 ui.end_row();
                             }
                         } else {
-                            ui.label("Save to");
-                            ui.horizontal(|ui| {
-                                let folder = self
-                                    .dir
-                                    .file_name()
-                                    .map(|n| n.to_string_lossy().into_owned())
-                                    .unwrap_or_else(|| "folder".into());
-                                ui.label(folder);
-                                if ui.button("Choose…").clicked()
-                                    && let Some(dir) = rfd::FileDialog::new()
-                                        .set_title("Save received files here")
-                                        .set_directory(&self.dir)
-                                        .pick_folder()
-                                {
-                                    self.dir = dir;
-                                }
-                            });
-                            ui.end_row();
+                            self.save_to_row(ui);
                             if !self.kind.sends_names() || self.command {
                                 ui.label(if self.command {
                                     "Remote file"
@@ -257,7 +395,12 @@ impl TransferDialog {
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("Start").clicked() {
-                            if self.sending && self.files.is_empty() {
+                            if self.scp {
+                                match self.scp_request() {
+                                    Ok(request) => answer = Answer::Start(Start::Scp(request)),
+                                    Err(e) => self.error = Some(e),
+                                }
+                            } else if self.sending && self.files.is_empty() {
                                 self.error = Some("Choose the files to send.".into());
                             } else if !self.sending
                                 && (self.command || !self.kind.sends_names())
@@ -310,17 +453,17 @@ mod tests {
 
     #[test]
     fn commands_for_the_other_side() {
-        let mut d = TransferDialog::new(0, true, true);
+        let mut d = TransferDialog::new(0, true, true, true);
         assert_eq!(d.command().as_deref(), Some("rz"));
         d.kind = Kind::Xmodem;
         d.files = vec![PathBuf::from("/tmp/it's.bin")];
         assert_eq!(d.command().as_deref(), Some(r"rx 'it'\''s.bin'"));
-        let mut d = TransferDialog::new(0, false, true);
+        let mut d = TransferDialog::new(0, false, true, true);
         d.name = "fw.bin".into();
         assert_eq!(d.command().as_deref(), Some("sz 'fw.bin'"));
         d.command = false;
         assert_eq!(d.command(), None);
-        let d = TransferDialog::new(0, true, false);
+        let d = TransferDialog::new(0, true, false, false);
         assert_eq!(d.kind, Kind::Zmodem, "Zmodem first");
         assert!(!d.command, "devices: nothing typed");
     }
