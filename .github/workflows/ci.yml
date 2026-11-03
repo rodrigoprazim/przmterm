@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # New security advisories show up without a push.
+  schedule:
+    - cron: "17 9 * * 1"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -42,6 +45,15 @@ jobs:
         run: sudo apt-get install -y lrzsz
       - run: cargo clippy --workspace --all-targets
       - run: cargo test --workspace
+
+  deny:
+    name: Dependencies (cargo deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
 
   msrv:
     name: Minimum Rust version

@@ -7,6 +7,11 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- CI checks the dependencies with `cargo deny` on every push and weekly:
+  RustSec security advisories, licences and crate sources (`deny.toml`).
+
 ## [0.8.0] - 2026-11-03
 
 ### Added

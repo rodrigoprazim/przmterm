@@ -9,7 +9,10 @@ cargo test --workspace
 ```
 
 CI runs the same checks on Linux, macOS and Windows, plus a build with the
-minimum Rust version from `Cargo.toml`.
+minimum Rust version from `Cargo.toml` and `cargo deny check` (RustSec
+advisories, licences, crate sources; settings in `deny.toml`). A new
+dependency must have a licence listed there, and an advisory that does not
+apply needs an entry with the reason.
 
 ## Conventions
 

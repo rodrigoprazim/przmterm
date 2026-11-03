@@ -171,7 +171,9 @@ and, when a device is at hand, a serial console (Xmodem or Ymodem).
 - MCP server: `list_sessions`, `open_session`, `send`, `read_screen`, `run_script`,
   with per-session permissions and a command block list
 - Dedicated `wgpu` grid renderer with a glyph atlas
-- `cargo audit` / `cargo deny` in CI; signed and notarised binaries
+- [x] `cargo deny` in CI (RustSec advisories as `cargo audit` checks them,
+  licences, crate sources), also weekly
+- Signed and notarised binaries
 - Release candidates `1.0.0-rc.N`
 
 ## 1.0.0 — Stable
