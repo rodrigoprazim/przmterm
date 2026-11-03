@@ -31,7 +31,8 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub const ALL: [Kind; 4] = [Kind::Xmodem, Kind::Xmodem1k, Kind::Ymodem, Kind::Zmodem];
+    /// The most capable first.
+    pub const ALL: [Kind; 4] = [Kind::Zmodem, Kind::Ymodem, Kind::Xmodem1k, Kind::Xmodem];
 
     pub fn label(self) -> &'static str {
         match self {

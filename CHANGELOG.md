@@ -18,7 +18,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
   delete (folders with their contents, after asking). Downloads never
   overwrite: an existing name gets ` (2)`.
 - File transfers in the terminal with Xmodem, Xmodem-1K, Ymodem and Zmodem
-  (*Send Files…* / *Receive Files…* in the tab menu, or shortcuts), for
+  (**⇅ Transfer** in the status bar, with *Send* and *Receive* tabs and the
+  protocol in a list, Zmodem first; or shortcuts), for
   serial consoles and Telnet as well as SSH. Running `sz` on the other side
   downloads to the Downloads folder by itself; running `rz` asks for the
   files to send. On a Unix host the dialog can type the `rz`/`sz`/`rb`/`sb`/
@@ -27,6 +28,16 @@ All notable changes to PrzmTerm are recorded here. The format follows
   cancelled one is removed. When the typed command does not exist on the
   other side ("command not found", "Unknown command"…), nothing is sent to
   the shell and a note says to install lrzsz or use SFTP.
+
+### Changed
+
+- Dialogs put the action that backs out (*Cancel*, *Back*, *Close*) on the
+  left and the one that goes ahead (*Save*, *OK*, *Delete*, *Split*…) on the
+  right.
+- In a split tab, **⇱ Separate** at the top right gives each pane its tab
+  back; it replaces *× Pane* (closing a pane stays on Ctrl+Shift+W / ⌘⇧W).
+- The SFTP window opens in the middle of the window; dragging over the list
+  selects several entries (Ctrl/⌘ adds), and Shift+click selects a range.
 
 ## [0.7.0] - 2026-11-02
 

@@ -590,8 +590,10 @@ impl Editor {
                     });
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        go = ui.button("Save").clicked() || enter;
                         back = ui.button("Back").clicked() || escape;
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            go = ui.button("Save").clicked() || enter;
+                        });
                     });
                     if go {
                         let apply = confirm.apply_existing;
@@ -663,16 +665,18 @@ impl Editor {
                     result = EditorResult::Cancel;
                 }
                 ui.horizontal(|ui| {
-                    if ui.button("Save").clicked() || (enter && !popup) {
-                        match self.save_or_confirm(config_dir) {
-                            Ok(Some(msg)) => result = EditorResult::Saved(msg),
-                            Ok(None) => {}
-                            Err(e) => self.error = Some(e),
-                        }
-                    }
                     if ui.button("Cancel").clicked() {
                         result = EditorResult::Cancel;
                     }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Save").clicked() || (enter && !popup) {
+                            match self.save_or_confirm(config_dir) {
+                                Ok(Some(msg)) => result = EditorResult::Saved(msg),
+                                Ok(None) => {}
+                                Err(e) => self.error = Some(e),
+                            }
+                        }
+                    });
                 });
             });
         if !open {

@@ -48,6 +48,11 @@ pub struct SftpBrowser {
     last_download: Option<PathBuf>,
     /// Show names starting with a dot.
     hidden: bool,
+    /// Dragging a selection box: where it started, and what was selected
+    /// before (kept with Ctrl/⌘).
+    drag_from: Option<(egui::Pos2, BTreeSet<String>)>,
+    /// The last row clicked, for Shift+click ranges.
+    anchor: Option<String>,
 }
 
 /// `1.2 MB`.
@@ -97,6 +102,8 @@ impl SftpBrowser {
             closed: None,
             last_download: dirs::download_dir(),
             hidden: false,
+            drag_from: None,
+            anchor: None,
         }
     }
 
@@ -215,6 +222,8 @@ impl SftpBrowser {
             .id(egui::Id::unique(("sftp", self.id)))
             .open(&mut open)
             .default_size([760.0, 520.0])
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(ctx.content_rect().center())
             .resizable(true)
             .collapsible(true)
             .show(ctx, |ui| self.body(ui));
@@ -378,8 +387,10 @@ impl SftpBrowser {
         });
         let mut open_dir = None;
         let mut download = None;
-        let multi = ui.input(|i| i.modifiers.command);
-        egui::ScrollArea::vertical()
+        let (multi, range) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
+        // Each row's place on screen, for selecting with a box.
+        let mut rows: Vec<(String, egui::Rect)> = Vec::new();
+        let list = egui::ScrollArea::vertical()
             .id_salt(("sftp-list", self.id))
             .max_height(list_h)
             .auto_shrink([false, false])
@@ -399,68 +410,88 @@ impl SftpBrowser {
                     } else {
                         format!("{icon} {}", e.name)
                     };
-                    let row = ui
-                        .horizontal(|ui| {
-                            // The name fills its column and is left-aligned, so
-                            // the whole cell selects the row.
-                            let r = ui
-                                .allocate_ui_with_layout(
-                                    egui::vec2(name_w, row_h),
-                                    egui::Layout::left_to_right(egui::Align::Center)
-                                        .with_main_justify(true),
-                                    |ui| {
-                                        ui.add(
-                                            // The empty right text pushes the name to the left.
-                                            egui::Button::selectable(on, name)
-                                                .right_text("")
-                                                .truncate(),
-                                        )
-                                    },
-                                )
-                                .inner;
-                            ui.allocate_ui_with_layout(
-                                egui::vec2(size_w, row_h),
-                                egui::Layout::right_to_left(egui::Align::Center),
+                    let line = ui.horizontal(|ui| {
+                        // The name fills its column and is left-aligned, so
+                        // the whole cell selects the row.
+                        let r = ui
+                            .allocate_ui_with_layout(
+                                egui::vec2(name_w, row_h),
+                                egui::Layout::left_to_right(egui::Align::Center)
+                                    .with_main_justify(true),
                                 |ui| {
-                                    ui.set_min_width(size_w);
-                                    ui.add_space(12.0);
-                                    if !e.is_dir {
-                                        ui.label(size_text(e.size));
-                                    }
+                                    ui.add(
+                                        // The empty right text pushes the name to the left.
+                                        egui::Button::selectable(on, name)
+                                            .right_text("")
+                                            .truncate(),
+                                    )
                                 },
-                            );
-                            ui.allocate_ui_with_layout(
-                                egui::vec2(date_w, row_h),
-                                egui::Layout::left_to_right(egui::Align::Center),
-                                |ui| {
-                                    ui.set_min_width(date_w);
-                                    ui.add_space(12.0);
-                                    ui.label(e.modified.map_or(String::new(), |t| {
-                                        chrono::DateTime::from_timestamp(t as i64, 0)
-                                            .map(|d| {
-                                                d.with_timezone(&chrono::Local)
-                                                    .format("%Y-%m-%d %H:%M")
-                                                    .to_string()
-                                            })
-                                            .unwrap_or_default()
-                                    }));
-                                },
-                            );
-                            ui.monospace(
-                                e.permissions
-                                    .map(|m| mode_text(m, e.is_dir))
-                                    .unwrap_or_default(),
-                            );
-                            r
-                        })
-                        .inner;
+                            )
+                            .inner;
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(size_w, row_h),
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                ui.set_min_width(size_w);
+                                ui.add_space(12.0);
+                                if !e.is_dir {
+                                    ui.label(size_text(e.size));
+                                }
+                            },
+                        );
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(date_w, row_h),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.set_min_width(date_w);
+                                ui.add_space(12.0);
+                                ui.label(e.modified.map_or(String::new(), |t| {
+                                    chrono::DateTime::from_timestamp(t as i64, 0)
+                                        .map(|d| {
+                                            d.with_timezone(&chrono::Local)
+                                                .format("%Y-%m-%d %H:%M")
+                                                .to_string()
+                                        })
+                                        .unwrap_or_default()
+                                }));
+                            },
+                        );
+                        ui.monospace(
+                            e.permissions
+                                .map(|m| mode_text(m, e.is_dir))
+                                .unwrap_or_default(),
+                        );
+                        r
+                    });
+                    rows.push((e.name.clone(), line.response.rect));
+                    let row = line.inner;
                     if row.clicked() {
-                        if multi {
+                        if range && let Some(anchor) = &self.anchor {
+                            // Shift+click: everything between the two rows.
+                            let names: Vec<&String> = self
+                                .entries
+                                .iter()
+                                .filter(|x| self.hidden || !x.name.starts_with('.'))
+                                .map(|x| &x.name)
+                                .collect();
+                            let a = names.iter().position(|n| *n == anchor);
+                            let b = names.iter().position(|n| **n == e.name);
+                            if let (Some(a), Some(b)) = (a, b) {
+                                let (lo, hi) = (a.min(b), a.max(b));
+                                if !multi {
+                                    self.selected.clear();
+                                }
+                                self.selected
+                                    .extend(names[lo..=hi].iter().map(|n| (*n).clone()));
+                            }
+                        } else if multi {
                             if !self.selected.remove(&e.name) {
                                 self.selected.insert(e.name.clone());
                             }
+                            self.anchor = Some(e.name.clone());
                         } else {
                             self.selected = BTreeSet::from([e.name.clone()]);
+                            self.anchor = Some(e.name.clone());
                         }
                     }
                     if row.double_clicked() {
@@ -472,13 +503,18 @@ impl SftpBrowser {
                     }
                 }
             });
+        self.box_select(ui, list.inner_rect, &rows, multi);
         if let Some(d) = open_dir {
             self.go(&d);
         }
         if let Some(name) = download {
             self.start_downloads(vec![name]);
         }
-        ui.weak("Double-click a folder to open it, a file to download it. Drop files here to upload them.");
+        ui.weak("Drag or Shift+click to select several; drop files here to upload.")
+            .on_hover_text(
+                "Double-click a folder to open it and a file to download it. \
+                 Ctrl/⌘ adds to the selection.",
+            );
 
         if !self.transfers.is_empty() {
             ui.separator();
@@ -544,6 +580,64 @@ impl SftpBrowser {
         }
     }
 
+    /// Pressing in the list and dragging draws a box; the rows it touches
+    /// are selected (added to the selection with Ctrl/⌘).
+    fn box_select(
+        &mut self,
+        ui: &egui::Ui,
+        area: egui::Rect,
+        rows: &[(String, egui::Rect)],
+        keep: bool,
+    ) {
+        let (pressed, down, pos) = ui.input(|i| {
+            (
+                i.pointer.primary_pressed(),
+                i.pointer.primary_down(),
+                i.pointer.interact_pos(),
+            )
+        });
+        let Some(pos) = pos else { return };
+        if pressed && area.contains(pos) && ui.ui_contains_pointer() {
+            let base = if keep {
+                self.selected.clone()
+            } else {
+                BTreeSet::new()
+            };
+            self.drag_from = Some((pos, base));
+            return;
+        }
+        if !down {
+            self.drag_from = None;
+            return;
+        }
+        let Some((from, base)) = &self.drag_from else {
+            return;
+        };
+        // A small move is still a click.
+        if from.distance(pos) < 6.0 {
+            return;
+        }
+        let pos = pos.clamp(area.min, area.max);
+        let band = egui::Rect::from_two_pos(*from, pos);
+        let mut selected = base.clone();
+        selected.extend(
+            rows.iter()
+                .filter(|(_, r)| r.intersects(band))
+                .map(|(n, _)| n.clone()),
+        );
+        self.selected = selected;
+        let color = ui.visuals().selection.bg_fill;
+        let painter = ui.painter_at(area);
+        painter.rect_filled(band, 2.0, color.gamma_multiply(0.25));
+        painter.rect_stroke(
+            band,
+            2.0,
+            egui::Stroke::new(1.0, color),
+            egui::StrokeKind::Inside,
+        );
+        ui.ctx().request_repaint();
+    }
+
     fn dialogs(&mut self, ctx: &egui::Context) {
         let Some(ask) = &mut self.ask else { return };
         let (enter, escape) = ctx.input(|i| {
@@ -588,10 +682,10 @@ impl SftpBrowser {
                     }
                 }
                 ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() || escape {
+                        done = Some(false);
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Cancel").clicked() || escape {
-                            done = Some(false);
-                        }
                         let ok = match ask {
                             Ask::Delete(_) => "Delete",
                             Ask::Rename { .. } => "Rename",

@@ -222,6 +222,9 @@ impl KeywordEditor {
                 if self.confirm_delete {
                     ui.colored_label(ui.visuals().warn_fg_color, "Delete this set?");
                     ui.horizontal(|ui| {
+                        if ui.button("Keep").clicked() {
+                            self.confirm_delete = false;
+                        }
                         if ui.button("Delete").clicked()
                             && let Some(name) = self.current.take()
                         {
@@ -239,9 +242,6 @@ impl KeywordEditor {
                                     self.current = Some(name);
                                 }
                             }
-                            self.confirm_delete = false;
-                        }
-                        if ui.button("Keep").clicked() {
                             self.confirm_delete = false;
                         }
                     });
@@ -294,27 +294,30 @@ impl KeywordEditor {
                     self.name.trim()
                 ),
             );
+            // Back out on the left, go on on the right.
             ui.horizontal(|ui| {
-                if ui.button("Save and go on").clicked() {
-                    match self.save() {
-                        Ok(()) => {
-                            self.pending = None;
-                            self.perform(action.clone());
-                        }
-                        Err(e) => {
-                            self.error = Some(e);
-                            self.pending = None;
-                        }
-                    }
+                if ui.button("Back").clicked() {
+                    self.pending = None;
                 }
                 if ui.button("Discard changes").clicked() {
                     self.pending = None;
                     self.discard();
                     self.perform(action.clone());
                 }
-                if ui.button("Back").clicked() {
-                    self.pending = None;
-                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Save and go on").clicked() {
+                        match self.save() {
+                            Ok(()) => {
+                                self.pending = None;
+                                self.perform(action.clone());
+                            }
+                            Err(e) => {
+                                self.error = Some(e);
+                                self.pending = None;
+                            }
+                        }
+                    }
+                });
             });
         });
     }
@@ -395,8 +398,8 @@ impl KeywordEditor {
         }
         ui.horizontal(|ui| {
             let dirty = self.dirty();
-            if ui.add_enabled(dirty, egui::Button::new("Save")).clicked() {
-                self.error = self.save().err();
+            if ui.button("Close").clicked() {
+                *close = true;
             }
             if ui
                 .add_enabled(dirty, egui::Button::new("Cancel"))
@@ -405,12 +408,14 @@ impl KeywordEditor {
             {
                 self.discard();
             }
-            if ui.button("Close").clicked() {
-                *close = true;
-            }
             if dirty {
                 ui.colored_label(ui.visuals().warn_fg_color, "Unsaved changes");
             }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add_enabled(dirty, egui::Button::new("Save")).clicked() {
+                    self.error = self.save().err();
+                }
+            });
         });
     }
 

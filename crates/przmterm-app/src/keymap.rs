@@ -514,6 +514,9 @@ impl KeymapEditor {
                 }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
+                    if ui.button("Close").clicked() {
+                        close = true;
+                    }
                     if ui
                         .button("Reset to defaults")
                         .on_hover_text("Go back to the built-in shortcuts")
@@ -523,9 +526,6 @@ impl KeymapEditor {
                         self.changed = true;
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Close").clicked() {
-                            close = true;
-                        }
                         if ui.button("New shortcut…").clicked() {
                             self.edit = Some(Edit {
                                 index: None,
@@ -718,10 +718,10 @@ impl KeymapEditor {
                 ui.colored_label(ui.visuals().error_fg_color, e);
             }
             ui.horizontal(|ui| {
+                if ui.button("Cancel").clicked() || escape {
+                    done = Some(false);
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Cancel").clicked() || escape {
-                        done = Some(false);
-                    }
                     if ui.button("Save").clicked() {
                         done = Some(true);
                     }

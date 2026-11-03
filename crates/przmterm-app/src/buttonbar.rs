@@ -317,8 +317,11 @@ impl ButtonBarUi {
                 if let Some(err) = &edit.error {
                     ui.colored_label(ui.visuals().error_fg_color, err);
                 }
-                // Clear on the left, Save and Cancel on the right.
+                // Cancel and Clear on the left, Save on the right.
                 ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() || escape {
+                        done = Some(false);
+                    }
                     if ui
                         .button("Clear")
                         .on_hover_text("Empty every field")
@@ -328,9 +331,6 @@ impl ButtonBarUi {
                         edit.error = None;
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Cancel").clicked() || escape {
-                            done = Some(false);
-                        }
                         if ui.button("Save").clicked() {
                             done = Some(true);
                         }
@@ -379,12 +379,14 @@ impl ButtonBarUi {
                     ui.colored_label(ui.visuals().error_fg_color, err);
                 }
                 ui.horizontal(|ui| {
-                    if ui.button("OK").clicked() || enter {
-                        done = Some(true);
-                    }
                     if ui.button("Cancel").clicked() || escape {
                         done = Some(false);
                     }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("OK").clicked() || enter {
+                            done = Some(true);
+                        }
+                    });
                 });
             });
             match done {
@@ -427,12 +429,14 @@ impl ButtonBarUi {
                         tab.buttons.len()
                     ));
                     ui.horizontal(|ui| {
-                        if ui.button("Delete").clicked() {
-                            done = Some(true);
-                        }
                         if ui.button("Cancel").clicked() || escape {
                             done = Some(false);
                         }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Delete").clicked() {
+                                done = Some(true);
+                            }
+                        });
                     });
                 });
             match done {

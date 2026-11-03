@@ -105,7 +105,7 @@ the file arrives in your Downloads folder; run `rz` and PrzmTerm asks which
 files to send. `rz` and `sz` come from the lrzsz package (`dnf install
 lrzsz`, `apt install lrzsz`); without it, use SFTP. Routers, switches and
 OLTs do not have it. For a device (a bootloader waiting for firmware, say) use
-*Send Files…* or *Receive Files…* in the tab menu: choose the protocol and
+**⇅ Transfer** in the status bar (tabs *Send* and *Receive*): choose the protocol and
 the files, with *Start the other side for me* off. The status bar shows the
 progress and *Cancel*. Zmodem streams and is much faster over a network;
 Xmodem and Ymodem wait for an answer after each block.

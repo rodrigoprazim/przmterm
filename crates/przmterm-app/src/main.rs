@@ -1201,12 +1201,14 @@ impl PrzmApp {
                     ui.label(text);
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        if ui.button("Close").clicked() || enter {
-                            answer = Some(true);
-                        }
                         if ui.button("Cancel").clicked() || escape {
                             answer = Some(false);
                         }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Close").clicked() || enter {
+                                answer = Some(true);
+                            }
+                        });
                     });
                 });
             if let Some(yes) = answer {
@@ -1237,12 +1239,14 @@ impl PrzmApp {
                         .request_focus();
                     ui.weak("Only the tab changes; the session keeps its name.");
                     ui.horizontal(|ui| {
-                        if ui.button("OK").clicked() || enter {
-                            answer = Some(true);
-                        }
                         if ui.button("Cancel").clicked() || escape {
                             answer = Some(false);
                         }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("OK").clicked() || enter {
+                                answer = Some(true);
+                            }
+                        });
                     });
                 });
             if let Some(yes) = answer {
@@ -1309,12 +1313,14 @@ impl PrzmApp {
                         Kind::Backup => "Restore",
                         Kind::Export => "Import",
                     };
-                    if ui.button(go).clicked() {
-                        answer = Some(true);
-                    }
                     if ui.button("Cancel").clicked() || escape {
                         answer = Some(false);
                     }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(go).clicked() {
+                            answer = Some(true);
+                        }
+                    });
                 });
             });
             if let Some(go) = answer {
@@ -1374,10 +1380,10 @@ impl PrzmApp {
                     ui.add_space(6.0);
                     let any = dialog.others.iter().any(|o| o.2);
                     ui.horizontal(|ui| {
+                        if ui.button("Cancel").clicked() || escape {
+                            answer = Some(false);
+                        }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("Cancel").clicked() || escape {
-                                answer = Some(false);
-                            }
                             if ui
                                 .add_enabled(any, egui::Button::new("Split"))
                                 .on_disabled_hover_text("Choose at least one session")
@@ -1469,15 +1475,15 @@ impl PrzmApp {
                         answer = Some(true);
                     }
                     ui.horizontal(|ui| {
+                        if ui
+                            .button("Stop script")
+                            .on_hover_text("Cancel the question and stop the script")
+                            .clicked()
+                            || escape
+                        {
+                            answer = Some(false);
+                        }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .button("Stop script")
-                                .on_hover_text("Cancel the question and stop the script")
-                                .clicked()
-                                || escape
-                            {
-                                answer = Some(false);
-                            }
                             if ui.button("OK").clicked() {
                                 answer = Some(true);
                             }
@@ -1533,14 +1539,16 @@ impl PrzmApp {
                     ));
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        if ui.button("Quit").clicked() {
-                            answer = Some(true);
-                        }
                         if ui.button("Cancel").clicked()
                             || ctx.input(|i| i.key_pressed(egui::Key::Escape))
                         {
                             answer = Some(false);
                         }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Quit").clicked() {
+                                answer = Some(true);
+                            }
+                        });
                     });
                 });
             match answer {
@@ -1572,14 +1580,16 @@ impl PrzmApp {
                     );
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        if ui.button("Turn on").clicked() {
-                            answer = Some(true);
-                        }
                         if ui.button("Cancel").clicked()
                             || ctx.input(|i| i.key_pressed(egui::Key::Escape))
                         {
                             answer = Some(false);
                         }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Turn on").clicked() {
+                                answer = Some(true);
+                            }
+                        });
                     });
                 });
             if let Some(on) = answer {
@@ -1673,21 +1683,23 @@ impl PrzmApp {
                         ui.colored_label(ui.visuals().error_fg_color, err);
                     }
                     ui.horizontal(|ui| {
-                        if ui.button("OK").clicked() || enter {
-                            let result = if dialog.rename {
-                                przmterm_session::rename_folder(&dialog.dir, &dialog.value)
-                            } else {
-                                przmterm_session::create_folder(&dialog.dir, &dialog.value)
-                            };
-                            match result {
-                                Ok(_) => done = Some(dialog.value.trim().to_string()),
-                                Err(e) => dialog.error = Some(e.to_string()),
-                            }
-                        }
                         if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(Key::Escape))
                         {
                             close = true;
                         }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("OK").clicked() || enter {
+                                let result = if dialog.rename {
+                                    przmterm_session::rename_folder(&dialog.dir, &dialog.value)
+                                } else {
+                                    przmterm_session::create_folder(&dialog.dir, &dialog.value)
+                                };
+                                match result {
+                                    Ok(_) => done = Some(dialog.value.trim().to_string()),
+                                    Err(e) => dialog.error = Some(e.to_string()),
+                                }
+                            }
+                        });
                     });
                 });
             if let Some(name) = done {
@@ -1724,32 +1736,34 @@ impl PrzmApp {
                         keep_open = false;
                     }
                     ui.horizontal(|ui| {
-                        if ui.button("Delete").clicked() {
-                            let result = match &deletion {
-                                Deletion::Session(s) => {
-                                    if let Some(account) = s.password_account() {
-                                        Keychain.delete(&account);
-                                    }
-                                    std::fs::remove_file(&s.path)
-                                        .map(|_| s.name.clone())
-                                        .map_err(|e| e.to_string())
-                                }
-                                Deletion::Folder { dir, name, .. } => {
-                                    przmterm_session::delete_folder(dir)
-                                        .map(|_| name.clone())
-                                        .map_err(|e| e.to_string())
-                                }
-                            };
-                            self.notice = Some(match result {
-                                Ok(name) => format!("Deleted {name}."),
-                                Err(e) => format!("Cannot delete: {e}"),
-                            });
-                            keep_open = false;
-                            self.reload_sessions();
-                        }
                         if ui.button("Cancel").clicked() {
                             keep_open = false;
                         }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Delete").clicked() {
+                                let result = match &deletion {
+                                    Deletion::Session(s) => {
+                                        if let Some(account) = s.password_account() {
+                                            Keychain.delete(&account);
+                                        }
+                                        std::fs::remove_file(&s.path)
+                                            .map(|_| s.name.clone())
+                                            .map_err(|e| e.to_string())
+                                    }
+                                    Deletion::Folder { dir, name, .. } => {
+                                        przmterm_session::delete_folder(dir)
+                                            .map(|_| name.clone())
+                                            .map_err(|e| e.to_string())
+                                    }
+                                };
+                                self.notice = Some(match result {
+                                    Ok(name) => format!("Deleted {name}."),
+                                    Err(e) => format!("Cannot delete: {e}"),
+                                });
+                                keep_open = false;
+                                self.reload_sessions();
+                            }
+                        });
                     });
                 });
             if !keep_open {
@@ -1873,19 +1887,7 @@ fn tab_menu(
         .is_some_and(|s| s.protocol == przmterm_core::Protocol::Ssh)
         && !tab.pane().transport.is_closed();
     item(ui, ssh_live, "Connect SFTP Session", Action::OpenSftp(i));
-    let live = tab.pane().origin.is_some() && !tab.pane().transport.is_closed();
-    item(
-        ui,
-        live,
-        "Send Files (Zmodem, Ymodem, Xmodem)…",
-        Action::TransferDialog(i, true),
-    );
-    item(
-        ui,
-        live,
-        "Receive Files (Zmodem, Ymodem, Xmodem)…",
-        Action::TransferDialog(i, false),
-    );
+
     ui.separator();
     // Typing into every pane of this tab: only for split tabs.
     let split = tab.panes.len() > 1;
@@ -2149,13 +2151,17 @@ impl eframe::App for PrzmApp {
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let keys = |id: &str| self.shortcuts.label_for(id).unwrap_or_default();
+                    // In a split tab: give the panes their tabs back.
                     if self.tabs[self.active_tab].panes.len() > 1
                         && ui
-                            .button("× Pane")
-                            .on_hover_text(format!("Close pane{}", self.keys_hint("close_pane")))
+                            .button("⇱ Separate")
+                            .on_hover_text(format!(
+                                "Give each pane its own tab again{}",
+                                self.keys_hint("separate_panes")
+                            ))
                             .clicked()
                     {
-                        actions.push(Action::RequestClosePane);
+                        actions.push(Action::SeparateAll(self.active_tab));
                     }
                     let tab = &self.tabs[self.active_tab];
                     let split = tab.panes.len() > 1;
@@ -2288,6 +2294,16 @@ impl eframe::App for PrzmApp {
                             .clicked();
                     if broadcast {
                         actions.push(Action::ToggleBroadcast);
+                    }
+                    if pane.origin.is_some()
+                        && !pane.transport.is_closed()
+                        && pane.transfer().is_none()
+                        && ui
+                            .button("⇅ Transfer")
+                            .on_hover_text("Send or receive files with Zmodem, Ymodem or Xmodem")
+                            .clicked()
+                    {
+                        actions.push(Action::TransferDialog(self.active_tab, true));
                     }
                     if ui
                         .selectable_label(self.buttons.visible, "▤ Buttons")
