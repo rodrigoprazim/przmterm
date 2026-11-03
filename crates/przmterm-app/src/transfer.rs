@@ -67,7 +67,7 @@ pub fn start_failed(text: &str) -> bool {
 pub fn not_started_message(tool: &str) -> String {
     format!(
         "`{tool}` did not start on the other side. On a Unix host install lrzsz \
-         (dnf install lrzsz, or apt install lrzsz), or use Connect SFTP Session. \
+         (dnf install lrzsz, or apt install lrzsz), or use File Browser › SFTP. \
          Network equipment rarely has it: use its own copy command (TFTP, FTP, SCP), \
          or Xmodem on the console port without \"Start the other side for me\"."
     )

@@ -294,8 +294,9 @@ enum Action {
     /// Opens an SCP browser on the active pane's connection of this tab,
     /// in the session's SCP shell.
     OpenScp(usize),
-    /// Connects a session and opens an SFTP browser once logged in.
-    SftpFor(Box<Session>),
+    /// Connects a session and opens its file browser once logged in:
+    /// SCP with `true`, SFTP with `false`.
+    BrowseFor(Box<Session>, bool),
     /// The Xmodem/Ymodem/Zmodem dialog for this tab: sending or receiving.
     TransferDialog(usize, bool),
     /// Stops the transfer of this tab's active pane.
@@ -382,8 +383,9 @@ struct PrzmApp {
     /// SFTP browsers.
     sftp_windows: Vec<sftp::SftpBrowser>,
     sftp_next: u64,
-    /// A session whose SFTP browser opens once it is logged in.
-    sftp_pending: Option<(PathBuf, std::time::Instant)>,
+    /// A session whose file browser opens once it is logged in (SCP when
+    /// true).
+    sftp_pending: Option<(PathBuf, std::time::Instant, bool)>,
     /// The script guide, when open.
     script_guide: Option<scriptguide::ScriptGuide>,
     /// Questions from scripts, asked one at a time.
@@ -405,7 +407,9 @@ const STATUS_TIME: std::time::Duration = std::time::Duration::from_secs(8);
 enum TreeAction {
     Connect(Session),
     /// Connect (if needed) and open an SFTP browser.
-    Sftp(Session),
+    /// The file browser for a session, connecting it first if needed;
+    /// `true` for SCP, `false` for SFTP.
+    Browse(Session, bool),
     Edit(Session),
     Duplicate(Session),
     Delete(Session),
@@ -804,9 +808,9 @@ impl PrzmApp {
                     }
                 }
             }
-            Action::SftpFor(session) => {
-                self.sftp_pending = Some((session.path.clone(), std::time::Instant::now()));
-                // Already connected: SFTP right away; otherwise connect first.
+            Action::BrowseFor(session, scp) => {
+                self.sftp_pending = Some((session.path.clone(), std::time::Instant::now(), scp));
+                // Already connected: the browser right away; otherwise connect first.
                 let live = self.tabs.iter().any(|t| {
                     t.panes.iter().any(|p| {
                         !p.transport.is_closed()
@@ -917,10 +921,10 @@ impl PrzmApp {
         }
     }
 
-    /// Opens the SFTP browser asked for with "Connect SFTP…" once its
+    /// Opens the file browser asked for from the session list once its
     /// session is logged in.
     fn run_sftp_pending(&mut self, ctx: &egui::Context) {
-        let Some((path, since)) = self.sftp_pending.clone() else {
+        let Some((path, since, scp)) = self.sftp_pending.clone() else {
             return;
         };
         if since.elapsed() > std::time::Duration::from_secs(120) {
@@ -944,15 +948,26 @@ impl PrzmApp {
             .iter()
             .find(|p| !p.transport.is_closed() && p.origin.as_ref().is_some_and(|o| o.path == path))
             .expect("found above");
-        if let Some(client) = pane.transport.sftp(waker) {
+        let client = if scp {
+            let shell = pane.origin.as_ref().and_then(|o| o.scp_shell.clone());
+            pane.transport.scp_browser(shell, waker)
+        } else {
+            pane.transport.sftp(waker)
+        };
+        if let Some(client) = client {
             let name = pane
                 .origin
                 .as_ref()
                 .map(|o| o.name.clone())
                 .unwrap_or_default();
             self.sftp_next += 1;
-            self.sftp_windows
-                .push(sftp::SftpBrowser::new(name, self.sftp_next, client, "SFTP"));
+            let protocol = if scp { "SCP" } else { "SFTP" };
+            self.sftp_windows.push(sftp::SftpBrowser::new(
+                name,
+                self.sftp_next,
+                client,
+                protocol,
+            ));
             self.sftp_pending = None;
         } else {
             // Not logged in yet.
@@ -2056,8 +2071,16 @@ fn tab_menu(
         .as_ref()
         .is_some_and(|s| s.protocol == przmterm_core::Protocol::Ssh)
         && !tab.pane().transport.is_closed();
-    item(ui, ssh_live, "Connect SFTP Session", Action::OpenSftp(i));
-    item(ui, ssh_live, "Connect SCP Session", Action::OpenScp(i));
+    let shell = tab
+        .pane()
+        .origin
+        .as_ref()
+        .and_then(|s| s.scp_shell.as_deref());
+    match browser_menu(ui, ssh_live, shell) {
+        Some(true) => actions.push(Action::OpenScp(i)),
+        Some(false) => actions.push(Action::OpenSftp(i)),
+        None => {}
+    }
 
     ui.separator();
     // Typing into every pane of this tab: only for split tabs.
@@ -2099,6 +2122,42 @@ fn broadcast_color(visuals: &egui::Visuals) -> egui::Color32 {
     } else {
         egui::Color32::from_rgb(190, 110, 0)
     }
+}
+
+/// The "File Browser" submenu of a tab or a session: `Some(true)` when SCP
+/// was picked, `Some(false)` for SFTP.
+fn browser_menu(ui: &mut egui::Ui, enabled: bool, shell: Option<&str>) -> Option<bool> {
+    let mut picked = None;
+    ui.add_enabled_ui(enabled, |ui| {
+        ui.menu_button("File Browser", |ui| {
+            if ui
+                .button("SFTP")
+                .on_hover_text("Browse and transfer files over SFTP")
+                .clicked()
+            {
+                picked = Some(false);
+                ui.close();
+            }
+            let scp = match shell {
+                Some(shell) => format!("SCP  ({shell})"),
+                None => "SCP".to_string(),
+            };
+            if ui
+                .button(scp)
+                .on_hover_text(
+                    "Browse and transfer files over SCP, in the session's SCP shell \
+                     (sudo su - to work as root)",
+                )
+                .clicked()
+            {
+                picked = Some(true);
+                ui.close();
+            }
+        })
+        .response
+        .on_disabled_hover_text("Needs a connected SSH session");
+    });
+    picked
 }
 
 /// True if the session's name, host or address contains `filter`
@@ -2234,13 +2293,9 @@ fn folder_ui(
                 ui.close();
             }
             if s.protocol == przmterm_core::Protocol::Ssh
-                && ui
-                    .button("Connect SFTP…")
-                    .on_hover_text("Browse and transfer files on this server")
-                    .clicked()
+                && let Some(scp) = browser_menu(ui, true, s.scp_shell.as_deref())
             {
-                picked.push(TreeAction::Sftp(s.clone()));
-                ui.close();
+                picked.push(TreeAction::Browse(s.clone(), scp));
             }
             if ui.button("Edit…").clicked() {
                 picked.push(TreeAction::Edit(s.clone()));
@@ -2793,7 +2848,9 @@ impl eframe::App for PrzmApp {
                         for p in picked {
                             match p {
                                 TreeAction::Connect(s) => actions.push(Action::Open(Box::new(s))),
-                                TreeAction::Sftp(s) => actions.push(Action::SftpFor(Box::new(s))),
+                                TreeAction::Browse(s, scp) => {
+                                    actions.push(Action::BrowseFor(Box::new(s), scp));
+                                }
                                 TreeAction::Edit(s) => self.editor = Some(Editor::edit(&s)),
                                 TreeAction::Duplicate(s) => {
                                     self.editor = Some(Editor::duplicate(&s))

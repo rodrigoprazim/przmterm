@@ -114,12 +114,12 @@ pub const COMMANDS: [Command; 23] = [
     },
     Command {
         id: "open_sftp",
-        label: "Connect SFTP session",
+        label: "File browser (SFTP)",
         default: None,
     },
     Command {
         id: "open_scp",
-        label: "Connect SCP session",
+        label: "File browser (SCP)",
         default: None,
     },
     Command {

@@ -9,8 +9,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Added
 
-- SFTP browser: *Connect SFTP Session* in the tab menu, *Connect SFTP…* in
-  the session list (connects first if needed) or a keyboard shortcut opens a
+- SFTP browser: *File Browser › SFTP* in the tab menu or in a session's menu
+  in the list (connects first if needed), or a keyboard shortcut, opens a
   window on the same SSH connection, with no new login. Browse folders (path
   field, parent, refresh, hidden files), upload files or folders (also by
   dropping them on the window), download files or folders (double-click a
@@ -28,8 +28,9 @@ All notable changes to PrzmTerm are recorded here. The format follows
   cancelled one is removed. When the typed command does not exist on the
   other side ("command not found", "Unknown command"…), nothing is sent to
   the shell and a note says to install lrzsz or use SFTP.
-- SCP on SSH sessions, as in WinSCP. *Connect SCP Session* in a tab's menu
-  opens the file browser (the same as for SFTP) over SCP: folders listed with
+- SCP on SSH sessions, as in WinSCP. *File Browser › SCP* in the tab menu or
+  in a session's menu in the list (connects first if needed) opens the file
+  browser (the same as for SFTP) over SCP, its item showing the shell: folders listed with
   `ls`, new folder, rename and delete with `mkdir`, `mv` and `rm`, uploads
   and downloads with `scp`. The *File transfer* dialog has *SCP* too, beside
   the terminal, with progress and *Cancel* in the status bar.
@@ -41,6 +42,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Changed
 
+- *File Browser* in the tab menu and in a session's menu holds *SFTP* and
+  *SCP* (with the session's SCP shell) in one submenu.
 - Dialog buttons sit on the right, the one that goes ahead (*Save*, *OK*,
   *Delete*, *Split*…) last and the one that backs out (*Cancel*, *Back*,
   *Close*) just before it.

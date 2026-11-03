@@ -91,8 +91,8 @@ Sessions without an entry keep using the system keychain.
 
 ### SFTP
 
-*Connect SFTP Session* in a tab's menu (or *Connect SFTP…* on an SSH
-session in the list) opens a file browser on the same connection, without
+*File Browser › SFTP* in a tab's menu, or in an SSH session's menu in the
+list (it connects first if needed), opens a file browser on the same connection, without
 logging in again. Double-click a folder to open it and a file to download
 it; *Download…* takes several files or whole folders. *Upload files…*,
 *Upload folder…* or dropping files on the window sends them to the folder
@@ -112,7 +112,7 @@ Xmodem and Ymodem wait for an answer after each block.
 
 ### SCP, also as root
 
-*Connect SCP Session* in a tab's menu opens the same file browser as SFTP,
+*File Browser › SCP* (same menus) opens the same file browser as SFTP,
 over SCP on the same connection: folders are listed with `ls` and changed
 with `mkdir`, `rm` and `mv`, and files move with `scp`, as in WinSCP's SCP
 mode. The commands run in the session's **SCP shell** (session settings,

@@ -143,8 +143,8 @@ highlighting, triggers, saved credentials) work in PrzmTerm.
 
 ## 0.8.0 — File transfer
 
-- [x] SFTP with a file browser, also opened from a tab's menu ("Connect SFTP
-  Session"), from the session list and with a shortcut, on the same
+- [x] SFTP with a file browser, also opened from a tab's menu ("File
+  Browser › SFTP"), from the session list and with a shortcut, on the same
   connection (no new login); uploads (also by dropping files) and downloads
   of files and whole folders with progress and cancel, new folder, rename,
   delete
@@ -152,7 +152,7 @@ highlighting, triggers, saved credentials) work in PrzmTerm.
   against lrzsz; a Zmodem start from `sz` or `rz` on the other side is
   picked up on its own
 - [x] SCP on the same SSH connection: a file browser like the SFTP one
-  ("Connect SCP Session") and transfers from the File transfer dialog, with
+  ("File Browser › SCP") and transfers from the File transfer dialog, with
   the commands run in a shell chosen per session (`/bin/bash`, `sudo su -`…)
 
 **Gate:** files moved to and from the maintainer's servers (SFTP, Zmodem)

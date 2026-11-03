@@ -848,7 +848,7 @@ impl Editor {
         ui.end_row();
 
         ui.label("SCP shell").on_hover_text(
-            "Where Connect SCP Session and SCP transfers run their commands. \
+            "Where the SCP file browser and SCP transfers run their commands. \
              Default is the login shell; sudo su - or su - work as root (the \
              password is asked when needed)",
         );
