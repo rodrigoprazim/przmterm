@@ -63,8 +63,10 @@ All notable changes to PrzmTerm are recorded here. The format follows
 - A session tab's tooltip names where it is connected (`SSH user@host:port`,
   or the serial line); a split tab lists each session.
 - Button bar: the tooltip shows the description, or else what the button
-  sends or the script it runs (none when it has neither); *Show tooltips* is
-  also in the button editor.
+  sends or the script it runs (none when it has neither). *Show tooltip* is
+  set per button, in its menu and in the button editor; a tab's menu shows
+  or hides them all for that tab. (0.8.0's switch for the whole bar is read
+  as off on every button.)
 - Session editor: with the vault locked, the vault entry list offers the
   entries the sessions use (and the one set), plus *Unlock to see every
   entry*.

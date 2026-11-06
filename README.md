@@ -143,8 +143,8 @@ prompts.
 
 **▤ Buttons** in the status bar shows the button bar: tabs of buttons (one per
 device type, say) that send commands. **+** on the bar adds a button;
-right-click a button to edit, move or delete it, and a tab to rename, add or
-delete tabs (or turn tooltips off). A button sends to the current session. In
+right-click a button to edit, move or delete it (or turn its tooltip off), and
+a tab to rename, add or delete tabs (or show or hide all its tooltips). A button sends to the current session. In
 the text, `\r` is Enter, `\t` Tab, `\e` Esc, `\n` a line feed and `\p` a
 one-second pause. Buttons are kept in `<config>/buttons.toml`:
 

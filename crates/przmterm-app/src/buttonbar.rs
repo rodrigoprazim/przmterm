@@ -147,11 +147,18 @@ impl ButtonBarUi {
                         ui.close();
                     }
                     ui.separator();
-                    if ui
-                        .checkbox(&mut self.bar.tooltips, "Show tooltips")
-                        .changed()
-                    {
-                        changed = true;
+                    for (label, on) in [("Show all tooltips", true), ("Hide all tooltips", false)] {
+                        if ui
+                            .button(label)
+                            .on_hover_text("For every button in this tab")
+                            .clicked()
+                        {
+                            for button in &mut self.bar.tabs[i].buttons {
+                                button.tooltip = on;
+                            }
+                            changed = true;
+                            ui.close();
+                        }
                     }
                 });
             }
@@ -160,6 +167,7 @@ impl ButtonBarUi {
             let count = self.bar.tabs[tab].buttons.len();
             let mut moved = None;
             let mut removed = None;
+            let mut tooltip = None;
             for (i, button) in self.bar.tabs[tab].buttons.iter().enumerate() {
                 let mut response = ui.button(&button.label);
                 // The description, else what the button sends or runs;
@@ -171,7 +179,7 @@ impl ButtonBarUi {
                 } else {
                     button.send.trim().to_string()
                 };
-                if self.bar.tooltips && !tip.is_empty() {
+                if button.tooltip && !tip.is_empty() {
                     response = response.on_hover_text(tip);
                 }
                 if response.clicked() {
@@ -210,13 +218,15 @@ impl ButtonBarUi {
                         ui.close();
                     }
                     ui.separator();
-                    if ui
-                        .checkbox(&mut self.bar.tooltips, "Show tooltips")
-                        .changed()
-                    {
-                        changed = true;
+                    let mut on = button.tooltip;
+                    if ui.checkbox(&mut on, "Show tooltip").changed() {
+                        tooltip = Some((i, on));
                     }
                 });
+            }
+            if let Some((i, on)) = tooltip {
+                self.bar.tabs[tab].buttons[i].tooltip = on;
+                changed = true;
             }
             if let Some((a, b)) = moved {
                 self.bar.tabs[tab].buttons.swap(a, b);
@@ -255,7 +265,6 @@ impl ButtonBarUi {
         });
         let center = ctx.content_rect().center();
 
-        let mut tooltips_changed = false;
         if let Some(edit) = &mut self.button_edit {
             let mut done = None; // Some(true) save, Some(false) cancel
             egui::Window::new(if edit.index.is_some() {
@@ -319,16 +328,10 @@ impl ButtonBarUi {
                         );
                         ui.end_row();
                         ui.label("");
-                        if ui
-                            .checkbox(&mut self.bar.tooltips, "Show tooltips")
+                        ui.checkbox(&mut edit.button.tooltip, "Show tooltip")
                             .on_hover_text(
-                                "For every button on the bar: the description, or else \
-                                 what the button sends",
-                            )
-                            .changed()
-                        {
-                            tooltips_changed = true;
-                        }
+                                "For this button: the description, or else what it sends",
+                            );
                         ui.end_row();
                     });
                 if let Some(err) = &edit.error {
@@ -372,9 +375,6 @@ impl ButtonBarUi {
                 Some(false) => self.button_edit = None,
                 None => {}
             }
-        }
-        if tooltips_changed {
-            self.save(config_dir);
         }
 
         if let Some(edit) = &mut self.tab_edit {
