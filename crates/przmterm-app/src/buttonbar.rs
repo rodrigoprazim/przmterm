@@ -162,9 +162,17 @@ impl ButtonBarUi {
             let mut removed = None;
             for (i, button) in self.bar.tabs[tab].buttons.iter().enumerate() {
                 let mut response = ui.button(&button.label);
-                // Only a written description makes a tooltip.
-                if self.bar.tooltips && !button.description.trim().is_empty() {
-                    response = response.on_hover_text(button.description.trim());
+                // The description, else what the button sends or runs;
+                // nothing at all when the button has none of them.
+                let tip = if !button.description.trim().is_empty() {
+                    button.description.trim().to_string()
+                } else if !button.script.trim().is_empty() {
+                    format!("Runs {}", button.script.trim())
+                } else {
+                    button.send.trim().to_string()
+                };
+                if self.bar.tooltips && !tip.is_empty() {
+                    response = response.on_hover_text(tip);
                 }
                 if response.clicked() {
                     press = Some(Press {
@@ -315,8 +323,8 @@ impl ButtonBarUi {
                         if ui
                             .checkbox(&mut self.bar.tooltips, "Show tooltips")
                             .on_hover_text(
-                                "For every button on the bar; a button without a \
-                                 description never shows one",
+                                "For every button on the bar: the description, or else \
+                                 what the button sends",
                             )
                             .changed()
                         {

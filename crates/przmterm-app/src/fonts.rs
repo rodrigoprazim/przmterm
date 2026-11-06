@@ -140,10 +140,27 @@ fn load(system: &System, family: &str) -> Option<egui::FontData> {
 /// of as empty squares.
 fn base_definitions() -> egui::FontDefinitions {
     let mut fonts = egui::FontDefinitions::default();
-    if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional)
-        && !family.iter().any(|f| f == "Hack")
-    {
-        family.push("Hack".to_owned());
+    // A copy of Hack for those symbols, raised and enlarged a little so they
+    // sit on the line of the Ubuntu text around them (Hack's symbols are
+    // drawn for a terminal cell, lower and smaller).
+    if let Some(hack) = fonts.font_data.get("Hack") {
+        let mut symbols = (**hack).clone();
+        symbols.tweak = egui::FontTweak {
+            scale: SYMBOL_SCALE,
+            y_offset_factor: SYMBOL_RAISE,
+            ..Default::default()
+        };
+        fonts
+            .font_data
+            .insert(SYMBOLS.to_owned(), Arc::new(symbols));
+        if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+            family.push(SYMBOLS.to_owned());
+        }
     }
     fonts
 }
+
+/// The interface's symbol font (see [`base_definitions`]).
+const SYMBOLS: &str = "Hack-symbols";
+const SYMBOL_SCALE: f32 = 1.1;
+const SYMBOL_RAISE: f32 = -0.12;

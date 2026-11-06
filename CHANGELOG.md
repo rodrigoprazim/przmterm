@@ -16,10 +16,21 @@ All notable changes to PrzmTerm are recorded here. The format follows
 - Pasting text with line breaks first shows it in a box, where it can be
   checked or edited: *Paste* (or Ctrl/⌘+Enter) sends it, *Cancel* drops it.
   The box is wide and can be resized from its corner.
+- Panes of a split tab move: drag one by its caption onto another to swap
+  them (the target lights up), or right-click the caption for *Move
+  Left/Right* (*Up/Down* when stacked).
 - Font and cursor per session: *Font and Cursor…* in the tab menu (was
   *Font…*) and the session settings pick the font (built-in or any installed
   monospace font), its size, the cursor shape (block, underline, bar) and
   blinking. Changes show at once; *Save* keeps them for the session.
+
+### Changed
+
+- A session tab holds its own close mark: the title, a thin divider and a
+  red ✕, in one box.
+- The session list's buttons (hide, reload, lock, settings, +) are drawn
+  icons of one size, and the symbols in other buttons (◫ ▾ ⇱ ⇅ ▤ ●) sit on
+  the text's line.
 
 ### Fixed
 
@@ -29,8 +40,9 @@ All notable changes to PrzmTerm are recorded here. The format follows
   come back whole when it is separated (or the window widens).
 - A session tab's tooltip names where it is connected (`SSH user@host:port`,
   or the serial line); a split tab lists each session.
-- Button bar: a button without a description shows no tooltip, and *Show
-  tooltips* is also in the button editor.
+- Button bar: the tooltip shows the description, or else what the button
+  sends or the script it runs (none when it has neither); *Show tooltips* is
+  also in the button editor.
 - Session editor: with the vault locked, the vault entry list offers the
   entries the sessions use (and the one set), plus *Unlock to see every
   entry*.

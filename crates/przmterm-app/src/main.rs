@@ -5,6 +5,7 @@ mod demo;
 mod desktop;
 mod editor;
 mod fonts;
+mod icons;
 mod input;
 mod keychain;
 mod keymap;
@@ -136,6 +137,64 @@ pub fn cursor_label(shape: przmterm_session::CursorShape) -> &'static str {
         przmterm_session::CursorShape::Underline => "▁ Underline",
         przmterm_session::CursorShape::Bar => "▏ Bar",
     }
+}
+
+/// A session tab: its title, a thin divider and a red ✕ that closes it, in
+/// one rounded box (filled when active). Returns the tab's response (click
+/// selects, right-click opens its menu) and whether ✕ was clicked.
+fn tab_widget(ui: &mut egui::Ui, title: &str, active: bool) -> (egui::Response, bool) {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let visuals = ui.visuals().clone();
+    let text_color = if active {
+        visuals.selection.stroke.color
+    } else {
+        visuals.text_color()
+    };
+    let galley = ui
+        .painter()
+        .layout_no_wrap(title.to_string(), font, text_color);
+    let pad = egui::vec2(8.0, 3.0);
+    let close_w = 18.0;
+    let gap = 6.0;
+    let height = (galley.size().y + pad.y * 2.0).max(22.0);
+    let width = pad.x + galley.size().x + gap + 1.0 + gap + close_w + 4.0;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+    let close_rect = egui::Rect::from_min_max(
+        egui::pos2(rect.right() - 4.0 - close_w, rect.top() + 2.0),
+        egui::pos2(rect.right() - 4.0, rect.bottom() - 2.0),
+    );
+    // ✕ on top of the tab, so its clicks are its own.
+    let close = ui.interact(close_rect, response.id.with("close"), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        let hovered = response.hovered() || close.hovered();
+        let fill = if active {
+            visuals.selection.bg_fill
+        } else if hovered {
+            visuals.widgets.hovered.weak_bg_fill
+        } else {
+            visuals.widgets.inactive.weak_bg_fill
+        };
+        painter.rect_filled(rect, 5.0, fill);
+        let text_pos = egui::pos2(rect.left() + pad.x, rect.center().y - galley.size().y / 2.0);
+        painter.galley(text_pos, galley.clone(), text_color);
+        let divider_x = rect.left() + pad.x + galley.size().x + gap;
+        painter.line_segment(
+            [
+                egui::pos2(divider_x, rect.top() + 4.0),
+                egui::pos2(divider_x, rect.bottom() - 4.0),
+            ],
+            egui::Stroke::new(1.0, text_color.gamma_multiply(0.35)),
+        );
+        let red = if close.hovered() {
+            egui::Color32::from_rgb(255, 110, 110)
+        } else {
+            egui::Color32::from_rgb(225, 75, 75)
+        };
+        icons::draw(painter, icons::Icon::Close, close_rect, red);
+    }
+    let close = close.on_hover_text("Close tab").clicked();
+    (response, close)
 }
 
 /// A multi-line paste waiting to be confirmed.
@@ -375,6 +434,8 @@ enum Action {
     CancelTransfer(usize),
     ClosePane,
     FocusPane(usize),
+    /// Swaps two panes of the active tab (dragged by the caption).
+    SwapPanes(usize, usize),
     Reconnect,
     ToggleLog,
     /// Opens the active pane's log file (the running one, or the last).
@@ -758,6 +819,14 @@ impl PrzmApp {
                 tab.active = tab.active.min(tab.panes.len() - 1);
             }
             Action::FocusPane(index) => self.tab_mut().active = index,
+            Action::SwapPanes(a, b) => {
+                let tab = self.tab_mut();
+                if a != b && a < tab.panes.len() && b < tab.panes.len() {
+                    tab.panes.swap(a, b);
+                    // The keyboard stays with the pane that moved.
+                    tab.active = b;
+                }
+            }
             Action::ToggleSessions => self.sessions_hidden = !self.sessions_hidden,
             Action::RequestClose(mut tabs) => {
                 tabs.sort_unstable();
@@ -2878,8 +2947,7 @@ impl eframe::App for PrzmApp {
                 .resizable(false)
                 .exact_size(30.0)
                 .show(ui, |ui| {
-                    if ui
-                        .small_button("▶")
+                    if icons::button(ui, icons::Icon::ChevronRight, false)
                         .on_hover_text(format!(
                             "Show the sessions{}",
                             self.keys_hint("toggle_sessions")
@@ -2896,42 +2964,47 @@ impl eframe::App for PrzmApp {
             .default_size(220.0)
             .show_collapsible(ui, &mut sessions_open, |ui| {
                 ui.horizontal(|ui| {
-                    if ui
-                        .small_button("◀")
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    if icons::button(ui, icons::Icon::ChevronLeft, false)
                         .on_hover_text(format!("Hide the sessions{}", self.keys_hint("toggle_sessions")))
                         .clicked()
                     {
                         actions.push(Action::ToggleSessions);
                     }
+                    ui.add_space(2.0);
                     ui.strong("Sessions");
-                    if ui.small_button("⟳").on_hover_text("Reload").clicked() {
+                    ui.add_space(2.0);
+                    if icons::button(ui, icons::Icon::Reload, false)
+                        .on_hover_text("Reload")
+                        .clicked()
+                    {
                         self.reload_sessions();
                     }
                     let (lock, hint) = if self.drag_unlocked {
                         (
-                            "🔓",
+                            icons::Icon::Unlock,
                             "Dragging is on: drag sessions onto folders. Click to lock.",
                         )
                     } else {
-                        ("🔒", "Unlock to drag sessions between folders")
+                        (icons::Icon::Lock, "Unlock to drag sessions between folders")
                     };
-                    if ui
-                        .selectable_label(self.drag_unlocked, lock)
+                    if icons::button(ui, lock, self.drag_unlocked)
                         .on_hover_text(hint)
                         .clicked()
                     {
                         self.drag_unlocked = !self.drag_unlocked;
                     }
                     if let Some(dir) = &self.config_dir
-                        && ui
-                            .small_button("⚙")
+                        && icons::button(ui, icons::Icon::Gear, false)
                             .on_hover_text("Global settings for every session")
                             .clicked()
                     {
                         self.editor = Some(Editor::global(dir));
                     }
                     if self.config_dir.is_some() {
-                        ui.menu_button("+", |ui| {
+                        let plus = icons::button(ui, icons::Icon::Plus, false)
+                            .on_hover_text("New session or folder, backup, vault, shortcuts…");
+                        egui::Popup::menu(&plus).show(|ui| {
                             if ui.button("New session…").clicked() {
                                 self.editor = Some(Editor::new_session(&[]));
                                 ui.close();
@@ -3229,13 +3302,12 @@ impl eframe::App for PrzmApp {
                     } else {
                         format!("{}\nRight-click for more", describe(tab.pane()))
                     };
-                    let tab_button = ui
-                        .selectable_label(i == self.active_tab, title)
-                        .on_hover_text(hover);
+                    let (tab_button, close) = tab_widget(ui, &title, i == self.active_tab);
+                    let tab_button = tab_button.on_hover_text(hover);
                     if tab_button.clicked() {
                         actions.push(Action::SelectTab(i));
                     }
-                    if tab_button.middle_clicked() {
+                    if tab_button.middle_clicked() || close {
                         actions.push(Action::RequestClose(vec![i]));
                     }
                     tab_button.context_menu(|ui| {
@@ -3248,10 +3320,6 @@ impl eframe::App for PrzmApp {
                             &mut actions,
                         );
                     });
-                    if ui.small_button("×").on_hover_text("Close tab").clicked() {
-                        actions.push(Action::RequestClose(vec![i]));
-                    }
-                    ui.separator();
                 }
             });
         });
@@ -3281,6 +3349,9 @@ impl eframe::App for PrzmApp {
             let area = ui.available_rect_before_wrap();
             let n = tab.panes.len();
             let gap = 4.0;
+            // A pane dragged by its caption: (from, where the pointer is).
+            let mut dragging: Option<(usize, egui::Pos2)> = None;
+            let mut dropped: Option<usize> = None;
             for (i, pane) in tab.panes.iter_mut().enumerate() {
                 let mut rect = tab.layout.rect(area, i, n, gap);
                 let active = i == tab.active;
@@ -3320,17 +3391,49 @@ impl eframe::App for PrzmApp {
                             amber,
                         );
                     }
-                    if ui
+                    let grip = ui
                         .interact(
                             caption,
                             ui.make_persistent_id(("pane-caption", i)),
-                            egui::Sense::click(),
+                            egui::Sense::click_and_drag(),
                         )
-                        .clicked()
-                        && !active
-                    {
+                        .on_hover_cursor(egui::CursorIcon::Grab)
+                        .on_hover_text("Drag onto another pane to swap them");
+                    if grip.clicked() && !active {
                         actions.push(Action::FocusPane(i));
                     }
+                    if grip.dragged()
+                        && let Some(at) = grip.interact_pointer_pos()
+                    {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                        dragging = Some((i, at));
+                    }
+                    if grip.drag_stopped() {
+                        dropped = Some(i);
+                    }
+                    grip.context_menu(|ui| {
+                        let earlier = if tab.layout == Layout::Rows {
+                            "Move Up"
+                        } else {
+                            "Move Left"
+                        };
+                        let later = if tab.layout == Layout::Rows {
+                            "Move Down"
+                        } else {
+                            "Move Right"
+                        };
+                        if ui.add_enabled(i > 0, egui::Button::new(earlier)).clicked() {
+                            actions.push(Action::SwapPanes(i, i - 1));
+                            ui.close();
+                        }
+                        if ui
+                            .add_enabled(i + 1 < n, egui::Button::new(later))
+                            .clicked()
+                        {
+                            actions.push(Action::SwapPanes(i, i + 1));
+                            ui.close();
+                        }
+                    });
                     rect.min.y += PANE_CAPTION;
                 }
                 let out = ui
@@ -3388,6 +3491,39 @@ impl eframe::App for PrzmApp {
                     }
                     ctx.request_repaint();
                 }
+            }
+            // While a pane is dragged, the pane under the pointer lights up;
+            // letting go there swaps the two.
+            let target_at =
+                |at: egui::Pos2| (0..n).find(|&j| tab.layout.rect(area, j, n, gap).contains(at));
+            if let Some((from, at)) = dragging {
+                if let Some(to) = target_at(at).filter(|&to| to != from) {
+                    let target = tab.layout.rect(area, to, n, gap);
+                    let blue = egui::Color32::from_rgb(110, 200, 255);
+                    ui.painter()
+                        .rect_filled(target, 0.0, blue.gamma_multiply(0.18));
+                    ui.painter().rect_stroke(
+                        target,
+                        0.0,
+                        egui::Stroke::new(2.0, blue),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+                let name = pane_name(&tab.panes[from]);
+                ui.painter().text(
+                    at + egui::vec2(14.0, 4.0),
+                    egui::Align2::LEFT_TOP,
+                    format!("⇄ {name}"),
+                    egui::FontId::proportional(13.0),
+                    ui.visuals().strong_text_color(),
+                );
+            }
+            if let Some(from) = dropped
+                && let Some(at) = ctx.pointer_latest_pos()
+                && let Some(to) = target_at(at)
+                && to != from
+            {
+                actions.push(Action::SwapPanes(from, to));
             }
         });
 

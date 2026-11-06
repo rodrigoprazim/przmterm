@@ -346,6 +346,9 @@ Drag to select, double-click selects a word, triple-click a line. Right-click
 opens Copy / Paste / Select all. Text with line breaks is shown before it is
 pasted, to check or edit it.
 
+In a split tab, drag a pane by its caption onto another to swap them, or
+right-click the caption to move it left or right.
+
 *Font and Cursor…* in a tab's menu picks the font (the built-in one or any
 installed monospace font), its size, the cursor (block, underline or bar) and
 whether it blinks; *Save* keeps them for the session. They are also in the
