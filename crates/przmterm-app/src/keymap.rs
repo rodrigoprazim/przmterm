@@ -479,10 +479,10 @@ impl KeymapEditor {
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
                                         ui.set_min_width(last);
-                                        if ui.small_button("Delete").clicked() {
+                                        if ui.button("Delete").clicked() {
                                             remove = Some(i);
                                         }
-                                        if ui.small_button("Change…").clicked() {
+                                        if ui.button("Change…").clicked() {
                                             change = Some(i);
                                         }
                                     },

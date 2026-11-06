@@ -109,24 +109,18 @@ pub fn font_picker(
     ui: &mut egui::Ui,
     id: &str,
     name: &mut Option<String>,
-    families: Option<&[String]>,
+    families: Option<&fonts::FontList>,
 ) {
     let shown = name.clone().unwrap_or_else(|| fonts::BUILT_IN.to_string());
     egui::ComboBox::from_id_salt(id)
         .width(240.0)
         .selected_text(shown)
-        .height(320.0)
+        .height(360.0)
         .show_ui(ui, |ui| {
-            ui.selectable_value(name, None, fonts::BUILT_IN);
-            match families {
-                Some(list) => {
-                    for family in list {
-                        ui.selectable_value(name, Some(family.clone()), family);
-                    }
-                }
-                None => {
-                    ui.weak("Reading the installed fonts…");
-                }
+            match fonts::font_menu(ui, families, name.as_deref()) {
+                Some(fonts::FontChoice::BuiltIn) => *name = None,
+                Some(fonts::FontChoice::Family(f)) => *name = Some(f),
+                None => {}
             }
         });
 }
@@ -1924,7 +1918,7 @@ impl PrzmApp {
             let mut close = escape;
             let mut save = false;
             let mut reload = false;
-            let families = self.fonts.families().map(<[String]>::to_vec);
+            let families = self.fonts.families().cloned();
             if let Some(tab) = self.tabs.get_mut(t) {
                 let view = &tab.pane().view;
                 let (mut size, mut name, mut cursor, mut blink, mut color) = (
@@ -1951,12 +1945,7 @@ impl PrzmApp {
                             .spacing([12.0, 8.0])
                             .show(ui, |ui| {
                                 ui.label("Font");
-                                font_picker(
-                                    ui,
-                                    "font-dialog-family",
-                                    &mut name,
-                                    families.as_deref(),
-                                );
+                                font_picker(ui, "font-dialog-family", &mut name, families.as_ref());
                                 ui.end_row();
                                 ui.label("Size");
                                 let mut points = size as u16;
@@ -1986,7 +1975,7 @@ impl PrzmApp {
                                     }
                                     if color.is_some()
                                         && ui
-                                            .small_button("Default")
+                                            .button("Default")
                                             .on_hover_text("The usual light blue")
                                             .clicked()
                                     {
@@ -2160,7 +2149,7 @@ impl PrzmApp {
         if let Some(editor) = &mut self.editor {
             editor.vault_names = self.vault.names();
             if editor.font_families.is_none() {
-                editor.font_families = self.fonts.families().map(<[String]>::to_vec);
+                editor.font_families = self.fonts.families().cloned();
             }
             // While the vault is locked its names are hidden: offer the ones
             // the sessions use (read once per editor).
@@ -2171,6 +2160,10 @@ impl PrzmApp {
                         .map(przmterm_session::vault::names_in_use)
                         .unwrap_or_default(),
                 );
+            }
+            if editor.take_unlock_request() {
+                self.vault
+                    .ask_unlock("Unlock the vault to list its entries.".into());
             }
             if editor.take_vault_request() {
                 self.vault.open_window();
@@ -2919,7 +2912,7 @@ impl eframe::App for PrzmApp {
                     }
                     if let Some((t, p)) = pane.transfer() {
                         if ui
-                            .small_button("Cancel")
+                            .button("Cancel")
                             .on_hover_text("Stop the transfer (Ctrl+C in the terminal too)")
                             .clicked()
                         {
@@ -2943,7 +2936,7 @@ impl eframe::App for PrzmApp {
                     }
                     if let Some(name) = pane.script_name() {
                         if ui
-                            .small_button("■ Stop")
+                            .button("■ Stop")
                             .on_hover_text("Stop the script")
                             .clicked()
                         {

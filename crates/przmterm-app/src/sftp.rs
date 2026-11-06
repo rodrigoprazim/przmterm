@@ -296,11 +296,17 @@ impl SftpBrowser {
         let live = self.closed.is_none();
         ui.horizontal(|ui| {
             ui.add_enabled_ui(live, |ui| {
-                if ui.button("⬆").on_hover_text("Parent folder").clicked() {
+                if crate::icons::button(ui, crate::icons::Icon::Up, false)
+                    .on_hover_text("Parent folder")
+                    .clicked()
+                {
                     let up = parent(&self.dir);
                     self.go(&up);
                 }
-                if ui.button("⟳").on_hover_text("Refresh").clicked() {
+                if crate::icons::button(ui, crate::icons::Icon::Reload, false)
+                    .on_hover_text("Refresh")
+                    .clicked()
+                {
                     let d = self.dir.clone();
                     self.go(&d);
                 }
@@ -566,7 +572,7 @@ impl SftpBrowser {
                                             ),
                                         ),
                                     );
-                                    if ui.small_button("Cancel").clicked() {
+                                    if ui.button("Cancel").clicked() {
                                         cancel = Some(t.id);
                                     }
                                 }
@@ -590,7 +596,7 @@ impl SftpBrowser {
                 .transfers
                 .iter()
                 .any(|t| !matches!(t.state, State::Running))
-                && ui.small_button("Clear finished").clicked()
+                && ui.button("Clear finished").clicked()
             {
                 self.transfers.retain(|t| matches!(t.state, State::Running));
             }

@@ -192,6 +192,7 @@ impl VaultUi {
         if let Some(why) = self.prompt.clone() {
             let mut done = None; // Some(true) unlock, Some(false) cancel
             egui::Window::new("Unlock the vault")
+                .order(egui::Order::Foreground)
                 .pivot(egui::Align2::CENTER_CENTER)
                 .default_pos(center)
                 .collapsible(false)
@@ -240,30 +241,46 @@ impl VaultUi {
         let exists = vault_path(config_dir).is_file();
         // Sub-dialogs take Enter and Esc for themselves.
         let busy = self.edit.is_some() || self.delete.is_some() || self.change.is_some();
-        egui::Window::new("Password vault")
+        // Locked or not created yet, the window fits its few fields; open,
+        // it is wide enough for the entries. (Two ids: egui keeps a
+        // window's size.)
+        let unlocked = self.vault.is_some();
+        let mut window = egui::Window::new("Password vault")
+            .id(egui::Id::unique(if unlocked {
+                "vault-window"
+            } else {
+                "vault-window-locked"
+            }))
             .pivot(egui::Align2::CENTER_CENTER)
             .default_pos(center)
             .open(&mut open)
             .collapsible(false)
-            .resizable(false)
-            .default_width(560.0)
-            .show(ctx, |ui| {
-                if self.vault.is_some() {
-                    self.entries_ui(ui, config_dir);
-                } else if exists {
-                    ui.label("The vault is locked.");
-                    let field = self.master_field(ui, "Master password");
-                    let go = field.lost_focus() && enter;
-                    if let Some(err) = &self.error {
-                        ui.colored_label(ui.visuals().error_fg_color, err);
-                    }
-                    if (ui.button("Unlock").clicked() || go) && self.unlock(config_dir) {
-                        event = VaultEvent::Unlocked;
-                    }
-                } else {
-                    self.create_ui(ui, config_dir, enter);
+            .resizable(false);
+        if unlocked {
+            window = window.default_width(560.0);
+        }
+        window.show(ctx, |ui| {
+            if self.vault.is_some() {
+                self.entries_ui(ui, config_dir);
+            } else if exists {
+                ui.label("The vault is locked.");
+                let field = self.master_field(ui, "Master password");
+                let mut go = field.lost_focus() && enter;
+                if let Some(err) = &self.error {
+                    ui.colored_label(ui.visuals().error_fg_color, err);
                 }
-            });
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        go |= ui.button("Unlock").clicked();
+                    });
+                });
+                if go && self.unlock(config_dir) {
+                    event = VaultEvent::Unlocked;
+                }
+            } else {
+                self.create_ui(ui, config_dir, enter);
+            }
+        });
         if !open || (escape && !busy && self.prompt.is_none()) {
             self.window = false;
             self.edit = None;
@@ -403,11 +420,11 @@ impl VaultUi {
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
                                     ui.set_min_width(last);
-                                    if ui.small_button("Delete…").clicked() {
+                                    if ui.button("Delete…").clicked() {
                                         let users = files_using(config_dir, &entry.name).len();
                                         self.delete = Some((entry.name.clone(), users));
                                     }
-                                    if ui.small_button("Edit…").clicked() {
+                                    if ui.button("Edit…").clicked() {
                                         self.edit = Some(EntryEdit {
                                             old_name: Some(entry.name.clone()),
                                             entry: entry.clone(),

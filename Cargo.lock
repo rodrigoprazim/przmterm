@@ -4140,6 +4140,7 @@ dependencies = [
  "przmterm-term",
  "przmterm-transport",
  "rfd",
+ "skrifa",
  "tempfile",
  "tracing",
  "tracing-subscriber",

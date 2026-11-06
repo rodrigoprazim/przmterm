@@ -551,8 +551,7 @@ fn rule_row(
         color_pick(ui, &mut rule.background, [60, 60, 60], "Background");
         ui.checkbox(&mut rule.bold, "bold");
     });
-    if ui
-        .small_button("×")
+    if crate::icons::button(ui, crate::icons::Icon::Close, false)
         .on_hover_text("Remove the rule")
         .clicked()
     {

@@ -15,14 +15,22 @@ pub enum Icon {
     Gear,
     Plus,
     Close,
+    /// Back to the inherited value (an arrow turning back).
+    Reset,
+    /// The parent folder.
+    Up,
+    /// Opens a list.
+    ChevronDown,
 }
 
 /// Size of an icon button: all of them match.
 pub const BUTTON: Vec2 = Vec2::new(24.0, 20.0);
 
-/// A framed button showing `icon`; `selected` draws it pressed.
+/// A framed button showing `icon`; `selected` draws it pressed. As tall as
+/// a text button, so rows of both line up.
 pub fn button(ui: &mut egui::Ui, icon: Icon, selected: bool) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(BUTTON, Sense::click());
+    let size = Vec2::new(BUTTON.x, BUTTON.y.max(ui.spacing().interact_size.y));
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     if ui.is_rect_visible(rect) {
         let visuals = ui.style().interact_selectable(&response, selected);
         ui.painter().rect(
@@ -55,6 +63,39 @@ pub fn draw(painter: &egui::Painter, icon: Icon, rect: Rect, color: Color32) {
             painter.add(Shape::line(
                 vec![p(-0.35, -0.7), p(0.35, 0.0), p(-0.35, 0.7)],
                 stroke,
+            ));
+        }
+        Icon::Up => {
+            painter.add(Shape::line(
+                vec![p(-0.6, -0.05), p(0.0, -0.7), p(0.6, -0.05)],
+                stroke,
+            ));
+            painter.line_segment([p(0.0, -0.65), p(0.0, 0.75)], stroke);
+        }
+        Icon::ChevronDown => {
+            painter.add(Shape::line(
+                vec![p(-0.6, -0.3), p(0.0, 0.35), p(0.6, -0.3)],
+                stroke,
+            ));
+        }
+        Icon::Reset => {
+            // An arc turning left, back to where it started.
+            let r = 0.65;
+            let (a0, a1) = (-0.85 * std::f32::consts::PI, 0.6 * std::f32::consts::PI);
+            let points: Vec<Pos2> = (0..=24)
+                .map(|i| {
+                    let a = a0 + (a1 - a0) * i as f32 / 24.0;
+                    p(r * a.cos(), r * a.sin())
+                })
+                .collect();
+            painter.add(Shape::line(points, stroke));
+            let tip = p(r * a0.cos(), r * a0.sin());
+            let along = Vec2::new(a0.sin(), -a0.cos()) * s * 0.5;
+            let out = Vec2::new(a0.cos(), a0.sin()) * s * 0.38;
+            painter.add(Shape::convex_polygon(
+                vec![tip + along, tip - out, tip + out],
+                color,
+                Stroke::NONE,
             ));
         }
         Icon::Plus => {

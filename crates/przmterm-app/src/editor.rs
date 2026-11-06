@@ -62,6 +62,32 @@ struct Confirm {
     apply_existing: bool,
 }
 
+/// The pages of the editor's side menu.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum Page {
+    General,
+    Login,
+    Ssh,
+    Serial,
+    Terminal,
+    Automation,
+    Logging,
+}
+
+impl Page {
+    fn label(self) -> &'static str {
+        match self {
+            Page::General => "Connection",
+            Page::Login => "Login",
+            Page::Ssh => "SSH",
+            Page::Serial => "Serial port",
+            Page::Terminal => "Terminal",
+            Page::Automation => "Automation",
+            Page::Logging => "Logging",
+        }
+    }
+}
+
 pub struct Editor {
     target: Target,
     title: String,
@@ -80,6 +106,8 @@ pub struct Editor {
     pub known_vault_names: Option<Vec<String>>,
     /// The vault window was asked for.
     vault_request: bool,
+    /// Unlocking (only) was asked for, to list the entries.
+    unlock_request: bool,
     identity_file: String,
     serial_port: String,
     baud_rate: String,
@@ -99,7 +127,7 @@ pub struct Editor {
     /// `#rrggbb`; `Some("")` is the default colour (over an inherited one).
     cursor_color: Option<String>,
     /// The installed monospace fonts, given by the app once read.
-    pub font_families: Option<Vec<String>>,
+    pub font_families: Option<crate::fonts::FontList>,
     log: Option<bool>,
     log_path: String,
     log_dir: String,
@@ -122,6 +150,8 @@ pub struct Editor {
     show_log_help: bool,
     /// Scroll to the log settings when the window first shows.
     scroll_to_log: bool,
+    /// The page shown (side menu).
+    page: Page,
     confirm: Option<Confirm>,
     error: Option<String>,
 }
@@ -326,6 +356,7 @@ impl Editor {
     pub fn edit_log(session: &Session) -> Self {
         let mut editor = Self::edit(session);
         editor.scroll_to_log = true;
+        editor.page = Page::Logging;
         editor
     }
 
@@ -376,6 +407,7 @@ impl Editor {
             vault_names: None,
             known_vault_names: None,
             vault_request: false,
+            unlock_request: false,
             identity_file: text(&s.identity_file),
             serial_port: text(&s.serial_port),
             baud_rate: text(&s.baud_rate),
@@ -410,6 +442,7 @@ impl Editor {
             triggers: s.triggers.clone(),
             show_log_help: false,
             scroll_to_log: false,
+            page: Page::General,
             confirm: None,
             error: None,
         }
@@ -418,6 +451,10 @@ impl Editor {
     /// The vault window was asked for (once).
     pub fn take_vault_request(&mut self) -> bool {
         std::mem::take(&mut self.vault_request)
+    }
+
+    pub fn take_unlock_request(&mut self) -> bool {
+        std::mem::take(&mut self.unlock_request)
     }
 
     /// The set to open the keyword editor on, once, when asked for.
@@ -626,7 +663,7 @@ impl Editor {
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
-            .default_width(480.0)
+            .default_width(660.0)
             .show(ctx, |ui| {
                 if let Some(confirm) = &mut self.confirm {
                     // The confirmation replaces the form.
@@ -674,11 +711,47 @@ impl Editor {
                 });
                 ui.weak("Enter saves, Esc cancels.");
                 ui.add_space(6.0);
-                // Long forms scroll on small screens.
-                egui::ScrollArea::vertical()
-                    .max_height((ctx.content_rect().height() - 220.0).max(200.0))
-                    .auto_shrink([false, true])
-                    .show(ui, |ui| self.form(ui, &cx, root));
+                // A menu of pages on the left, the page on the right; the
+                // window keeps one size whichever page is shown.
+                let pages = self.pages(&cx);
+                if !pages.contains(&self.page) {
+                    self.page = Page::General;
+                }
+                let height = (ctx.content_rect().height() - 260.0).clamp(220.0, 400.0);
+                let row = ui.horizontal_top(|ui| {
+                    ui.vertical(|ui| {
+                        ui.set_width(118.0);
+                        for page in pages {
+                            let item = egui::Button::selectable(self.page == page, page.label())
+                                .right_text("")
+                                .min_size(egui::vec2(118.0, 26.0));
+                            if ui.add(item).clicked() {
+                                self.page = page;
+                            }
+                        }
+                    });
+                    // Room for the divider drawn below (a separator here
+                    // would stretch the window to the screen's height).
+                    ui.add_space(14.0);
+                    // A fixed box for the page, so the window keeps its
+                    // size; long pages scroll inside it.
+                    ui.allocate_ui(egui::vec2(520.0, height), |ui| {
+                        ui.set_min_size(egui::vec2(520.0, height));
+                        // The scroll bar takes its own room instead of
+                        // covering the buttons at the right edge.
+                        ui.style_mut().spacing.scroll = egui::style::ScrollStyle::solid();
+                        egui::ScrollArea::vertical()
+                            .id_salt(("editor-page", self.page))
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| self.form(ui, &cx, root));
+                    });
+                });
+                let x = row.response.rect.left() + 118.0 + 7.0;
+                ui.painter().vline(
+                    x,
+                    row.response.rect.y_range(),
+                    ui.visuals().widgets.noninteractive.bg_stroke,
+                );
 
                 if self.show_log_help {
                     ui.add_space(4.0);
@@ -742,69 +815,73 @@ impl Editor {
         result
     }
 
-    fn form(&mut self, ui: &mut egui::Ui, cx: &Context, root: &Folder) {
+    /// The pages this editor shows, in the side menu's order.
+    fn pages(&self, cx: &Context) -> Vec<Page> {
         let session = self.is_session();
-        grid(ui, "editor-main", |ui| {
-            if self.target != Target::Global {
-                ui.label(if session { "Name" } else { "Folder name" });
-                ui.vertical(|ui| name_field(ui, &mut self.name, ""));
-                ui.end_row();
-            }
-            if let Target::Session { trail, .. } = &mut self.target {
-                ui.label("Folder");
-                folder_picker(ui, root, trail);
-                ui.end_row();
-            }
-
-            ui.label("Protocol");
-            ui.horizontal(|ui| {
-                egui::ComboBox::from_id_salt("protocol")
-                    .width(250.0)
-                    .selected_text(shown(
-                        self.protocol.map(|p| p.to_string()),
-                        cx.hint("protocol"),
-                    ))
-                    .show_ui(ui, |ui| {
-                        for p in [Protocol::Ssh, Protocol::Telnet, Protocol::Serial] {
-                            ui.selectable_value(&mut self.protocol, Some(p), p.to_string());
-                        }
-                    });
-                reset(ui, &mut self.protocol, &cx.hint("protocol"));
-            });
-            ui.end_row();
-
-            if cx.protocol == Protocol::Serial {
-                self.serial_fields(ui, cx);
-            } else {
-                self.network_fields(ui, cx);
-            }
-        });
-
-        // Folders and the global defaults also carry the other protocols'
-        // settings, out of the way until wanted.
-        if !session {
-            let (title, serial) = if cx.protocol == Protocol::Serial {
-                ("SSH and Telnet", false)
-            } else {
-                ("Serial ports", true)
-            };
-            egui::CollapsingHeader::new(title)
-                .id_salt("editor-other")
-                .show(ui, |ui| {
-                    grid(ui, "editor-other-grid", |ui| {
-                        if serial {
-                            self.serial_fields(ui, cx);
-                        } else {
-                            self.network_fields(ui, cx);
-                        }
-                    });
-                });
+        let mut pages = vec![Page::General];
+        let telnet_session = session && cx.protocol == Protocol::Telnet;
+        let serial_session = session && cx.protocol == Protocol::Serial;
+        if !telnet_session && !serial_session {
+            pages.push(Page::Login);
+            pages.push(Page::Ssh);
         }
-
-        grid(ui, "editor-terminal", |ui| self.terminal_fields(ui, cx));
+        // Folders and the defaults also carry serial settings.
+        if !session {
+            pages.push(Page::Serial);
+        }
+        pages.extend([Page::Terminal, Page::Automation, Page::Logging]);
+        pages
     }
 
-    /// Host, port and login, for SSH and Telnet.
+    /// The page chosen in the side menu.
+    fn form(&mut self, ui: &mut egui::Ui, cx: &Context, root: &Folder) {
+        let session = self.is_session();
+        match self.page {
+            Page::General => grid(ui, "editor-general", |ui| {
+                if self.target != Target::Global {
+                    ui.label(if session { "Name" } else { "Folder name" });
+                    ui.vertical(|ui| name_field(ui, &mut self.name, ""));
+                    ui.end_row();
+                }
+                if let Target::Session { trail, .. } = &mut self.target {
+                    ui.label("Folder");
+                    folder_picker(ui, root, trail);
+                    ui.end_row();
+                }
+
+                ui.label("Protocol");
+                ui.horizontal(|ui| {
+                    egui::ComboBox::from_id_salt("protocol")
+                        .width(250.0)
+                        .selected_text(shown(
+                            self.protocol.map(|p| p.to_string()),
+                            cx.hint("protocol"),
+                        ))
+                        .show_ui(ui, |ui| {
+                            for p in [Protocol::Ssh, Protocol::Telnet, Protocol::Serial] {
+                                ui.selectable_value(&mut self.protocol, Some(p), p.to_string());
+                            }
+                        });
+                    reset(ui, &mut self.protocol, &cx.hint("protocol"));
+                });
+                ui.end_row();
+
+                if session && cx.protocol == Protocol::Serial {
+                    self.serial_fields(ui, cx);
+                } else {
+                    self.network_fields(ui, cx);
+                }
+            }),
+            Page::Login => grid(ui, "editor-login", |ui| self.login_fields(ui, cx)),
+            Page::Ssh => grid(ui, "editor-ssh", |ui| self.ssh_fields(ui, cx)),
+            Page::Serial => grid(ui, "editor-serial", |ui| self.serial_fields(ui, cx)),
+            Page::Terminal => grid(ui, "editor-terminal", |ui| self.terminal_fields(ui, cx)),
+            Page::Automation => grid(ui, "editor-automation", |ui| self.automation_fields(ui, cx)),
+            Page::Logging => grid(ui, "editor-logging", |ui| self.log_fields(ui, cx)),
+        }
+    }
+
+    /// Host, port and keepalive, for SSH and Telnet.
     fn network_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
         if self.is_session() {
             field(ui, "Host", &mut self.host, "10.0.0.1 or router.example.com");
@@ -816,10 +893,10 @@ impl Editor {
             &mut self.keepalive,
             &cx.hint("keepalive"),
         );
-        // Telnet logs in inside the terminal; these are SSH settings.
-        if self.is_session() && cx.protocol == Protocol::Telnet {
-            return;
-        }
+    }
+
+    /// How SSH logs in: user, vault entry, key, saved password.
+    fn login_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
         // A user name for every session makes no sense globally.
         if self.target != Target::Global {
             field(ui, "User name", &mut self.username, &cx.hint("username"));
@@ -858,7 +935,10 @@ impl Editor {
             &cx.hint("debug"),
         );
         ui.end_row();
+    }
 
+    /// SSH extras: old algorithms, X11, SCP shell, jump host, tunnels.
+    fn ssh_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
         ui.label("Legacy algorithms").on_hover_text(
             "Also offer old algorithms for equipment that knows nothing newer: \
              SHA-1 key exchange, CBC and 3DES ciphers, HMAC-SHA1, DSA host keys. \
@@ -900,7 +980,9 @@ impl Editor {
                     .hint_text(cx.hint("scp_shell"))
                     .desired_width(200.0),
             );
-            ui.menu_button("Shells ▾", |ui| {
+            let pick_shell = crate::icons::button(ui, crate::icons::Icon::ChevronDown, false)
+                .on_hover_text("Common shells");
+            egui::Popup::menu(&pick_shell).show(|ui| {
                 for shell in przmterm_transport::scp::SHELLS {
                     let current = if shell == "Default" {
                         self.scp_shell.is_empty()
@@ -928,7 +1010,9 @@ impl Editor {
                     .hint_text(cx.hint("jump_host"))
                     .desired_width(200.0),
             );
-            ui.menu_button("Sessions ▾", |ui| {
+            let pick_jump = crate::icons::button(ui, crate::icons::Icon::ChevronDown, false)
+                .on_hover_text("Your SSH sessions");
+            egui::Popup::menu(&pick_jump).show(|ui| {
                 egui::ScrollArea::vertical()
                     .max_height(240.0)
                     .show(ui, |ui| {
@@ -965,7 +1049,7 @@ impl Editor {
                 ui.horizontal(|ui| {
                     ui.weak(cx.hint("trigger"));
                     if ui
-                        .small_button("+ Add")
+                        .button("+ Add")
                         .on_hover_text("Set the triggers here")
                         .clicked()
                     {
@@ -997,7 +1081,10 @@ impl Editor {
                     .on_hover_text("\\r Enter, \\t Tab, \\e Esc, \\p pause 1 s");
                     ui.checkbox(&mut t.once, "once")
                         .on_hover_text("Only the first time per connection");
-                    if ui.small_button("×").on_hover_text("Remove").clicked() {
+                    if crate::icons::button(ui, crate::icons::Icon::Close, false)
+                        .on_hover_text("Remove")
+                        .clicked()
+                    {
                         remove = Some(i);
                     }
                 });
@@ -1007,11 +1094,10 @@ impl Editor {
             }
             let mut inherit = false;
             ui.horizontal(|ui| {
-                if ui.small_button("+ Add trigger").clicked() {
+                if ui.button("+ Add trigger").clicked() {
                     list.push(Trigger::default());
                 }
-                inherit = ui
-                    .small_button("↺")
+                inherit = crate::icons::button(ui, crate::icons::Icon::Reset, false)
                     .on_hover_text(format!(
                         "Back to the inherited triggers ({})",
                         cx.hint("trigger")
@@ -1031,7 +1117,7 @@ impl Editor {
                 ui.horizontal(|ui| {
                     ui.weak(cx.hint("forward"));
                     if ui
-                        .small_button("+ Add")
+                        .button("+ Add")
                         .on_hover_text("Set the tunnels here")
                         .clicked()
                     {
@@ -1075,7 +1161,10 @@ impl Editor {
                                 .desired_width(110.0),
                         );
                     }
-                    if ui.small_button("×").on_hover_text("Remove").clicked() {
+                    if crate::icons::button(ui, crate::icons::Icon::Close, false)
+                        .on_hover_text("Remove")
+                        .clicked()
+                    {
                         remove = Some(i);
                     }
                 });
@@ -1085,11 +1174,10 @@ impl Editor {
             }
             let mut inherit = false;
             ui.horizontal(|ui| {
-                if ui.small_button("+ Add tunnel").clicked() {
+                if ui.button("+ Add tunnel").clicked() {
                     list.push(Forward::default());
                 }
-                inherit = ui
-                    .small_button("↺")
+                inherit = crate::icons::button(ui, crate::icons::Icon::Reset, false)
                     .on_hover_text(format!(
                         "Back to the inherited tunnels ({})",
                         cx.hint("forward")
@@ -1238,7 +1326,7 @@ impl Editor {
                             }
                             ui.separator();
                             if ui.button("Unlock to see every entry…").clicked() {
-                                self.vault_request = true;
+                                self.unlock_request = true;
                                 ui.close();
                             }
                         }
@@ -1251,7 +1339,7 @@ impl Editor {
                 "Unlock…"
             };
             if ui
-                .small_button(label)
+                .button(label)
                 .on_hover_text("Open the password vault")
                 .clicked()
             {
@@ -1261,7 +1349,8 @@ impl Editor {
         ui.end_row();
     }
 
-    fn terminal_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
+    /// Keywords, triggers, logon script, reconnecting.
+    fn automation_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
         ui.label("Keywords")
             .on_hover_text("Highlight words and patterns in the output with a keyword set");
         ui.horizontal(|ui| {
@@ -1284,7 +1373,7 @@ impl Editor {
                 });
             reset(ui, &mut self.keywords, &cx.hint("keywords"));
             if ui
-                .small_button("Edit sets…")
+                .button("Edit sets…")
                 .on_hover_text("Create and change keyword sets")
                 .clicked()
             {
@@ -1336,7 +1425,10 @@ impl Editor {
             &cx.hint("auto_reconnect"),
         );
         ui.end_row();
+    }
 
+    /// Terminal type, history, font and cursor.
+    fn terminal_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
         ui.label("Terminal type");
         ui.horizontal(|ui| {
             egui::ComboBox::from_id_salt("term-type")
@@ -1363,7 +1455,7 @@ impl Editor {
         );
 
         ui.label("Font")
-            .on_hover_text("An installed monospace font for the terminal text");
+            .on_hover_text("The font of the terminal text: built in, or one installed here");
         ui.horizontal(|ui| {
             let shown_name = self.font.as_ref().map(|f| {
                 if f.is_empty() {
@@ -1377,20 +1469,14 @@ impl Editor {
                 .height(320.0)
                 .selected_text(shown(shown_name, cx.hint("terminal.font")))
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut self.font,
-                        Some(String::new()),
-                        crate::fonts::BUILT_IN,
-                    );
-                    match &self.font_families {
-                        Some(list) => {
-                            for family in list {
-                                ui.selectable_value(&mut self.font, Some(family.clone()), family);
-                            }
-                        }
-                        None => {
-                            ui.weak("Reading the installed fonts…");
-                        }
+                    let current = match self.font.as_deref() {
+                        Some("") | None => None,
+                        Some(f) => Some(f),
+                    };
+                    match crate::fonts::font_menu(ui, self.font_families.as_ref(), current) {
+                        Some(crate::fonts::FontChoice::BuiltIn) => self.font = Some(String::new()),
+                        Some(crate::fonts::FontChoice::Family(f)) => self.font = Some(f),
+                        None => {}
                     }
                 });
             reset(ui, &mut self.font, &cx.hint("terminal.font"));
@@ -1425,7 +1511,7 @@ impl Editor {
             }
             if effective.is_some()
                 && ui
-                    .small_button("Default")
+                    .button("Default")
                     .on_hover_text("The usual light blue")
                     .clicked()
             {
@@ -1448,7 +1534,10 @@ impl Editor {
             &cx.hint("terminal.cursor_blink"),
         );
         ui.end_row();
+    }
 
+    /// Logging to a file.
+    fn log_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
         let row = ui.label("Log to file");
         if std::mem::take(&mut self.scroll_to_log) {
             row.scroll_to_me(Some(egui::Align::Center));
@@ -1648,8 +1737,7 @@ fn default_cursor() -> [u8; 3] {
 /// A small ↺ button that clears a value set here, back to the inherited one.
 fn reset<T>(ui: &mut egui::Ui, value: &mut Option<T>, inherited: &str) {
     if value.is_some()
-        && ui
-            .small_button("↺")
+        && crate::icons::button(ui, crate::icons::Icon::Reset, false)
             .on_hover_text(format!("Back to the inherited value ({inherited})"))
             .clicked()
     {

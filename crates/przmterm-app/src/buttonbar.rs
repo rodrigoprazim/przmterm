@@ -109,7 +109,7 @@ impl ButtonBarUi {
         ui.horizontal_wrapped(|ui| {
             if self.bar.tabs.is_empty() {
                 ui.weak("No buttons yet.");
-                if ui.small_button("+ Add a tab of buttons").clicked() {
+                if ui.button("+ Add a tab of buttons").clicked() {
                     self.tab_edit = Some(TabEdit {
                         index: None,
                         name: "Commands".into(),

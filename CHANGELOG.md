@@ -27,6 +27,19 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Changed
 
+- The session, folder and global settings are split into pages chosen from
+  a menu on the left (Connection, Login, SSH, Serial port, Terminal,
+  Automation, Logging): the window stays one size, and its scroll bar no
+  longer covers the buttons beside the fields.
+- Fonts: the list shows every installed font that can draw text, the
+  monospace ones first and the rest apart, with a search box; fonts that
+  cannot be drawn (bitmap-only, emoji) are left out.
+- One button size and drawn icons in every dialog: reset (↺), remove (✕),
+  the lists of shells and jump hosts, and the SFTP browser's parent folder
+  and refresh.
+- The locked password vault (and the unlock asked for from the session
+  editor) opens as a small window that fits its field.
+
 - A session tab holds its close button: the title, a thin divider and a ✕
   in the tab's own colours, in one box; the whole close part is the button
   and lights up on its own.

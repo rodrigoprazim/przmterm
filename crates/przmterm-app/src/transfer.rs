@@ -220,7 +220,9 @@ impl TransferDialog {
                     .hint_text("Default")
                     .desired_width(160.0),
             );
-            ui.menu_button("▾", |ui| {
+            let pick_shell = crate::icons::button(ui, crate::icons::Icon::ChevronDown, false)
+                .on_hover_text("Common shells");
+            egui::Popup::menu(&pick_shell).show(|ui| {
                 for shell in scp::SHELLS {
                     let pick = if shell == "Default" { "" } else { shell };
                     if ui.selectable_label(self.shell == pick, shell).clicked() {
