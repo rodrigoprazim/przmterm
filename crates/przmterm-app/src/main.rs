@@ -1272,31 +1272,31 @@ impl PrzmApp {
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned());
         let logging = pane.log.is_some();
-        // Filled green while logging, red while not, as before; the dot
-        // keeps the state readable without colour.
+        // Shaped like the other status bar buttons: filled green while
+        // logging, red while not, with a dot that keeps the state readable
+        // without colour (full when logging, hollow-looking when not).
         let green = egui::Color32::from_rgb(40, 135, 65);
-        let red = egui::Color32::from_rgb(170, 55, 55);
-        let (text, fill) = if logging {
+        let red = egui::Color32::from_rgb(160, 52, 52);
+        let (text, fill, dot) = if logging {
             (
-                format!("● Log  {}", short_name(name.as_deref().unwrap_or(""))),
+                format!("Log  {}", short_name(name.as_deref().unwrap_or(""))),
                 green,
+                egui::Color32::WHITE,
             )
         } else {
-            ("○ Log".to_string(), red)
+            ("Log".to_string(), red, egui::Color32::from_white_alpha(110))
         };
-        let button = egui::Button::new(egui::RichText::new(text).color(egui::Color32::WHITE))
-            .fill(fill)
-            .small();
-        let response = ui.add(button).on_hover_text(match (&name, logging) {
-            (Some(name), true) => format!(
-                "Logging to {name}.\nClick to stop{}; right-click for more.",
-                self.keys_hint("toggle_log")
-            ),
-            _ => format!(
-                "Not logging.\nClick to start{}; right-click for more.",
-                self.keys_hint("toggle_log")
-            ),
-        });
+        let response = icons::dot_button(ui, dot, &text, Some(fill), Some(egui::Color32::WHITE))
+            .on_hover_text(match (&name, logging) {
+                (Some(name), true) => format!(
+                    "Logging to {name}.\nClick to stop{}; right-click for more.",
+                    self.keys_hint("toggle_log")
+                ),
+                _ => format!(
+                    "Not logging.\nClick to start{}; right-click for more.",
+                    self.keys_hint("toggle_log")
+                ),
+            });
         if response.clicked() {
             actions.push(Action::ToggleLog);
         }
@@ -1927,11 +1927,12 @@ impl PrzmApp {
             let families = self.fonts.families().map(<[String]>::to_vec);
             if let Some(tab) = self.tabs.get_mut(t) {
                 let view = &tab.pane().view;
-                let (mut size, mut name, mut cursor, mut blink) = (
+                let (mut size, mut name, mut cursor, mut blink, mut color) = (
                     view.font_size,
                     view.font_name.clone(),
                     view.cursor,
                     view.cursor_blink,
+                    view.cursor_color,
                 );
                 let saved_to = tab
                     .pane()
@@ -1976,6 +1977,23 @@ impl PrzmApp {
                                     }
                                 });
                                 ui.end_row();
+                                ui.label("Color");
+                                ui.horizontal(|ui| {
+                                    let shown = tab.pane().view.cursor_color();
+                                    let mut rgb = [shown.r(), shown.g(), shown.b()];
+                                    if ui.color_edit_button_srgb(&mut rgb).changed() {
+                                        color = Some(rgb);
+                                    }
+                                    if color.is_some()
+                                        && ui
+                                            .small_button("Default")
+                                            .on_hover_text("The usual light blue")
+                                            .clicked()
+                                    {
+                                        color = None;
+                                    }
+                                });
+                                ui.end_row();
                                 ui.label("");
                                 ui.checkbox(&mut blink, "Blink");
                                 ui.end_row();
@@ -2015,6 +2033,7 @@ impl PrzmApp {
                     pane.view.font_name = name.clone();
                     pane.view.cursor = cursor;
                     pane.view.cursor_blink = blink;
+                    pane.view.cursor_color = color;
                 }
                 if save && let Some(session) = tab.pane_mut().origin.as_mut() {
                     let result = przmterm_session::update_session_file(&session.path, |s| {
@@ -2022,6 +2041,8 @@ impl PrzmApp {
                         s.terminal.font_size = Some(size as u16);
                         s.terminal.cursor = Some(cursor);
                         s.terminal.cursor_blink = Some(blink);
+                        s.terminal.cursor_color =
+                            Some(color.map(przmterm_session::color_text).unwrap_or_default());
                     });
                     match result {
                         Ok(()) => {
@@ -2029,6 +2050,7 @@ impl PrzmApp {
                             session.font_size = size as u16;
                             session.cursor = cursor;
                             session.cursor_blink = blink;
+                            session.cursor_color = color;
                             self.notice =
                                 Some(format!("Font and cursor saved for {}.", session.name));
                             reload = true;

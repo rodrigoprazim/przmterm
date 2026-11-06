@@ -120,3 +120,52 @@ pub fn draw(painter: &egui::Painter, icon: Icon, rect: Rect, color: Color32) {
         }
     }
 }
+
+/// A button the size of egui's own, with a dot of `dot` colour before
+/// `text` and an optional `fill` (else the usual button colours). The dot
+/// is drawn, so it sits on the text's middle line whatever the font.
+pub fn dot_button(
+    ui: &mut egui::Ui,
+    dot: Color32,
+    text: &str,
+    fill: Option<Color32>,
+    text_color: Option<Color32>,
+) -> egui::Response {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let galley = ui.painter().layout_no_wrap(
+        text.to_string(),
+        font,
+        text_color.unwrap_or(ui.visuals().text_color()),
+    );
+    let pad = ui.spacing().button_padding;
+    let dot_w = 12.0;
+    let size = Vec2::new(
+        pad.x * 2.0 + dot_w + galley.size().x,
+        (galley.size().y + pad.y * 2.0).max(ui.spacing().interact_size.y),
+    );
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact(&response);
+        let bg = match fill {
+            Some(f) if response.hovered() => f.gamma_multiply(1.15),
+            Some(f) => f,
+            None => visuals.weak_bg_fill,
+        };
+        ui.painter().rect(
+            rect,
+            visuals.corner_radius,
+            bg,
+            visuals.bg_stroke,
+            egui::StrokeKind::Inside,
+        );
+        let center = Pos2::new(rect.left() + pad.x + 4.0, rect.center().y);
+        ui.painter().circle_filled(center, 4.0, dot);
+        let text_pos = Pos2::new(
+            rect.left() + pad.x + dot_w,
+            rect.center().y - galley.size().y / 2.0,
+        );
+        let color = text_color.unwrap_or(visuals.text_color());
+        ui.painter().galley(text_pos, galley, color);
+    }
+    response
+}

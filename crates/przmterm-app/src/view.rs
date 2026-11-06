@@ -16,7 +16,8 @@ use crate::input::{encode_key, encode_paste};
 
 pub const DEFAULT_FG: [u8; 3] = [216, 222, 233];
 pub const DEFAULT_BG: [u8; 3] = [24, 26, 31];
-const CURSOR: Color32 = Color32::from_rgb(110, 200, 255);
+/// The cursor colour when none is chosen.
+pub const CURSOR: Color32 = Color32::from_rgb(110, 200, 255);
 const SELECTION: Color32 = Color32::from_rgb(58, 92, 140);
 /// Lines scrolled per wheel notch on the alternate screen (sent as arrow keys).
 /// Width kept at the right of the terminal for the scroll bar.
@@ -189,6 +190,8 @@ pub struct TerminalView {
     pub family: egui::FontFamily,
     pub cursor: CursorShape,
     pub cursor_blink: bool,
+    /// `None`: the default cursor colour.
+    pub cursor_color: Option<[u8; 3]>,
     /// When the cursor last moved or a key was typed: blinking restarts
     /// from "on" so the cursor is seen.
     blink_from: std::time::Instant,
@@ -214,6 +217,7 @@ impl Default for TerminalView {
             family: egui::FontFamily::Monospace,
             cursor: CursorShape::Block,
             cursor_blink: false,
+            cursor_color: None,
             blink_from: std::time::Instant::now(),
             offer_break: false,
             highlighter: None,
@@ -242,6 +246,7 @@ impl TerminalView {
         view.font_name = session.font.clone();
         view.cursor = session.cursor;
         view.cursor_blink = session.cursor_blink;
+        view.cursor_color = session.cursor_color;
         view
     }
 
@@ -251,6 +256,14 @@ impl TerminalView {
         self.font_name = other.font_name.clone();
         self.cursor = other.cursor;
         self.cursor_blink = other.cursor_blink;
+        self.cursor_color = other.cursor_color;
+    }
+
+    /// The colour the cursor is drawn in.
+    pub fn cursor_color(&self) -> Color32 {
+        self.cursor_color
+            .map(|[r, g, b]| Color32::from_rgb(r, g, b))
+            .unwrap_or(CURSOR)
     }
 }
 
@@ -335,6 +348,7 @@ impl TerminalView {
                 inner.top() + (cursor.row + offset) as f32 * cell_h,
             );
             let cell = Rect::from_min_size(min, Vec2::new(cell_w, cell_h));
+            let cursor_color = self.cursor_color();
             // Blinking: on for 530 ms, off for 530 ms, while focused.
             let shown = if focused && self.cursor_blink {
                 let ms = self.blink_from.elapsed().as_millis();
@@ -353,8 +367,8 @@ impl TerminalView {
             };
             if shown && focused {
                 let color = match self.cursor {
-                    CursorShape::Block => CURSOR.gamma_multiply(0.6),
-                    _ => CURSOR,
+                    CursorShape::Block => cursor_color.gamma_multiply(0.6),
+                    _ => cursor_color,
                 };
                 painter.rect_filled(mark, CornerRadius::ZERO, color);
             } else if !focused {
@@ -362,10 +376,14 @@ impl TerminalView {
                     CursorShape::Block => painter.rect_stroke(
                         cell,
                         CornerRadius::ZERO,
-                        Stroke::new(1.0, CURSOR),
+                        Stroke::new(1.0, cursor_color),
                         egui::StrokeKind::Inside,
                     ),
-                    _ => painter.rect_filled(mark, CornerRadius::ZERO, CURSOR.gamma_multiply(0.5)),
+                    _ => painter.rect_filled(
+                        mark,
+                        CornerRadius::ZERO,
+                        cursor_color.gamma_multiply(0.5),
+                    ),
                 };
             }
         }

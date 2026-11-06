@@ -350,8 +350,8 @@ In a split tab, drag a pane by its caption onto another to swap them, or
 right-click the caption to move it left or right.
 
 *Font and Cursor…* in a tab's menu picks the font (the built-in one or any
-installed monospace font), its size, the cursor (block, underline or bar) and
-whether it blinks; *Save* keeps them for the session. They are also in the
+installed monospace font), its size, the cursor (block, underline or bar), its
+colour and whether it blinks; *Save* keeps them for the session. They are also in the
 session settings, so a folder or the defaults can set them for many sessions.
 
 These are the built-in shortcuts. **+** › *Keyboard shortcuts…* changes them

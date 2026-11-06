@@ -21,8 +21,9 @@ All notable changes to PrzmTerm are recorded here. The format follows
   Left/Right* (*Up/Down* when stacked).
 - Font and cursor per session: *Font and Cursor…* in the tab menu (was
   *Font…*) and the session settings pick the font (built-in or any installed
-  monospace font), its size, the cursor shape (block, underline, bar) and
-  blinking. Changes show at once; *Save* keeps them for the session.
+  monospace font), its size, the cursor shape (block, underline, bar), its
+  colour and blinking. Changes show at once; *Save* keeps them for the
+  session.
 
 ### Changed
 
@@ -32,6 +33,9 @@ All notable changes to PrzmTerm are recorded here. The format follows
 - With *Send to all* in a split tab, every pane that gets the keys has the
   blue frame of the active pane (instead of an amber one); the status bar
   button is blue too.
+- The *Log* button has the size and shape of the other status bar buttons
+  (still red when not logging, green when logging), with a drawn dot; the
+  button bar's *+* matches the other icon buttons.
 - The session list's buttons (hide, reload, lock, settings, +) are drawn
   icons of one size, and the symbols in other buttons (◫ ▾ ⇱ ⇅ ▤ ●) sit on
   the text's line.

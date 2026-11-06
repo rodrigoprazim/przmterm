@@ -166,8 +166,8 @@ and, when a device is at hand, a serial console (Xmodem or Ymodem).
 - Tabs and windows: tab groups (close a group, move tabs to a new group, send
   commands to a group), several windows (clone or move a tab to a new
   window), locking a session with a password
-- [x] Font family and size saved per session, with the cursor shape and
-  blinking
+- [x] Font family and size saved per session, with the cursor shape, colour
+  and blinking
 - `przm run <session> --cmd …` headless mode
 - MCP server: `list_sessions`, `open_session`, `send`, `read_screen`, `run_script`,
   with per-session permissions and a command block list

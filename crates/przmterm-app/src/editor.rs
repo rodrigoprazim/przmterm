@@ -96,6 +96,8 @@ pub struct Editor {
     font_size: String,
     cursor: Option<przmterm_session::CursorShape>,
     cursor_blink: Option<bool>,
+    /// `#rrggbb`; `Some("")` is the default colour (over an inherited one).
+    cursor_color: Option<String>,
     /// The installed monospace fonts, given by the app once read.
     pub font_families: Option<Vec<String>>,
     log: Option<bool>,
@@ -180,6 +182,7 @@ fn field_label(key: &str) -> &'static str {
         "terminal.font_size" => "font size",
         "terminal.cursor" => "cursor",
         "terminal.cursor_blink" => "cursor blink",
+        "terminal.cursor_color" => "cursor color",
         "log.enabled" => "log to file",
         "log.path" => "log file",
         "log.dir" => "log folder",
@@ -235,6 +238,7 @@ impl Context<'_> {
             "terminal.font_size" => przmterm_session::DEFAULT_FONT_SIZE.to_string(),
             "terminal.cursor" => "block".into(),
             "terminal.cursor_blink" => "no".into(),
+            "terminal.cursor_color" => "default".into(),
             "log.enabled" => "no".into(),
             "log.path" => przmterm_session::DEFAULT_LOG_TEMPLATE.into(),
             "log.dir" => self.logs_dir.clone(),
@@ -386,6 +390,7 @@ impl Editor {
             font_size: text(&s.terminal.font_size),
             cursor: s.terminal.cursor,
             cursor_blink: s.terminal.cursor_blink,
+            cursor_color: s.terminal.cursor_color.clone(),
             font_families: None,
             log: s.log.enabled,
             log_path: text(&s.log.path),
@@ -507,6 +512,7 @@ impl Editor {
                 },
                 cursor: self.cursor,
                 cursor_blink: self.cursor_blink,
+                cursor_color: self.cursor_color.clone(),
             },
             log: LogSettings {
                 enabled: self.log,
@@ -1405,6 +1411,33 @@ impl Editor {
             &cx.hint("terminal.cursor"),
         );
         ui.end_row();
+        ui.label("Cursor color");
+        ui.horizontal(|ui| {
+            // The colour in effect: set here, else inherited, else default.
+            let effective = self
+                .cursor_color
+                .clone()
+                .or_else(|| cx.inherited.terminal.cursor_color.clone())
+                .and_then(|c| przmterm_session::parse_color(&c));
+            let mut color = effective.unwrap_or(default_cursor());
+            if ui.color_edit_button_srgb(&mut color).changed() {
+                self.cursor_color = Some(przmterm_session::color_text(color));
+            }
+            if effective.is_some()
+                && ui
+                    .small_button("Default")
+                    .on_hover_text("The usual light blue")
+                    .clicked()
+            {
+                self.cursor_color = Some(String::new());
+            }
+            reset(
+                ui,
+                &mut self.cursor_color,
+                &cx.hint("terminal.cursor_color"),
+            );
+        });
+        ui.end_row();
         ui.label("Cursor blink");
         bool_pick(
             ui,
@@ -1604,6 +1637,12 @@ fn shown(value: Option<String>, inherited: String) -> egui::WidgetText {
         Some(v) => v.into(),
         None => egui::RichText::new(inherited).weak().into(),
     }
+}
+
+/// The default cursor colour as red, green and blue.
+fn default_cursor() -> [u8; 3] {
+    let c = crate::view::CURSOR;
+    [c.r(), c.g(), c.b()]
 }
 
 /// A small ↺ button that clears a value set here, back to the inherited one.

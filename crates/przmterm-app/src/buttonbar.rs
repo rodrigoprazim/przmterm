@@ -226,8 +226,7 @@ impl ButtonBarUi {
                 self.bar.tabs[tab].buttons.remove(i);
                 changed = true;
             }
-            if ui
-                .small_button("+")
+            if crate::icons::button(ui, crate::icons::Icon::Plus, false)
                 .on_hover_text("Add a button to this tab")
                 .clicked()
             {

@@ -107,6 +107,24 @@ pub struct TerminalSettings {
     pub cursor: Option<CursorShape>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor_blink: Option<bool>,
+    /// Cursor colour as `#rrggbb`; `""` is the default one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor_color: Option<String>,
+}
+
+/// `#rrggbb` (or `rrggbb`) as red, green and blue.
+pub fn parse_color(text: &str) -> Option<[u8; 3]> {
+    let hex = text.trim().trim_start_matches('#');
+    if hex.len() != 6 || !hex.is_ascii() {
+        return None;
+    }
+    let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
+    Some([byte(0)?, byte(2)?, byte(4)?])
+}
+
+/// Red, green and blue as `#rrggbb`.
+pub fn color_text([r, g, b]: [u8; 3]) -> String {
+    format!("#{r:02x}{g:02x}{b:02x}")
 }
 
 /// How the terminal draws its cursor.
@@ -238,7 +256,7 @@ pub struct SessionSettings {
 }
 
 /// Keys of the individual settings, used to compare and copy them.
-pub const FIELDS: [&str; 33] = [
+pub const FIELDS: [&str; 34] = [
     "protocol",
     "host",
     "port",
@@ -269,6 +287,7 @@ pub const FIELDS: [&str; 33] = [
     "terminal.font_size",
     "terminal.cursor",
     "terminal.cursor_blink",
+    "terminal.cursor_color",
     "log.enabled",
     "log.path",
     "log.dir",
@@ -308,6 +327,9 @@ impl SessionSettings {
             "terminal.font_size" => self.terminal.font_size = from.terminal.font_size,
             "terminal.cursor" => self.terminal.cursor = from.terminal.cursor,
             "terminal.cursor_blink" => self.terminal.cursor_blink = from.terminal.cursor_blink,
+            "terminal.cursor_color" => {
+                self.terminal.cursor_color = from.terminal.cursor_color.clone();
+            }
             "log.enabled" => self.log.enabled = from.log.enabled,
             "log.path" => self.log.path = from.log.path.clone(),
             "log.dir" => self.log.dir = from.log.dir.clone(),
@@ -367,6 +389,7 @@ impl SessionSettings {
             "terminal.font_size" => self.terminal.font_size.map(|v| v.to_string()),
             "terminal.cursor" => self.terminal.cursor.map(|c| c.name().to_string()),
             "terminal.cursor_blink" => self.terminal.cursor_blink.map(yes_no),
+            "terminal.cursor_color" => self.terminal.cursor_color.clone(),
             "log.enabled" => self.log.enabled.map(yes_no),
             "log.path" => self.log.path.clone(),
             "log.dir" => self.log.dir.clone(),
@@ -420,6 +443,7 @@ impl SessionSettings {
                 font_size: pick(&self.terminal.font_size, &over.terminal.font_size),
                 cursor: pick(&self.terminal.cursor, &over.terminal.cursor),
                 cursor_blink: pick(&self.terminal.cursor_blink, &over.terminal.cursor_blink),
+                cursor_color: pick(&self.terminal.cursor_color, &over.terminal.cursor_color),
             },
             log: LogSettings {
                 enabled: pick(&self.log.enabled, &over.log.enabled),
@@ -520,6 +544,8 @@ pub struct Session {
     pub font_size: u16,
     pub cursor: CursorShape,
     pub cursor_blink: bool,
+    /// `None`: the default colour.
+    pub cursor_color: Option<[u8; 3]>,
     pub log_enabled: bool,
     pub log_path: Option<String>,
     /// Folder for relative log file names, with `~` expanded.
@@ -643,6 +669,11 @@ impl Session {
                 .clamp(*FONT_SIZES.start(), *FONT_SIZES.end()),
             cursor: settings.terminal.cursor.unwrap_or_default(),
             cursor_blink: settings.terminal.cursor_blink.unwrap_or(false),
+            cursor_color: settings
+                .terminal
+                .cursor_color
+                .as_deref()
+                .and_then(parse_color),
             log_enabled: settings.log.enabled.unwrap_or(false),
             log_path: settings.log.path.clone(),
             log_dir: settings.log.dir.as_deref().map(expand_tilde),
@@ -1452,6 +1483,15 @@ fn load_folder(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn colors_as_text() {
+        assert_eq!(parse_color("#6ec8ff"), Some([0x6e, 0xc8, 0xff]));
+        assert_eq!(parse_color("FF0000"), Some([255, 0, 0]));
+        assert_eq!(parse_color("#fff"), None);
+        assert_eq!(parse_color(""), None);
+        assert_eq!(color_text([0x6e, 0xc8, 0xff]), "#6ec8ff");
+    }
 
     fn write(dir: &Path, rel: &str, text: &str) {
         let path = dir.join(rel);
