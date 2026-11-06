@@ -15,6 +15,11 @@ All notable changes to PrzmTerm are recorded here. The format follows
   history; drag it or click its track to move.
 - Pasting text with line breaks first shows it in a box, where it can be
   checked or edited: *Paste* (or Ctrl/⌘+Enter) sends it, *Cancel* drops it.
+  The box is wide and can be resized from its corner.
+- Font and cursor per session: *Font and Cursor…* in the tab menu (was
+  *Font…*) and the session settings pick the font (built-in or any installed
+  monospace font), its size, the cursor shape (block, underline, bar) and
+  blinking. Changes show at once; *Save* keeps them for the session.
 
 ### Fixed
 

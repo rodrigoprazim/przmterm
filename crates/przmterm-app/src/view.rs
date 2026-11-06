@@ -9,6 +9,7 @@ use eframe::egui::{
     Sense, Stroke, Vec2,
     text::{LayoutJob, TextFormat},
 };
+use przmterm_session::CursorShape;
 use przmterm_term::{Cell, Screen, Style, Terminal};
 
 use crate::input::{encode_key, encode_paste};
@@ -182,6 +183,15 @@ pub struct ViewOutput {
 
 pub struct TerminalView {
     pub font_size: f32,
+    /// The installed font family chosen (`None`: the built-in one).
+    pub font_name: Option<String>,
+    /// The egui family that draws it, set by the app each frame.
+    pub family: egui::FontFamily,
+    pub cursor: CursorShape,
+    pub cursor_blink: bool,
+    /// When the cursor last moved or a key was typed: blinking restarts
+    /// from "on" so the cursor is seen.
+    blink_from: std::time::Instant,
     /// Offer "Send BREAK" (serial and Telnet sessions).
     pub offer_break: bool,
     /// Keyword highlighting for what is shown.
@@ -200,6 +210,11 @@ impl Default for TerminalView {
     fn default() -> Self {
         Self {
             font_size: 14.0,
+            font_name: None,
+            family: egui::FontFamily::Monospace,
+            cursor: CursorShape::Block,
+            cursor_blink: false,
+            blink_from: std::time::Instant::now(),
             offer_break: false,
             highlighter: None,
             focus_requested: false,
@@ -219,6 +234,24 @@ impl TerminalView {
             ..Self::default()
         }
     }
+
+    /// The font and cursor a session asks for.
+    pub fn for_session(session: &przmterm_session::Session) -> Self {
+        let mut view = Self::for_protocol(session.protocol);
+        view.font_size = f32::from(session.font_size);
+        view.font_name = session.font.clone();
+        view.cursor = session.cursor;
+        view.cursor_blink = session.cursor_blink;
+        view
+    }
+
+    /// Takes the font and cursor of `other` (a clone of its session).
+    pub fn look_like(&mut self, other: &TerminalView) {
+        self.font_size = other.font_size;
+        self.font_name = other.font_name.clone();
+        self.cursor = other.cursor;
+        self.cursor_blink = other.cursor_blink;
+    }
 }
 
 fn read_clipboard() -> Option<String> {
@@ -232,7 +265,7 @@ impl TerminalView {
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, term: &mut Terminal, active: bool) -> ViewOutput {
-        let font_id = FontId::monospace(self.font_size);
+        let font_id = FontId::new(self.font_size, self.family.clone());
         let (cell_w, cell_h) = ui
             .ctx()
             .fonts_mut(|f| (f.glyph_width(&font_id, 'M'), f.row_height(&font_id)));
@@ -302,15 +335,38 @@ impl TerminalView {
                 inner.top() + (cursor.row + offset) as f32 * cell_h,
             );
             let cell = Rect::from_min_size(min, Vec2::new(cell_w, cell_h));
-            if focused {
-                painter.rect_filled(cell, CornerRadius::ZERO, CURSOR.gamma_multiply(0.6));
+            // Blinking: on for 530 ms, off for 530 ms, while focused.
+            let shown = if focused && self.cursor_blink {
+                let ms = self.blink_from.elapsed().as_millis();
+                let left = 530 - (ms % 530) as u64;
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(left));
+                (ms / 530) & 1 == 0
             } else {
-                painter.rect_stroke(
-                    cell,
-                    CornerRadius::ZERO,
-                    Stroke::new(1.0, CURSOR),
-                    egui::StrokeKind::Inside,
-                );
+                true
+            };
+            let thin = (cell_h / 8.0).clamp(1.0, 3.0);
+            let mark = match self.cursor {
+                CursorShape::Block => cell,
+                CursorShape::Underline => cell.with_min_y(cell.max.y - thin),
+                CursorShape::Bar => cell.with_max_x(cell.min.x + thin),
+            };
+            if shown && focused {
+                let color = match self.cursor {
+                    CursorShape::Block => CURSOR.gamma_multiply(0.6),
+                    _ => CURSOR,
+                };
+                painter.rect_filled(mark, CornerRadius::ZERO, color);
+            } else if !focused {
+                match self.cursor {
+                    CursorShape::Block => painter.rect_stroke(
+                        cell,
+                        CornerRadius::ZERO,
+                        Stroke::new(1.0, CURSOR),
+                        egui::StrokeKind::Inside,
+                    ),
+                    _ => painter.rect_filled(mark, CornerRadius::ZERO, CURSOR.gamma_multiply(0.5)),
+                };
             }
         }
         self.scroll_bar(ui, response.id, rect, term);
@@ -358,6 +414,7 @@ impl TerminalView {
         if !input.is_empty() {
             term.screen_mut().reset_display();
             self.selection = None;
+            self.blink_from = std::time::Instant::now();
         }
         ViewOutput {
             input,

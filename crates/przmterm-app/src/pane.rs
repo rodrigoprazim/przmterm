@@ -670,7 +670,7 @@ impl Pane {
                 session.scrollback,
             ),
             transport,
-            TerminalView::for_protocol(session.protocol),
+            TerminalView::for_session(session),
             format!("{} {}", session.protocol, session.display_target()),
             Some(session.clone()),
         );
@@ -1182,12 +1182,14 @@ impl Pane {
                 session.scrollback,
             ),
             transport,
-            TerminalView::for_protocol(session.protocol),
+            TerminalView::for_session(session),
             self.label.clone(),
             Some(session.clone()),
         );
         pane.load_triggers(session);
         pane.view.highlighter = self.view.highlighter.clone();
+        // The clone looks like this pane, with any change made in Font….
+        pane.view.look_like(&self.view);
         if session.log_enabled {
             pane.start_log(env);
         }

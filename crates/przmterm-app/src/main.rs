@@ -4,6 +4,7 @@ mod buttonbar;
 mod demo;
 mod desktop;
 mod editor;
+mod fonts;
 mod input;
 mod keychain;
 mod keymap;
@@ -46,23 +47,10 @@ fn main() -> eframe::Result {
         "PrzmTerm",
         options,
         Box::new(|cc| {
-            symbol_fallback(&cc.egui_ctx);
-            Ok(Box::new(PrzmApp::new()))
+            let fonts = fonts::TermFonts::new(&cc.egui_ctx);
+            Ok(Box::new(PrzmApp::new(fonts)))
         }),
     )
-}
-
-/// The interface text falls back to the monospace font for symbols the
-/// proportional one lacks (arrows such as ⇶ and ⇅, boxes such as ◫ and ▤),
-/// so they show the same on every system instead of as empty squares.
-fn symbol_fallback(ctx: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
-    if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional)
-        && !family.iter().any(|f| f == "Hack")
-    {
-        family.push("Hack".to_owned());
-    }
-    ctx.set_fonts(fonts);
 }
 
 /// How the panes of a tab are arranged.
@@ -111,6 +99,42 @@ fn pane_name(pane: &Pane) -> String {
     match &pane.origin {
         Some(s) if s.name != title => format!("{} — {title}", s.name),
         _ => title,
+    }
+}
+
+/// The font list of the Font dialog and the session editor: the built-in
+/// font, then the installed monospace ones.
+pub fn font_picker(
+    ui: &mut egui::Ui,
+    id: &str,
+    name: &mut Option<String>,
+    families: Option<&[String]>,
+) {
+    let shown = name.clone().unwrap_or_else(|| fonts::BUILT_IN.to_string());
+    egui::ComboBox::from_id_salt(id)
+        .width(240.0)
+        .selected_text(shown)
+        .height(320.0)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(name, None, fonts::BUILT_IN);
+            match families {
+                Some(list) => {
+                    for family in list {
+                        ui.selectable_value(name, Some(family.clone()), family);
+                    }
+                }
+                None => {
+                    ui.weak("Reading the installed fonts…");
+                }
+            }
+        });
+}
+
+pub fn cursor_label(shape: przmterm_session::CursorShape) -> &'static str {
+    match shape {
+        przmterm_session::CursorShape::Block => "█ Block",
+        przmterm_session::CursorShape::Underline => "▁ Underline",
+        przmterm_session::CursorShape::Bar => "▏ Bar",
     }
 }
 
@@ -378,6 +402,8 @@ enum Action {
 }
 
 struct PrzmApp {
+    /// Interface fonts and the installed fonts the terminal can use.
+    fonts: fonts::TermFonts,
     config_dir: Option<PathBuf>,
     sessions: SessionTree,
     tabs: Vec<Tab>,
@@ -507,7 +533,7 @@ enum Deletion {
 }
 
 impl PrzmApp {
-    fn new() -> Self {
+    fn new(fonts: fonts::TermFonts) -> Self {
         let config_dir = przmterm_session::default_config_dir();
         let shortcuts = keymap::Shortcuts::load(config_dir.as_deref());
         let buttons = buttonbar::ButtonBarUi::load(config_dir.as_deref());
@@ -550,6 +576,7 @@ impl PrzmApp {
             script_guide: None,
             transfer_dialog: None,
             paste_confirm: None,
+            fonts,
             sftp_windows: Vec::new(),
             sftp_next: 0,
             sftp_pending: None,
@@ -1261,11 +1288,16 @@ impl PrzmApp {
             ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter));
         let lines = confirm.text.lines().count().max(1);
         let mut done = None;
+        // Wide by default; the corner drags it to any size.
+        let rows = lines.clamp(3, 14) as f32;
+        let row_h = ctx.fonts_mut(|f| f.row_height(&egui::FontId::monospace(14.0)));
         egui::Window::new("Paste")
             .pivot(egui::Align2::CENTER_CENTER)
             .default_pos(center)
             .collapsible(false)
-            .resizable(false)
+            .resizable(true)
+            .default_size([840.0, rows * row_h + 110.0])
+            .min_size([420.0, 200.0])
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 ui.label(format!(
@@ -1274,14 +1306,17 @@ impl PrzmApp {
                     if lines == 1 { "" } else { "s" }
                 ));
                 ui.add_space(4.0);
-                egui::ScrollArea::vertical()
-                    .max_height(320.0)
+                // The text fills the window; the buttons keep their row.
+                let footer = ui.spacing().interact_size.y + ui.spacing().item_spacing.y * 2.0;
+                egui::ScrollArea::both()
+                    .auto_shrink(false)
+                    .max_height((ui.available_height() - footer).max(60.0))
                     .show(ui, |ui| {
-                        ui.add(
+                        ui.add_sized(
+                            ui.available_size(),
                             egui::TextEdit::multiline(&mut confirm.text)
                                 .font(egui::TextStyle::Monospace)
-                                .desired_rows(lines.clamp(3, 14))
-                                .desired_width(560.0),
+                                .code_editor(),
                         );
                     });
                 ui.horizontal(|ui| {
@@ -1802,32 +1837,128 @@ impl PrzmApp {
         }
         if let Some(t) = self.font_dialog {
             let mut close = escape;
+            let mut save = false;
+            let mut reload = false;
+            let families = self.fonts.families().map(<[String]>::to_vec);
             if let Some(tab) = self.tabs.get_mut(t) {
-                let mut size = tab.pane().view.font_size;
-                egui::Window::new("Font")
+                let view = &tab.pane().view;
+                let (mut size, mut name, mut cursor, mut blink) = (
+                    view.font_size,
+                    view.font_name.clone(),
+                    view.cursor,
+                    view.cursor_blink,
+                );
+                let saved_to = tab
+                    .pane()
+                    .origin
+                    .as_ref()
+                    .filter(|s| s.path.is_file())
+                    .map(|s| s.name.clone());
+                egui::Window::new("Font and cursor")
                     .pivot(egui::Align2::CENTER_CENTER)
                     .default_pos(center)
                     .collapsible(false)
                     .resizable(false)
                     .show(ctx, |ui| {
-                        ui.add(
-                            egui::Slider::new(&mut size, 8.0..=32.0)
-                                .step_by(1.0)
-                                .text("size"),
-                        );
-                        ui.weak("For the panes of this tab, until it closes.");
-                        if ui.button("Close").clicked() || enter {
-                            close = true;
-                        }
+                        egui::Grid::new("font-dialog")
+                            .num_columns(2)
+                            .spacing([12.0, 8.0])
+                            .show(ui, |ui| {
+                                ui.label("Font");
+                                font_picker(
+                                    ui,
+                                    "font-dialog-family",
+                                    &mut name,
+                                    families.as_deref(),
+                                );
+                                ui.end_row();
+                                ui.label("Size");
+                                let mut points = size as u16;
+                                ui.add(
+                                    egui::Slider::new(&mut points, przmterm_session::FONT_SIZES)
+                                        .suffix(" pt"),
+                                );
+                                size = f32::from(points);
+                                ui.end_row();
+                                ui.label("Cursor");
+                                ui.horizontal(|ui| {
+                                    for shape in przmterm_session::CursorShape::ALL {
+                                        ui.selectable_value(
+                                            &mut cursor,
+                                            shape,
+                                            cursor_label(shape),
+                                        );
+                                    }
+                                });
+                                ui.end_row();
+                                ui.label("");
+                                ui.checkbox(&mut blink, "Blink");
+                                ui.end_row();
+                            });
+                        ui.add_space(4.0);
+                        ui.weak(match &saved_to {
+                            Some(name) => format!(
+                                "Changes show at once in this tab. Save to keep them for {name}."
+                            ),
+                            None => "Changes show at once in this tab, until it closes.".into(),
+                        });
+                        ui.horizontal(|ui| {
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if saved_to.is_some() {
+                                        if ui
+                                            .button("Save")
+                                            .on_hover_text("Keep them in the session's settings")
+                                            .clicked()
+                                        {
+                                            save = true;
+                                            close = true;
+                                        }
+                                        if ui.button("Close").clicked() {
+                                            close = true;
+                                        }
+                                    } else if ui.button("Close").clicked() || enter {
+                                        close = true;
+                                    }
+                                },
+                            );
+                        });
                     });
                 for pane in &mut tab.panes {
                     pane.view.font_size = size;
+                    pane.view.font_name = name.clone();
+                    pane.view.cursor = cursor;
+                    pane.view.cursor_blink = blink;
+                }
+                if save && let Some(session) = tab.pane_mut().origin.as_mut() {
+                    let result = przmterm_session::update_session_file(&session.path, |s| {
+                        s.terminal.font = Some(name.clone().unwrap_or_default());
+                        s.terminal.font_size = Some(size as u16);
+                        s.terminal.cursor = Some(cursor);
+                        s.terminal.cursor_blink = Some(blink);
+                    });
+                    match result {
+                        Ok(()) => {
+                            session.font = name.clone();
+                            session.font_size = size as u16;
+                            session.cursor = cursor;
+                            session.cursor_blink = blink;
+                            self.notice =
+                                Some(format!("Font and cursor saved for {}.", session.name));
+                            reload = true;
+                        }
+                        Err(e) => self.notice = Some(format!("Could not save: {e}")),
+                    }
                 }
             } else {
                 close = true;
             }
             if close {
                 self.font_dialog = None;
+            }
+            if reload {
+                self.reload_sessions();
             }
         }
         if self.confirm_quit {
@@ -1921,6 +2052,9 @@ impl PrzmApp {
         }
         if let Some(editor) = &mut self.editor {
             editor.vault_names = self.vault.names();
+            if editor.font_families.is_none() {
+                editor.font_families = self.fonts.families().map(<[String]>::to_vec);
+            }
             // While the vault is locked its names are hidden: offer the ones
             // the sessions use (read once per editor).
             if editor.known_vault_names.is_none() {
@@ -2183,7 +2317,7 @@ fn tab_menu(
         },
         Action::SessionOptions(i),
     );
-    item(ui, true, "Font…", Action::FontTab(i));
+    item(ui, true, "Font and Cursor…", Action::FontTab(i));
     ui.separator();
     match tab.pane().script_name() {
         Some(name) => item(
@@ -3134,6 +3268,10 @@ impl eframe::App for PrzmApp {
         }
         let modal = self.modal_open();
         // What was typed in the active pane, for "send to all".
+        // Each pane draws in the font it asks for (loaded when first asked).
+        for pane in &mut self.tabs[self.active_tab].panes {
+            pane.view.family = self.fonts.family(&ctx, pane.view.font_name.as_deref());
+        }
         let mut typed: Option<Vec<u8>> = None;
         let mut pasted: Option<(usize, String)> = None;
         let broadcast = self.broadcast;

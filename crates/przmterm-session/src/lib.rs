@@ -96,7 +96,46 @@ pub struct TerminalSettings {
     pub term_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scrollback: Option<usize>,
+    /// Font family of the terminal text (an installed monospace font);
+    /// `""` is the built-in one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font: Option<String>,
+    /// Font size in points.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_size: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<CursorShape>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor_blink: Option<bool>,
 }
+
+/// How the terminal draws its cursor.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CursorShape {
+    #[default]
+    Block,
+    Underline,
+    Bar,
+}
+
+impl CursorShape {
+    pub const ALL: [CursorShape; 3] =
+        [CursorShape::Block, CursorShape::Underline, CursorShape::Bar];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            CursorShape::Block => "block",
+            CursorShape::Underline => "underline",
+            CursorShape::Bar => "bar",
+        }
+    }
+}
+
+/// Font size when none is set.
+pub const DEFAULT_FONT_SIZE: u16 = 14;
+/// Sizes a font may have.
+pub const FONT_SIZES: std::ops::RangeInclusive<u16> = 8..=36;
 
 /// Logging options of a settings layer. `None` = inherit.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -199,7 +238,7 @@ pub struct SessionSettings {
 }
 
 /// Keys of the individual settings, used to compare and copy them.
-pub const FIELDS: [&str; 29] = [
+pub const FIELDS: [&str; 33] = [
     "protocol",
     "host",
     "port",
@@ -226,6 +265,10 @@ pub const FIELDS: [&str; 29] = [
     "flow_control",
     "terminal.term_type",
     "terminal.scrollback",
+    "terminal.font",
+    "terminal.font_size",
+    "terminal.cursor",
+    "terminal.cursor_blink",
     "log.enabled",
     "log.path",
     "log.dir",
@@ -261,6 +304,10 @@ impl SessionSettings {
             "flow_control" => self.flow_control = from.flow_control,
             "terminal.term_type" => self.terminal.term_type = from.terminal.term_type.clone(),
             "terminal.scrollback" => self.terminal.scrollback = from.terminal.scrollback,
+            "terminal.font" => self.terminal.font = from.terminal.font.clone(),
+            "terminal.font_size" => self.terminal.font_size = from.terminal.font_size,
+            "terminal.cursor" => self.terminal.cursor = from.terminal.cursor,
+            "terminal.cursor_blink" => self.terminal.cursor_blink = from.terminal.cursor_blink,
             "log.enabled" => self.log.enabled = from.log.enabled,
             "log.path" => self.log.path = from.log.path.clone(),
             "log.dir" => self.log.dir = from.log.dir.clone(),
@@ -316,6 +363,10 @@ impl SessionSettings {
             "flow_control" => self.flow_control.map(|v| v.name().to_string()),
             "terminal.term_type" => self.terminal.term_type.clone(),
             "terminal.scrollback" => self.terminal.scrollback.map(|v| v.to_string()),
+            "terminal.font" => self.terminal.font.clone(),
+            "terminal.font_size" => self.terminal.font_size.map(|v| v.to_string()),
+            "terminal.cursor" => self.terminal.cursor.map(|c| c.name().to_string()),
+            "terminal.cursor_blink" => self.terminal.cursor_blink.map(yes_no),
             "log.enabled" => self.log.enabled.map(yes_no),
             "log.path" => self.log.path.clone(),
             "log.dir" => self.log.dir.clone(),
@@ -365,6 +416,10 @@ impl SessionSettings {
             terminal: TerminalSettings {
                 term_type: pick(&self.terminal.term_type, &over.terminal.term_type),
                 scrollback: pick(&self.terminal.scrollback, &over.terminal.scrollback),
+                font: pick(&self.terminal.font, &over.terminal.font),
+                font_size: pick(&self.terminal.font_size, &over.terminal.font_size),
+                cursor: pick(&self.terminal.cursor, &over.terminal.cursor),
+                cursor_blink: pick(&self.terminal.cursor_blink, &over.terminal.cursor_blink),
             },
             log: LogSettings {
                 enabled: pick(&self.log.enabled, &over.log.enabled),
@@ -389,6 +444,9 @@ impl SessionSettings {
             "flow_control" => s.flow_control = Some(FlowControl::None),
             "terminal.term_type" => s.terminal.term_type = Some(DEFAULT_TERM_TYPE.into()),
             "terminal.scrollback" => s.terminal.scrollback = Some(DEFAULT_SCROLLBACK),
+            "terminal.font_size" => s.terminal.font_size = Some(DEFAULT_FONT_SIZE),
+            "terminal.cursor" => s.terminal.cursor = Some(CursorShape::Block),
+            "terminal.cursor_blink" => s.terminal.cursor_blink = Some(false),
             "log.enabled" => s.log.enabled = Some(false),
             "debug" => s.debug = Some(false),
             "keepalive" => s.keepalive = Some(DEFAULT_KEEPALIVE),
@@ -457,6 +515,11 @@ pub struct Session {
     pub scp_shell: Option<String>,
     pub term_type: String,
     pub scrollback: usize,
+    /// Installed font family for the text; `None` is the built-in one.
+    pub font: Option<String>,
+    pub font_size: u16,
+    pub cursor: CursorShape,
+    pub cursor_blink: bool,
     pub log_enabled: bool,
     pub log_path: Option<String>,
     /// Folder for relative log file names, with `~` expanded.
@@ -567,6 +630,19 @@ impl Session {
                 .clone()
                 .unwrap_or_else(|| DEFAULT_TERM_TYPE.to_string()),
             scrollback: settings.terminal.scrollback.unwrap_or(DEFAULT_SCROLLBACK),
+            font: settings
+                .terminal
+                .font
+                .clone()
+                .map(|f| f.trim().to_string())
+                .filter(|f| !f.is_empty()),
+            font_size: settings
+                .terminal
+                .font_size
+                .unwrap_or(DEFAULT_FONT_SIZE)
+                .clamp(*FONT_SIZES.start(), *FONT_SIZES.end()),
+            cursor: settings.terminal.cursor.unwrap_or_default(),
+            cursor_blink: settings.terminal.cursor_blink.unwrap_or(false),
             log_enabled: settings.log.enabled.unwrap_or(false),
             log_path: settings.log.path.clone(),
             log_dir: settings.log.dir.as_deref().map(expand_tilde),
@@ -888,6 +964,19 @@ pub fn write_session(
         source,
     })?;
     Ok(path)
+}
+
+/// Changes some settings of the session file at `path`, keeping the rest.
+pub fn update_session_file(
+    path: &Path,
+    change: impl FnOnce(&mut SessionSettings),
+) -> Result<(), SessionError> {
+    let mut settings = read_session_settings(path)?;
+    change(&mut settings);
+    fs::write(path, settings.to_toml()).map_err(|source| SessionError::Io {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 /// Creates the folder `name` inside `parent` and returns its path.

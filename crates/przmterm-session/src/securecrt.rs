@@ -235,6 +235,7 @@ fn convert(name: &str, f: &Fields, report: &mut Report) -> Option<SessionSetting
         scrollback: scrollback
             .map(|n| n.min(MAX_SCROLLBACK))
             .filter(|&n| n != crate::DEFAULT_SCROLLBACK),
+        ..TerminalSettings::default()
     };
 
     // "Send protocol NO-OP every N seconds".

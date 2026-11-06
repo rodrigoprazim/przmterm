@@ -27,6 +27,8 @@ tracing.workspace = true
 chrono.workspace = true
 tracing-subscriber.workspace = true
 zeroize.workspace = true
+# Lists the installed monospace fonts for the terminal text.
+fontdb = { version = "0.24", default-features = false, features = ["std", "fs", "memmap", "fontconfig"] }
 
 
 [dev-dependencies]

@@ -91,6 +91,13 @@ pub struct Editor {
     ports: Option<Vec<PortInfo>>,
     term_type: Option<String>,
     scrollback: String,
+    /// `Some("")` is the built-in font (over an inherited one).
+    font: Option<String>,
+    font_size: String,
+    cursor: Option<przmterm_session::CursorShape>,
+    cursor_blink: Option<bool>,
+    /// The installed monospace fonts, given by the app once read.
+    pub font_families: Option<Vec<String>>,
     log: Option<bool>,
     log_path: String,
     log_dir: String,
@@ -169,6 +176,10 @@ fn field_label(key: &str) -> &'static str {
         "flow_control" => "flow control",
         "terminal.term_type" => "terminal type",
         "terminal.scrollback" => "scrollback",
+        "terminal.font" => "font",
+        "terminal.font_size" => "font size",
+        "terminal.cursor" => "cursor",
+        "terminal.cursor_blink" => "cursor blink",
         "log.enabled" => "log to file",
         "log.path" => "log file",
         "log.dir" => "log folder",
@@ -220,6 +231,10 @@ impl Context<'_> {
             "flow_control" => "none".into(),
             "terminal.term_type" => "xterm-256color".into(),
             "terminal.scrollback" => "10000".into(),
+            "terminal.font" => crate::fonts::BUILT_IN.into(),
+            "terminal.font_size" => przmterm_session::DEFAULT_FONT_SIZE.to_string(),
+            "terminal.cursor" => "block".into(),
+            "terminal.cursor_blink" => "no".into(),
             "log.enabled" => "no".into(),
             "log.path" => przmterm_session::DEFAULT_LOG_TEMPLATE.into(),
             "log.dir" => self.logs_dir.clone(),
@@ -367,6 +382,11 @@ impl Editor {
             ports: None,
             term_type: s.terminal.term_type.clone(),
             scrollback: text(&s.terminal.scrollback),
+            font: s.terminal.font.clone(),
+            font_size: text(&s.terminal.font_size),
+            cursor: s.terminal.cursor,
+            cursor_blink: s.terminal.cursor_blink,
+            font_families: None,
             log: s.log.enabled,
             log_path: text(&s.log.path),
             log_dir: text(&s.log.dir),
@@ -474,6 +494,19 @@ impl Editor {
             terminal: TerminalSettings {
                 term_type: self.term_type.clone(),
                 scrollback: number("Scrollback", &self.scrollback)?,
+                font: self.font.clone(),
+                font_size: match number::<u16>("Font size", &self.font_size)? {
+                    Some(n) if !przmterm_session::FONT_SIZES.contains(&n) => {
+                        return Err(format!(
+                            "Font size: from {} to {} points",
+                            przmterm_session::FONT_SIZES.start(),
+                            przmterm_session::FONT_SIZES.end()
+                        ));
+                    }
+                    n => n,
+                },
+                cursor: self.cursor,
+                cursor_blink: self.cursor_blink,
             },
             log: LogSettings {
                 enabled: self.log,
@@ -1322,6 +1355,66 @@ impl Editor {
             &mut self.scrollback,
             &cx.hint("terminal.scrollback"),
         );
+
+        ui.label("Font")
+            .on_hover_text("An installed monospace font for the terminal text");
+        ui.horizontal(|ui| {
+            let shown_name = self.font.as_ref().map(|f| {
+                if f.is_empty() {
+                    crate::fonts::BUILT_IN.to_string()
+                } else {
+                    f.clone()
+                }
+            });
+            egui::ComboBox::from_id_salt("terminal-font")
+                .width(250.0)
+                .height(320.0)
+                .selected_text(shown(shown_name, cx.hint("terminal.font")))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.font,
+                        Some(String::new()),
+                        crate::fonts::BUILT_IN,
+                    );
+                    match &self.font_families {
+                        Some(list) => {
+                            for family in list {
+                                ui.selectable_value(&mut self.font, Some(family.clone()), family);
+                            }
+                        }
+                        None => {
+                            ui.weak("Reading the installed fonts…");
+                        }
+                    }
+                });
+            reset(ui, &mut self.font, &cx.hint("terminal.font"));
+        });
+        ui.end_row();
+        field(
+            ui,
+            "Font size",
+            &mut self.font_size,
+            &cx.hint("terminal.font_size"),
+        );
+        ui.label("Cursor");
+        choice_pick(
+            ui,
+            &mut self.cursor,
+            cx.inherited.terminal.cursor.unwrap_or_default(),
+            &przmterm_session::CursorShape::ALL.map(|c| (c, crate::cursor_label(c))),
+            &cx.hint("terminal.cursor"),
+        );
+        ui.end_row();
+        ui.label("Cursor blink");
+        bool_pick(
+            ui,
+            &mut self.cursor_blink,
+            cx.inherited.terminal.cursor_blink.unwrap_or(false),
+            ["yes", "no"],
+            None,
+            &cx.hint("terminal.cursor_blink"),
+        );
+        ui.end_row();
 
         let row = ui.label("Log to file");
         if std::mem::take(&mut self.scroll_to_log) {

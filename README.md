@@ -338,12 +338,18 @@ changes, PrzmTerm refuses to connect and shows the old and new fingerprints.
 | Next / previous tab | Ctrl+Tab / Ctrl+Shift+Tab | same |
 | Copy | Ctrl+Shift+C, or Ctrl+C with a selection | ⌘C |
 | Paste | Ctrl+Shift+V or Ctrl+V | ⌘V |
-| Scroll back | wheel, Shift+PageUp/PageDown, Shift+Home/End | same |
+| Scroll back | wheel, scroll bar, Shift+PageUp/PageDown, Shift+Home/End | same |
 | Send BREAK (serial, Telnet) | Ctrl+Shift+B | ⌘⇧B |
 | Hide / show the session list | Ctrl+Shift+S | ⌘⇧S |
 
 Drag to select, double-click selects a word, triple-click a line. Right-click
-opens Copy / Paste / Select all.
+opens Copy / Paste / Select all. Text with line breaks is shown before it is
+pasted, to check or edit it.
+
+*Font and Cursor…* in a tab's menu picks the font (the built-in one or any
+installed monospace font), its size, the cursor (block, underline or bar) and
+whether it blinks; *Save* keeps them for the session. They are also in the
+session settings, so a folder or the defaults can set them for many sessions.
 
 These are the built-in shortcuts. **+** › *Keyboard shortcuts…* changes them
 and adds others: a key can send text (`show ip interface brief\r`), run an app
