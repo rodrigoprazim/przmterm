@@ -11,6 +11,24 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 - CI checks the dependencies with `cargo deny` on every push and weekly:
   RustSec security advisories, licences and crate sources (`deny.toml`).
+- A scroll bar beside the terminal: it shows where the view is in the
+  history; drag it or click its track to move.
+- Pasting text with line breaks first shows it in a box, where it can be
+  checked or edited: *Paste* (or Ctrl/⌘+Enter) sends it, *Cancel* drops it.
+
+### Fixed
+
+- Quotes and accents typed with dead keys (ABNT2 and international layouts)
+  reach the terminal; the key waiting for the next one shows at the cursor.
+- Text re-wraps when the terminal's width changes, so lines cut by a split
+  come back whole when it is separated (or the window widens).
+- A session tab's tooltip names where it is connected (`SSH user@host:port`,
+  or the serial line); a split tab lists each session.
+- Button bar: a button without a description shows no tooltip, and *Show
+  tooltips* is also in the button editor.
+- Session editor: with the vault locked, the vault entry list offers the
+  entries the sessions use (and the one set), plus *Unlock to see every
+  entry*.
 
 ## [0.8.0] - 2026-11-03
 

@@ -444,6 +444,13 @@ impl Screen {
         if cols == self.cols && rows == self.rows {
             return;
         }
+        // A new width re-wraps the text (as other terminals do), so lines cut
+        // by a narrower pane come back whole when it widens again. Full-screen
+        // programs redraw themselves instead.
+        if cols != self.cols && self.primary.is_none() {
+            self.reflow(cols, rows);
+            return;
+        }
         for line in &mut self.lines {
             line.resize(cols, Cell::default());
         }
@@ -477,6 +484,102 @@ impl Screen {
         self.scroll_bottom = rows - 1;
         self.cursor.row = self.cursor.row.min(rows - 1);
         self.cursor.col = self.cursor.col.min(cols - 1);
+        self.wrap_pending = false;
+    }
+
+    /// Re-wraps scrollback and screen to `cols`, keeping the cursor on the
+    /// same character.
+    fn reflow(&mut self, cols: usize, rows: usize) {
+        // Logical lines: physical rows joined where they soft-wrapped.
+        let cursor_at = self.scrollback.len() + self.cursor.row;
+        let cursor_offset = self.cursor.col + usize::from(self.wrap_pending);
+        let mut logical: Vec<Vec<Cell>> = Vec::new();
+        let mut cursor = (0usize, 0usize);
+        let mut current: Vec<Cell> = Vec::new();
+        let physical: Vec<Vec<Cell>> = self
+            .scrollback
+            .drain(..)
+            .chain(std::mem::take(&mut self.lines))
+            .collect();
+        // Blank rows below the cursor are not content: they come back as
+        // the screen's empty rows.
+        let used = physical
+            .iter()
+            .rposition(|l| l.iter().any(|c| *c != Cell::default()))
+            .map_or(0, |i| i + 1)
+            .max(cursor_at + 1)
+            .min(physical.len());
+        for (i, mut line) in physical.into_iter().take(used).enumerate() {
+            let wrapped = line.last().is_some_and(Cell::is_wrapped);
+            if let Some(last) = line.last_mut() {
+                last.flags &= !Cell::WRAPPED;
+            }
+            if i == cursor_at {
+                cursor = (logical.len(), current.len() + cursor_offset);
+            }
+            current.extend(line);
+            if !wrapped {
+                logical.push(std::mem::take(&mut current));
+            }
+        }
+        if !current.is_empty() {
+            logical.push(current);
+        }
+        // Trailing blanks go, except up to the cursor.
+        for (i, line) in logical.iter_mut().enumerate() {
+            let keep = if i == cursor.0 { cursor.1 } else { 0 };
+            let end = line
+                .iter()
+                .rposition(|c| *c != Cell::default())
+                .map_or(0, |p| p + 1)
+                .max(keep.min(line.len()));
+            line.truncate(end);
+        }
+        // Wrap each one again at the new width.
+        let mut out: Vec<Vec<Cell>> = Vec::new();
+        let mut new_cursor = (0usize, 0usize);
+        for (i, line) in logical.into_iter().enumerate() {
+            let start = out.len();
+            let mut row: Vec<Cell> = Vec::with_capacity(cols);
+            for cell in line {
+                // A wide character never splits across rows.
+                let need = if cell.is_wide() { 2 } else { 1 };
+                if row.len() + need > cols && !row.is_empty() {
+                    row.resize(cols, Cell::default());
+                    row[cols - 1].flags |= Cell::WRAPPED;
+                    out.push(std::mem::replace(&mut row, Vec::with_capacity(cols)));
+                }
+                row.push(cell);
+            }
+            row.resize(cols, Cell::default());
+            out.push(row);
+            if i == cursor.0 {
+                let r = cursor.1 / cols;
+                while out.len() < start + r + 1 {
+                    out.push(vec![Cell::default(); cols]);
+                }
+                new_cursor = (start + r, cursor.1 % cols);
+            }
+        }
+        if out.is_empty() {
+            out.push(vec![Cell::default(); cols]);
+        }
+        // The screen is the last rows, down to the cursor's.
+        let end = out.len().max(new_cursor.0 + 1);
+        let top = end.saturating_sub(rows);
+        let mut screen: Vec<Vec<Cell>> = out.split_off(top);
+        screen.resize(rows, vec![Cell::default(); cols]);
+        self.cols = cols;
+        self.rows = rows;
+        self.lines = screen;
+        for line in out {
+            self.push_scrollback(line);
+        }
+        self.cursor.row = (new_cursor.0 - top).min(rows - 1);
+        self.cursor.col = new_cursor.1.min(cols - 1);
+        self.display_offset = 0;
+        self.scroll_top = 0;
+        self.scroll_bottom = rows - 1;
         self.wrap_pending = false;
     }
 
@@ -1041,6 +1144,47 @@ impl Terminal {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn row_text(t: &Terminal, row: usize) -> String {
+        t.screen()
+            .line(row)
+            .iter()
+            .map(|c| c.ch)
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    }
+
+    #[test]
+    fn narrowing_and_widening_brings_lines_back() {
+        let mut t = term(20, 4, "abcdefghijklmnop\r\n$ ");
+        t.resize(8, 4);
+        assert_eq!(row_text(&t, 0), "abcdefgh");
+        assert_eq!(row_text(&t, 1), "ijklmnop");
+        assert_eq!(row_text(&t, 2), "$");
+        assert_eq!((t.screen().cursor().row, t.screen().cursor().col), (2, 2));
+        t.resize(20, 4);
+        assert_eq!(row_text(&t, 0), "abcdefghijklmnop");
+        assert_eq!(row_text(&t, 1), "$");
+        assert_eq!((t.screen().cursor().row, t.screen().cursor().col), (1, 2));
+        // What is typed next lands after the prompt.
+        t.feed(b"ls");
+        assert_eq!(row_text(&t, 1), "$ ls");
+    }
+
+    #[test]
+    fn reflow_moves_overflow_into_scrollback() {
+        let mut t = term(10, 3, "1234567890abcdefghij\r\nline2\r\n$ ");
+        t.resize(5, 3);
+        // 4 rows for the long line, 1 each for the others: 2 go to history.
+        assert_eq!(t.screen().scrollback_len(), 3);
+        assert_eq!(row_text(&t, 2), "$");
+        t.resize(10, 3);
+        assert_eq!(t.screen().scrollback_len(), 1, "as before: 4 rows, 3 shown");
+        assert_eq!(row_text(&t, 0), "abcdefghij");
+        assert_eq!(row_text(&t, 1), "line2");
+        assert_eq!(row_text(&t, 2), "$");
+    }
 
     fn term(cols: usize, rows: usize, input: &str) -> Terminal {
         let mut t = Terminal::with_scrollback(cols, rows, 100);

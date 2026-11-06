@@ -162,12 +162,9 @@ impl ButtonBarUi {
             let mut removed = None;
             for (i, button) in self.bar.tabs[tab].buttons.iter().enumerate() {
                 let mut response = ui.button(&button.label);
-                if self.bar.tooltips {
-                    response = response.on_hover_text(if button.description.is_empty() {
-                        button.send.clone()
-                    } else {
-                        button.description.clone()
-                    });
+                // Only a written description makes a tooltip.
+                if self.bar.tooltips && !button.description.trim().is_empty() {
+                    response = response.on_hover_text(button.description.trim());
                 }
                 if response.clicked() {
                     press = Some(Press {
@@ -251,6 +248,7 @@ impl ButtonBarUi {
         });
         let center = ctx.content_rect().center();
 
+        let mut tooltips_changed = false;
         if let Some(edit) = &mut self.button_edit {
             let mut done = None; // Some(true) save, Some(false) cancel
             egui::Window::new(if edit.index.is_some() {
@@ -313,6 +311,18 @@ impl ButtonBarUi {
                                 .desired_width(320.0),
                         );
                         ui.end_row();
+                        ui.label("");
+                        if ui
+                            .checkbox(&mut self.bar.tooltips, "Show tooltips")
+                            .on_hover_text(
+                                "For every button on the bar; a button without a \
+                                 description never shows one",
+                            )
+                            .changed()
+                        {
+                            tooltips_changed = true;
+                        }
+                        ui.end_row();
                     });
                 if let Some(err) = &edit.error {
                     ui.colored_label(ui.visuals().error_fg_color, err);
@@ -355,6 +365,9 @@ impl ButtonBarUi {
                 Some(false) => self.button_edit = None,
                 None => {}
             }
+        }
+        if tooltips_changed {
+            self.save(config_dir);
         }
 
         if let Some(edit) = &mut self.tab_edit {

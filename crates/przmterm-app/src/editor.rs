@@ -76,6 +76,8 @@ pub struct Editor {
     credential: Option<String>,
     /// Names in the vault, while it is unlocked (set by the app each frame).
     pub vault_names: Option<Vec<String>>,
+    /// The entries the session files name, for when the vault is locked.
+    pub known_vault_names: Option<Vec<String>>,
     /// The vault window was asked for.
     vault_request: bool,
     identity_file: String,
@@ -353,6 +355,7 @@ impl Editor {
             username: text(&s.username),
             credential: s.credential.clone(),
             vault_names: None,
+            known_vault_names: None,
             vault_request: false,
             identity_file: text(&s.identity_file),
             serial_port: text(&s.serial_port),
@@ -1182,7 +1185,23 @@ impl Editor {
                             }
                         }
                         None => {
-                            ui.weak("Unlock the vault to list its entries");
+                            // Locked: the names the sessions use, and the
+                            // one set here, so a chosen entry is never
+                            // missing from the list.
+                            let mut names = self.known_vault_names.clone().unwrap_or_default();
+                            if let Some(current) = self.credential.clone().filter(|c| !c.is_empty())
+                                && !names.contains(&current)
+                            {
+                                names.push(current);
+                            }
+                            for name in &names {
+                                ui.selectable_value(&mut self.credential, Some(name.clone()), name);
+                            }
+                            ui.separator();
+                            if ui.button("Unlock to see every entry…").clicked() {
+                                self.vault_request = true;
+                                ui.close();
+                            }
                         }
                     }
                 });

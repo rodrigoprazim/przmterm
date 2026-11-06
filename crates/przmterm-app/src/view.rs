@@ -18,6 +18,8 @@ pub const DEFAULT_BG: [u8; 3] = [24, 26, 31];
 const CURSOR: Color32 = Color32::from_rgb(110, 200, 255);
 const SELECTION: Color32 = Color32::from_rgb(58, 92, 140);
 /// Lines scrolled per wheel notch on the alternate screen (sent as arrow keys).
+/// Width kept at the right of the terminal for the scroll bar.
+const SCROLLBAR_W: f32 = 10.0;
 const ALT_SCROLL_LINES: usize = 3;
 
 /// The 16 ANSI colours, tuned to stay readable on the dark background.
@@ -174,6 +176,8 @@ pub struct ViewOutput {
     pub clicked: bool,
     /// "Send BREAK" was chosen in the context menu.
     pub send_break: bool,
+    /// Pasted text with line breaks, to confirm before it is sent.
+    pub paste: Option<String>,
 }
 
 pub struct TerminalView {
@@ -185,6 +189,11 @@ pub struct TerminalView {
     focus_requested: bool,
     selection: Option<Selection>,
     scroll_accum: f32,
+    /// Text being composed by the input method: a dead key (´ ~ " on many
+    /// layouts) waiting for the next one, or CJK input. Shown at the cursor.
+    preedit: String,
+    /// A multi-line paste waiting for the app to confirm it.
+    pending_paste: Option<String>,
 }
 
 impl Default for TerminalView {
@@ -196,6 +205,8 @@ impl Default for TerminalView {
             focus_requested: false,
             selection: None,
             scroll_accum: 0.0,
+            preedit: String::new(),
+            pending_paste: None,
         }
     }
 }
@@ -234,8 +245,9 @@ impl TerminalView {
         }
         let focused = response.has_focus();
 
-        // Fit the grid to the widget.
-        let inner = rect.shrink(6.0);
+        // Fit the grid to the widget, leaving room for the scroll bar.
+        let mut inner = rect.shrink(6.0);
+        inner.max.x -= SCROLLBAR_W;
         let cols = ((inner.width() / cell_w).floor() as usize).max(1);
         let rows = ((inner.height() / cell_h).floor() as usize).max(1);
         let mut resized = None;
@@ -277,6 +289,13 @@ impl TerminalView {
 
         let offset = screen.display_offset();
         let cursor = screen.cursor();
+        let cursor_cell = Rect::from_min_size(
+            Pos2::new(
+                inner.left() + cursor.col as f32 * cell_w,
+                inner.top() + (cursor.row + offset).min(screen.rows()) as f32 * cell_h,
+            ),
+            Vec2::new(cell_w, cell_h),
+        );
         if screen.cursor_visible() && cursor.row + offset < screen.rows() {
             let min = Pos2::new(
                 inner.left() + cursor.col as f32 * cell_w,
@@ -294,6 +313,7 @@ impl TerminalView {
                 );
             }
         }
+        self.scroll_bar(ui, response.id, rect, term);
         if offset > 0 {
             painter.text(
                 rect.right_top() + Vec2::new(-10.0, 8.0),
@@ -304,9 +324,34 @@ impl TerminalView {
             );
         }
 
+        // A dead key waiting for the next one.
+        if focused && !self.preedit.is_empty() {
+            let galley = painter.layout_no_wrap(self.preedit.clone(), font_id.clone(), CURSOR);
+            let at = Rect::from_min_size(cursor_cell.min, galley.size().max(cursor_cell.size()));
+            painter.rect_filled(at, CornerRadius::ZERO, rgb(DEFAULT_BG));
+            painter.galley(at.min, galley, CURSOR);
+            painter.line_segment(
+                [at.left_bottom(), at.right_bottom()],
+                Stroke::new(1.0, CURSOR),
+            );
+        }
+
         // `active` is false while a dialog is open: its fields get the keys.
         if focused && active {
+            // Lets the input method work here: dead keys (quotes and accents
+            // on ABNT2 and international layouts) and CJK input arrive as
+            // composed text.
+            ui.output_mut(|o| {
+                o.ime = Some(egui::output::IMEOutput {
+                    purpose: egui::IMEPurpose::Terminal,
+                    rect,
+                    cursor_rect: cursor_cell,
+                    should_interrupt_composition: false,
+                });
+            });
             self.handle_keys(ui, response.id, term, &mut input);
+        } else {
+            self.preedit.clear();
         }
         let send_break = self.context_menu(&response, term, &mut input);
 
@@ -319,7 +364,57 @@ impl TerminalView {
             resized,
             clicked,
             send_break,
+            paste: self.pending_paste.take(),
         }
+    }
+
+    /// The scroll bar at the right: where the view is in the history; drag
+    /// the thumb or click the track to move through it.
+    fn scroll_bar(&mut self, ui: &egui::Ui, id: egui::Id, rect: Rect, term: &mut Terminal) {
+        let screen = term.screen();
+        let history = screen.scrollback_len();
+        if history == 0 || screen.in_alt_screen() {
+            return;
+        }
+        let track = Rect::from_min_max(
+            Pos2::new(rect.right() - SCROLLBAR_W, rect.top() + 2.0),
+            Pos2::new(rect.right() - 2.0, rect.bottom() - 2.0),
+        );
+        let response = ui.interact(track, id.with("scrollbar"), Sense::click_and_drag());
+        let rows = screen.rows();
+        let total = (history + rows) as f32;
+        let thumb_h = (track.height() * rows as f32 / total)
+            .max(24.0)
+            .min(track.height());
+        let room = (track.height() - thumb_h).max(1.0);
+        // The top of the view, in lines from the oldest one.
+        let top_line = (history - screen.display_offset()) as f32;
+        let thumb_top = track.top() + room * top_line / history as f32;
+        let thumb = Rect::from_min_size(
+            Pos2::new(track.left(), thumb_top),
+            Vec2::new(track.width(), thumb_h),
+        );
+        if let Some(pointer) = response.interact_pointer_pos()
+            && (response.dragged() || response.clicked())
+        {
+            // The thumb follows the pointer, centred on it.
+            let y = (pointer.y - track.top() - thumb_h / 2.0).clamp(0.0, room);
+            let top = (y / room * history as f32).round() as usize;
+            let want = history - top.min(history);
+            let now = screen.display_offset();
+            term.screen_mut()
+                .scroll_display(want as isize - now as isize);
+        }
+        let hot = response.hovered() || response.dragged();
+        let painter = ui.painter();
+        if hot {
+            painter.rect_filled(track, CornerRadius::same(4), Color32::from_white_alpha(12));
+        }
+        painter.rect_filled(
+            thumb,
+            CornerRadius::same(4),
+            Color32::from_white_alpha(if hot { 120 } else { 60 }),
+        );
     }
 
     fn handle_mouse(
@@ -434,7 +529,12 @@ impl TerminalView {
         for event in events {
             match event {
                 egui::Event::Text(text) => input.extend_from_slice(text.as_bytes()),
-                egui::Event::Paste(text) => input.extend(encode_paste(&text, bracketed)),
+                egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
+                    self.preedit.clear();
+                    input.extend_from_slice(text.as_bytes());
+                }
+                egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => self.preedit = text,
+                egui::Event::Paste(text) => self.paste(text, bracketed, input),
                 egui::Event::Copy => {
                     if let Some(text) = self.selection.and_then(|s| s.text(term.screen())) {
                         ui.ctx().copy_text(text);
@@ -464,7 +564,7 @@ impl TerminalView {
                         }
                         Key::V if ctrl_shift => {
                             if let Some(text) = read_clipboard() {
-                                input.extend(encode_paste(&text, bracketed));
+                                self.paste(text, bracketed, input);
                             }
                         }
                         Key::PageUp if modifiers.shift => term.screen_mut().scroll_display(page),
@@ -482,6 +582,16 @@ impl TerminalView {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// Pastes `text`; with line breaks it waits for the user to confirm
+    /// (each line would run as a command).
+    fn paste(&mut self, text: String, bracketed: bool, input: &mut Vec<u8>) {
+        if text.contains(['\n', '\r']) {
+            self.pending_paste = Some(text);
+        } else {
+            input.extend(encode_paste(&text, bracketed));
         }
     }
 
@@ -506,7 +616,7 @@ impl TerminalView {
             }
             if ui.button("Paste").clicked() {
                 if let Some(t) = read_clipboard() {
-                    input.extend(encode_paste(&t, bracketed));
+                    self.paste(t, bracketed, input);
                 }
                 ui.close();
             }

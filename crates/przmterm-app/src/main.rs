@@ -114,6 +114,54 @@ fn pane_name(pane: &Pane) -> String {
     }
 }
 
+/// A multi-line paste waiting to be confirmed.
+#[derive(Default)]
+struct PasteConfirm {
+    tab: usize,
+    pane: usize,
+    text: String,
+}
+
+/// `Cmd+key` on macOS, `Ctrl+key` elsewhere, for hints.
+fn keys_label(key: &str) -> String {
+    if cfg!(target_os = "macos") {
+        format!("⌘{key}")
+    } else {
+        format!("Ctrl+{key}")
+    }
+}
+
+/// Where a pane is connected, for tooltips: `user@host:port` (the port only
+/// when it is not the protocol's usual one), the serial line, or `None`.
+fn pane_target(pane: &Pane) -> Option<String> {
+    let session = pane.origin.as_ref()?;
+    match &session.target {
+        przmterm_session::Target::Network {
+            host,
+            port,
+            username,
+        } => {
+            let usual = session.protocol.default_port().unwrap_or(0);
+            let user = username
+                .as_ref()
+                .map(|u| format!("{u}@"))
+                .unwrap_or_default();
+            let port = if *port == usual {
+                String::new()
+            } else {
+                format!(":{port}")
+            };
+            let protocol = match session.protocol {
+                przmterm_core::Protocol::Telnet => "Telnet",
+                _ => "SSH",
+            };
+            Some(format!("{protocol} {user}{host}{port}"))
+        }
+        przmterm_session::Target::Serial(line) => Some(format!("Serial {line}")),
+        przmterm_session::Target::Local => None,
+    }
+}
+
 /// Moves the panes `picks` (tab, pane) of other tabs into the tab `into`,
 /// after its active pane, and drops the tabs left empty. Returns the new
 /// index of `into`.
@@ -380,6 +428,8 @@ struct PrzmApp {
     keymap_editor: Option<keymap::KeymapEditor>,
     /// The Xmodem/Ymodem/Zmodem dialog.
     transfer_dialog: Option<transfer::TransferDialog>,
+    /// Pasted text with line breaks, shown to check before it is sent.
+    paste_confirm: Option<PasteConfirm>,
     /// SFTP browsers.
     sftp_windows: Vec<sftp::SftpBrowser>,
     sftp_next: u64,
@@ -499,6 +549,7 @@ impl PrzmApp {
             script_prompts: Default::default(),
             script_guide: None,
             transfer_dialog: None,
+            paste_confirm: None,
             sftp_windows: Vec::new(),
             sftp_next: 0,
             sftp_pending: None,
@@ -1200,6 +1251,74 @@ impl PrzmApp {
 }
 
 impl PrzmApp {
+    /// Shows a multi-line paste to check (and edit) before it is sent.
+    fn paste_dialog(&mut self, ctx: &egui::Context, center: egui::Pos2, escape: bool) {
+        let Some(confirm) = &mut self.paste_confirm else {
+            return;
+        };
+        // Taken before the text box sees it (there Enter adds a line).
+        let send_keys =
+            ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter));
+        let lines = confirm.text.lines().count().max(1);
+        let mut done = None;
+        egui::Window::new("Paste")
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(center)
+            .collapsible(false)
+            .resizable(false)
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                ui.label(format!(
+                    "The text has {lines} line{}: each line break works as Enter, \
+                     so every line runs as a command. Check it, or edit it here.",
+                    if lines == 1 { "" } else { "s" }
+                ));
+                ui.add_space(4.0);
+                egui::ScrollArea::vertical()
+                    .max_height(320.0)
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(&mut confirm.text)
+                                .font(egui::TextStyle::Monospace)
+                                .desired_rows(lines.clamp(3, 14))
+                                .desired_width(560.0),
+                        );
+                    });
+                ui.horizontal(|ui| {
+                    ui.weak(format!("{} to paste", keys_label("Enter")));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Paste").clicked() || send_keys {
+                            done = Some(true);
+                        }
+                        if ui.button("Cancel").clicked() || escape {
+                            done = Some(false);
+                        }
+                    });
+                });
+            });
+        match done {
+            Some(true) => {
+                let PasteConfirm { tab, pane, text } =
+                    self.paste_confirm.take().unwrap_or_default();
+                let broadcast = self.broadcast && tab == self.active_tab;
+                if let Some(t) = self.tabs.get_mut(tab) {
+                    let bracketed = t
+                        .panes
+                        .get(pane)
+                        .is_some_and(|p| p.term.screen().bracketed_paste());
+                    let bytes = crate::input::encode_paste(&text, bracketed);
+                    for (i, p) in t.panes.iter_mut().enumerate() {
+                        if (i == pane || broadcast) && !p.transport.is_closed() {
+                            p.send(&bytes);
+                        }
+                    }
+                }
+            }
+            Some(false) => self.paste_confirm = None,
+            None => {}
+        }
+    }
+
     fn modal_open(&self) -> bool {
         self.editor.is_some()
             || self.name_dialog.is_some()
@@ -1217,6 +1336,7 @@ impl PrzmApp {
             || self.script_guide.is_some()
             || self.keymap_editor.is_some()
             || self.transfer_dialog.is_some()
+            || self.paste_confirm.is_some()
             || self.bundle_dialog.is_some()
             || self.vault.modal()
     }
@@ -1351,6 +1471,7 @@ impl PrzmApp {
         let center = ctx.content_rect().center();
         let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
         let enter = ctx.input(|i| i.key_pressed(egui::Key::Enter));
+        self.paste_dialog(ctx, center, escape);
         if let Some(request) = self.confirm_close.clone() {
             let (title, text) = match &request {
                 CloseRequest::Pane => (
@@ -1800,6 +1921,16 @@ impl PrzmApp {
         }
         if let Some(editor) = &mut self.editor {
             editor.vault_names = self.vault.names();
+            // While the vault is locked its names are hidden: offer the ones
+            // the sessions use (read once per editor).
+            if editor.known_vault_names.is_none() {
+                editor.known_vault_names = Some(
+                    self.config_dir
+                        .as_deref()
+                        .map(przmterm_session::vault::names_in_use)
+                        .unwrap_or_default(),
+                );
+            }
             if editor.take_vault_request() {
                 self.vault.open_window();
             }
@@ -2948,16 +3079,21 @@ impl eframe::App for PrzmApp {
                     } else if !tab.pane().transport.weak_algorithms().is_empty() {
                         title = format!("⚠ {title}");
                     }
-                    // A split tab lists its sessions.
+                    // The session and where it is connected; a split tab
+                    // lists each of its sessions.
+                    let describe = |p: &Pane| match pane_target(p) {
+                        Some(target) => format!("{}\n{target}", pane_name(p)),
+                        None => pane_name(p),
+                    };
                     let hover = if tab.panes.len() > 1 {
                         let names: Vec<String> = tab
                             .panes
                             .iter()
-                            .map(|p| format!("• {}", pane_name(p)))
+                            .map(|p| format!("• {}", describe(p).replace('\n', "\n   ")))
                             .collect();
                         format!("{}\nRight-click for more", names.join("\n"))
                     } else {
-                        "Right-click for more".to_string()
+                        format!("{}\nRight-click for more", describe(tab.pane()))
                     };
                     let tab_button = ui
                         .selectable_label(i == self.active_tab, title)
@@ -2999,6 +3135,7 @@ impl eframe::App for PrzmApp {
         let modal = self.modal_open();
         // What was typed in the active pane, for "send to all".
         let mut typed: Option<Vec<u8>> = None;
+        let mut pasted: Option<(usize, String)> = None;
         let broadcast = self.broadcast;
         egui::CentralPanel::no_frame().show(ui, |ui| {
             let amber = broadcast_color(ui.visuals());
@@ -3083,6 +3220,9 @@ impl eframe::App for PrzmApp {
                 if out.clicked && !active {
                     actions.push(Action::FocusPane(i));
                 }
+                if let Some(text) = out.paste {
+                    pasted = Some((i, text));
+                }
                 if out.send_break {
                     if !active {
                         actions.push(Action::FocusPane(i));
@@ -3112,6 +3252,14 @@ impl eframe::App for PrzmApp {
                 }
             }
         });
+
+        if let Some((pane, text)) = pasted {
+            self.paste_confirm = Some(PasteConfirm {
+                tab: self.active_tab,
+                pane,
+                text,
+            });
+        }
 
         if self.broadcast
             && let Some(bytes) = typed

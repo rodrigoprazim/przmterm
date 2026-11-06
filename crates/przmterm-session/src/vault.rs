@@ -345,13 +345,35 @@ impl Vault {
 /// Session and folder files (and the global settings) that name the vault
 /// entry `name`.
 pub fn files_using(config_dir: &Path, name: &str) -> Vec<PathBuf> {
+    references(config_dir)
+        .into_iter()
+        .filter(|(_, n)| n == name)
+        .map(|(path, _)| path)
+        .collect()
+}
+
+/// The vault entries the sessions name, without opening the vault (whose
+/// names are encrypted), sorted.
+pub fn names_in_use(config_dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = references(config_dir)
+        .into_iter()
+        .map(|(_, n)| n)
+        .filter(|n| !n.is_empty())
+        .collect();
+    names.sort_by_key(|n| n.to_lowercase());
+    names.dedup();
+    names
+}
+
+/// Every file that names a vault entry, with the name.
+fn references(config_dir: &Path) -> Vec<(PathBuf, String)> {
     let mut found = Vec::new();
     let mut check = |path: &Path| {
         if let Ok(text) = std::fs::read_to_string(path)
             && let Ok(table) = toml::from_str::<toml::Table>(&text)
-            && table.get("credential").and_then(|v| v.as_str()) == Some(name)
+            && let Some(name) = table.get("credential").and_then(|v| v.as_str())
         {
-            found.push(path.to_path_buf());
+            found.push((path.to_path_buf(), name.to_string()));
         }
     };
     check(&config_dir.join(crate::DEFAULTS_FILE));
@@ -485,6 +507,7 @@ mod tests {
             "host = '10.0.0.2'\ncredential = 'lab'\n",
         );
         assert_eq!(files_using(dir.path(), "NOC").len(), 2);
+        assert_eq!(names_in_use(dir.path()), ["lab", "NOC"]);
         assert_eq!(rename_references(dir.path(), "NOC", "Ops").unwrap(), 2);
         assert!(files_using(dir.path(), "NOC").is_empty());
         assert_eq!(files_using(dir.path(), "Ops").len(), 2);

@@ -63,7 +63,8 @@ pub struct ButtonTab {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ButtonBar {
-    /// Show a button's description (or text) when the pointer rests on it.
+    /// Show a button's description when the pointer rests on it (a button
+    /// without one shows nothing).
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     pub tooltips: bool,
     #[serde(default, rename = "tab")]
