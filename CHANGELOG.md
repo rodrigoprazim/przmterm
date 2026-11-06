@@ -22,24 +22,25 @@ All notable changes to PrzmTerm are recorded here. The format follows
 - Font and cursor per session: *Font and Cursor…* in the tab menu (was
   *Font…*) and the session settings pick the font (built-in or any installed
   monospace font), its size, the cursor shape (block, underline, bar), its
-  colour and blinking. Changes show at once; *Save* keeps them for the
-  session.
+  colour and blinking. Changes show at once; *Cancel* (or Esc) undoes them,
+  *Apply* keeps them in the tab and *Save* also in the session's settings.
 
 ### Changed
 
 - The session, folder and global settings are split into pages chosen from
   a menu on the left (Connection, Login, SSH, Serial port, Terminal,
   Automation, Logging): the window stays one size, and its scroll bar no
-  longer covers the buttons beside the fields.
+  longer covers the buttons beside the fields. Related options sit under a
+  title (Tunnels, Triggers, Font, Cursor) instead of repeating it in every
+  label, and the help for log file names opens under its field.
 - Fonts: the list shows every installed font that can draw text, the
   monospace ones first and the rest apart, with a search box; fonts that
   cannot be drawn (bitmap-only, emoji) are left out.
 - One button size and drawn icons in every dialog: reset (↺), remove (✕),
   the lists of shells and jump hosts, and the SFTP browser's parent folder
   and refresh.
-- The locked password vault (and the unlock asked for from the session
-  editor) opens as a small window that fits its field.
-
+- The locked password vault and the unlock asked for from the session
+  editor open as small windows, as wide as the password field.
 - A session tab holds its close button: the title, a thin divider and a ✕
   in the tab's own colours, in one box; the whole close part is the button
   and lights up on its own.

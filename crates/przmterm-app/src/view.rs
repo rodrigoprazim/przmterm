@@ -182,6 +182,16 @@ pub struct ViewOutput {
     pub paste: Option<String>,
 }
 
+/// A pane's font and cursor.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Look {
+    pub font_size: f32,
+    pub font_name: Option<String>,
+    pub cursor: CursorShape,
+    pub cursor_blink: bool,
+    pub cursor_color: Option<[u8; 3]>,
+}
+
 pub struct TerminalView {
     pub font_size: f32,
     /// The installed font family chosen (`None`: the built-in one).
@@ -252,11 +262,26 @@ impl TerminalView {
 
     /// Takes the font and cursor of `other` (a clone of its session).
     pub fn look_like(&mut self, other: &TerminalView) {
-        self.font_size = other.font_size;
-        self.font_name = other.font_name.clone();
-        self.cursor = other.cursor;
-        self.cursor_blink = other.cursor_blink;
-        self.cursor_color = other.cursor_color;
+        self.set_look(&other.look());
+    }
+
+    /// The font and cursor, to put back later.
+    pub fn look(&self) -> Look {
+        Look {
+            font_size: self.font_size,
+            font_name: self.font_name.clone(),
+            cursor: self.cursor,
+            cursor_blink: self.cursor_blink,
+            cursor_color: self.cursor_color,
+        }
+    }
+
+    pub fn set_look(&mut self, look: &Look) {
+        self.font_size = look.font_size;
+        self.font_name = look.font_name.clone();
+        self.cursor = look.cursor;
+        self.cursor_blink = look.cursor_blink;
+        self.cursor_color = look.cursor_color;
     }
 
     /// The colour the cursor is drawn in.

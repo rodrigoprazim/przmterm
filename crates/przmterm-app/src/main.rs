@@ -207,6 +207,14 @@ fn tab_widget(ui: &mut egui::Ui, title: &str, active: bool) -> (egui::Response, 
     (response, close)
 }
 
+/// The Font and Cursor dialog: its tab, and how the panes looked before,
+/// for Cancel.
+#[derive(Clone)]
+struct FontDialog {
+    tab: usize,
+    before: Vec<view::Look>,
+}
+
 /// A multi-line paste waiting to be confirmed.
 #[derive(Default)]
 struct PasteConfirm {
@@ -516,7 +524,7 @@ struct PrzmApp {
     /// The "Rename" dialog: tab and the name being typed.
     tab_rename: Option<(usize, String)>,
     /// The "Font…" dialog, for this tab.
-    font_dialog: Option<usize>,
+    font_dialog: Option<FontDialog>,
     /// The "Split" dialog.
     split_dialog: Option<SplitDialog>,
     /// The keyboard shortcuts in force.
@@ -892,7 +900,14 @@ impl PrzmApp {
                     });
                 }
             }
-            Action::FontTab(t) => self.font_dialog = Some(t),
+            Action::FontTab(t) => {
+                if let Some(tab) = self.tabs.get(t) {
+                    self.font_dialog = Some(FontDialog {
+                        tab: t,
+                        before: tab.panes.iter().map(|p| p.view.look()).collect(),
+                    });
+                }
+            }
             Action::ToggleBroadcast => {
                 if self.broadcast {
                     self.broadcast = false;
@@ -1914,8 +1929,10 @@ impl PrzmApp {
                 let _ = prompt.reply.send(ok.then(|| prompt.answer.clone()));
             }
         }
-        if let Some(t) = self.font_dialog {
+        if let Some(FontDialog { tab: t, before }) = self.font_dialog.clone() {
+            // Esc or Cancel puts the panes back as they were.
             let mut close = escape;
+            let mut revert = escape;
             let mut save = false;
             let mut reload = false;
             let families = self.fonts.families().cloned();
@@ -1940,11 +1957,13 @@ impl PrzmApp {
                     .collapsible(false)
                     .resizable(false)
                     .show(ctx, |ui| {
-                        egui::Grid::new("font-dialog")
+                        ui.label(egui::RichText::new("Font").strong());
+                        egui::Grid::new("font-dialog-font")
                             .num_columns(2)
+                            .min_col_width(60.0)
                             .spacing([12.0, 8.0])
                             .show(ui, |ui| {
-                                ui.label("Font");
+                                ui.label("Family");
                                 font_picker(ui, "font-dialog-family", &mut name, families.as_ref());
                                 ui.end_row();
                                 ui.label("Size");
@@ -1955,7 +1974,15 @@ impl PrzmApp {
                                 );
                                 size = f32::from(points);
                                 ui.end_row();
-                                ui.label("Cursor");
+                            });
+                        ui.add_space(8.0);
+                        ui.label(egui::RichText::new("Cursor").strong());
+                        egui::Grid::new("font-dialog-cursor")
+                            .num_columns(2)
+                            .min_col_width(60.0)
+                            .spacing([12.0, 8.0])
+                            .show(ui, |ui| {
+                                ui.label("Shape");
                                 ui.horizontal(|ui| {
                                     for shape in przmterm_session::CursorShape::ALL {
                                         ui.selectable_value(
@@ -1983,46 +2010,58 @@ impl PrzmApp {
                                     }
                                 });
                                 ui.end_row();
-                                ui.label("");
-                                ui.checkbox(&mut blink, "Blink");
+                                ui.label("Blink");
+                                ui.checkbox(&mut blink, "");
                                 ui.end_row();
                             });
                         ui.add_space(4.0);
                         ui.weak(match &saved_to {
                             Some(name) => format!(
-                                "Changes show at once in this tab. Save to keep them for {name}."
+                                "Changes show at once. Apply keeps them in this tab; \
+                                 Save keeps them for {name} too."
                             ),
-                            None => "Changes show at once in this tab, until it closes.".into(),
+                            None => "Changes show at once. Apply keeps them in this tab.".into(),
                         });
                         ui.horizontal(|ui| {
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    if saved_to.is_some() {
-                                        if ui
+                                    if saved_to.is_some()
+                                        && ui
                                             .button("Save")
                                             .on_hover_text("Keep them in the session's settings")
                                             .clicked()
-                                        {
-                                            save = true;
-                                            close = true;
-                                        }
-                                        if ui.button("Close").clicked() {
-                                            close = true;
-                                        }
-                                    } else if ui.button("Close").clicked() || enter {
+                                    {
+                                        save = true;
                                         close = true;
+                                    }
+                                    if ui
+                                        .button("Apply")
+                                        .on_hover_text("Keep them in this tab, until it closes")
+                                        .clicked()
+                                    {
+                                        close = true;
+                                    }
+                                    if ui.button("Cancel").clicked() {
+                                        close = true;
+                                        revert = true;
                                     }
                                 },
                             );
                         });
                     });
-                for pane in &mut tab.panes {
-                    pane.view.font_size = size;
-                    pane.view.font_name = name.clone();
-                    pane.view.cursor = cursor;
-                    pane.view.cursor_blink = blink;
-                    pane.view.cursor_color = color;
+                if revert {
+                    for (pane, look) in tab.panes.iter_mut().zip(&before) {
+                        pane.view.set_look(look);
+                    }
+                } else {
+                    for pane in &mut tab.panes {
+                        pane.view.font_size = size;
+                        pane.view.font_name = name.clone();
+                        pane.view.cursor = cursor;
+                        pane.view.cursor_blink = blink;
+                        pane.view.cursor_color = color;
+                    }
                 }
                 if save && let Some(session) = tab.pane_mut().origin.as_mut() {
                     let result = przmterm_session::update_session_file(&session.path, |s| {

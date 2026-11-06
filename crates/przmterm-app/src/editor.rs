@@ -717,7 +717,7 @@ impl Editor {
                 if !pages.contains(&self.page) {
                     self.page = Page::General;
                 }
-                let height = (ctx.content_rect().height() - 260.0).clamp(220.0, 400.0);
+                let height = (ctx.content_rect().height() - 260.0).clamp(210.0, 240.0);
                 let row = ui.horizontal_top(|ui| {
                     ui.vertical(|ui| {
                         ui.set_width(118.0);
@@ -735,7 +735,10 @@ impl Editor {
                     ui.add_space(14.0);
                     // A fixed box for the page, so the window keeps its
                     // size; long pages scroll inside it.
-                    ui.allocate_ui(egui::vec2(520.0, height), |ui| {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(520.0, height),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
                         ui.set_min_size(egui::vec2(520.0, height));
                         // The scroll bar takes its own room instead of
                         // covering the buttons at the right edge.
@@ -744,7 +747,8 @@ impl Editor {
                             .id_salt(("editor-page", self.page))
                             .auto_shrink([false, false])
                             .show(ui, |ui| self.form(ui, &cx, root));
-                    });
+                        },
+                    );
                 });
                 let x = row.response.rect.left() + 118.0 + 7.0;
                 ui.painter().vline(
@@ -752,39 +756,6 @@ impl Editor {
                     row.response.rect.y_range(),
                     ui.visuals().widgets.noninteractive.bg_stroke,
                 );
-
-                if self.show_log_help {
-                    ui.add_space(4.0);
-                    egui::Frame::group(ui.style()).show(ui, |ui| {
-                        ui.label(egui::RichText::new(LOG_HELP).monospace().size(12.0));
-                        let template = opt(&self.log_path).unwrap_or_else(|| {
-                            inherited
-                                .log
-                                .path
-                                .clone()
-                                .unwrap_or(przmterm_session::DEFAULT_LOG_TEMPLATE.into())
-                        });
-                        let name = opt(&self.name).unwrap_or_else(|| "session".into());
-                        let host = opt(&self.host).unwrap_or_else(|| "host".into());
-                        let file = przmterm_session::expand_log_template(
-                            &template,
-                            &name,
-                            &host,
-                            &chrono::Local::now(),
-                        );
-                        let file = if file.is_absolute() {
-                            file
-                        } else {
-                            let dir = opt(&self.log_dir)
-                                .or_else(|| inherited.log.dir.clone())
-                                .map(|d| przmterm_session::expand_tilde(&d))
-                                .unwrap_or_else(|| config_dir.join(przmterm_session::LOGS_DIR));
-                            dir.join(file)
-                        };
-                        ui.add_space(4.0);
-                        ui.label(format!("Next log file: {}", tilde(&file)));
-                    });
-                }
 
                 if let Some(err) = &self.error {
                     ui.add_space(4.0);
@@ -813,6 +784,39 @@ impl Editor {
             result = EditorResult::Cancel;
         }
         result
+    }
+
+    /// The log file name's variables, and the next file's name.
+    fn log_help(&self, ui: &mut egui::Ui, cx: &Context) {
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.label(egui::RichText::new(LOG_HELP).monospace().size(12.0));
+            let template = opt(&self.log_path).unwrap_or_else(|| {
+                cx.inherited
+                    .log
+                    .path
+                    .clone()
+                    .unwrap_or(przmterm_session::DEFAULT_LOG_TEMPLATE.into())
+            });
+            let name = opt(&self.name).unwrap_or_else(|| "session".into());
+            let host = opt(&self.host).unwrap_or_else(|| "host".into());
+            let file = przmterm_session::expand_log_template(
+                &template,
+                &name,
+                &host,
+                &chrono::Local::now(),
+            );
+            let file = if file.is_absolute() {
+                file
+            } else {
+                let dir = opt(&self.log_dir)
+                    .or_else(|| cx.inherited.log.dir.clone())
+                    .map(|d| przmterm_session::expand_tilde(&d))
+                    .unwrap_or_else(|| cx.config_dir.join(przmterm_session::LOGS_DIR));
+                dir.join(file)
+            };
+            ui.add_space(4.0);
+            ui.label(format!("Next log file: {}", tilde(&file)));
+        });
     }
 
     /// The pages this editor shows, in the side menu's order.
@@ -873,11 +877,41 @@ impl Editor {
                 }
             }),
             Page::Login => grid(ui, "editor-login", |ui| self.login_fields(ui, cx)),
-            Page::Ssh => grid(ui, "editor-ssh", |ui| self.ssh_fields(ui, cx)),
+            Page::Ssh => {
+                grid(ui, "editor-ssh", |ui| self.ssh_fields(ui, cx));
+                section(
+                    ui,
+                    "Tunnels",
+                    "Port forwarding, opened after login and closed with the session.",
+                );
+                self.tunnels_ui(ui, cx);
+            }
             Page::Serial => grid(ui, "editor-serial", |ui| self.serial_fields(ui, cx)),
-            Page::Terminal => grid(ui, "editor-terminal", |ui| self.terminal_fields(ui, cx)),
-            Page::Automation => grid(ui, "editor-automation", |ui| self.automation_fields(ui, cx)),
-            Page::Logging => grid(ui, "editor-logging", |ui| self.log_fields(ui, cx)),
+            Page::Terminal => {
+                grid(ui, "editor-terminal", |ui| self.terminal_fields(ui, cx));
+                section(ui, "Font", "");
+                grid(ui, "editor-font", |ui| self.font_fields(ui, cx));
+                section(ui, "Cursor", "");
+                grid(ui, "editor-cursor", |ui| self.cursor_fields(ui, cx));
+            }
+            Page::Automation => {
+                grid(ui, "editor-automation", |ui| self.automation_fields(ui, cx));
+                section(
+                    ui,
+                    "Triggers",
+                    "When a text shows up in the output, type an answer: --More-- → space, \
+                     [confirm] → Enter, a device's prompt → a command.",
+                );
+                self.triggers_ui(ui, cx);
+            }
+            Page::Logging => {
+                grid(ui, "editor-logging", |ui| self.log_fields(ui, cx));
+                // Right under the file name it explains.
+                if self.show_log_help {
+                    ui.add_space(4.0);
+                    self.log_help(ui, cx);
+                }
+            }
         }
     }
 
@@ -1035,11 +1069,6 @@ impl Editor {
                     });
             });
         });
-        ui.end_row();
-
-        ui.label("Tunnels")
-            .on_hover_text("Port forwarding, opened after login and closed with the session");
-        self.tunnels_ui(ui, cx);
         ui.end_row();
     }
 
@@ -1387,13 +1416,6 @@ impl Editor {
         });
         ui.end_row();
 
-        ui.label("Triggers").on_hover_text(
-            "When this text appears in the output, type the answer: \
-             --More-- → space, [confirm] → Enter…",
-        );
-        self.triggers_ui(ui, cx);
-        ui.end_row();
-
         ui.label("Logon script").on_hover_text(
             "A Rhai script run each time the session connects, \
              e.g. to answer the login prompts",
@@ -1427,7 +1449,7 @@ impl Editor {
         ui.end_row();
     }
 
-    /// Terminal type, history, font and cursor.
+    /// Terminal type and history.
     fn terminal_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
         ui.label("Terminal type");
         ui.horizontal(|ui| {
@@ -1453,8 +1475,11 @@ impl Editor {
             &mut self.scrollback,
             &cx.hint("terminal.scrollback"),
         );
+    }
 
-        ui.label("Font")
+    /// The terminal text's font.
+    fn font_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
+        ui.label("Family")
             .on_hover_text("The font of the terminal text: built in, or one installed here");
         ui.horizontal(|ui| {
             let shown_name = self.font.as_ref().map(|f| {
@@ -1484,11 +1509,15 @@ impl Editor {
         ui.end_row();
         field(
             ui,
-            "Font size",
+            "Size",
             &mut self.font_size,
             &cx.hint("terminal.font_size"),
         );
-        ui.label("Cursor");
+    }
+
+    /// The cursor's shape, colour and blinking.
+    fn cursor_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
+        ui.label("Shape");
         choice_pick(
             ui,
             &mut self.cursor,
@@ -1497,7 +1526,7 @@ impl Editor {
             &cx.hint("terminal.cursor"),
         );
         ui.end_row();
-        ui.label("Cursor color");
+        ui.label("Color");
         ui.horizontal(|ui| {
             // The colour in effect: set here, else inherited, else default.
             let effective = self
@@ -1524,7 +1553,7 @@ impl Editor {
             );
         });
         ui.end_row();
-        ui.label("Cursor blink");
+        ui.label("Blink");
         bool_pick(
             ui,
             &mut self.cursor_blink,
@@ -1552,7 +1581,7 @@ impl Editor {
         );
         ui.end_row();
 
-        ui.label("Log folder");
+        ui.label("Folder");
         ui.horizontal(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.log_dir)
@@ -1569,7 +1598,7 @@ impl Editor {
         });
         ui.end_row();
 
-        ui.label("Log file name");
+        ui.label("File name");
         ui.horizontal(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.log_path)
@@ -1618,6 +1647,16 @@ pub fn name_field(ui: &mut egui::Ui, value: &mut String, hint: &str) -> egui::Re
 
 /// A two-column form grid; every grid uses the same label width so that
 /// consecutive grids line up.
+/// A titled group in a page, with an optional line about it.
+fn section(ui: &mut egui::Ui, title: &str, about: &str) {
+    ui.add_space(10.0);
+    ui.label(egui::RichText::new(title).strong());
+    if !about.is_empty() {
+        ui.weak(about);
+    }
+    ui.add_space(2.0);
+}
+
 fn grid(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui)) {
     egui::Grid::new(id)
         .num_columns(2)

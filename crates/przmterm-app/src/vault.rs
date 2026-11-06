@@ -196,8 +196,9 @@ impl VaultUi {
                 .pivot(egui::Align2::CENTER_CENTER)
                 .default_pos(center)
                 .collapsible(false)
-                .resizable(false)
+                .auto_sized()
                 .show(ctx, |ui| {
+                    ui.set_max_width(260.0);
                     ui.label(&why);
                     let field = self.master_field(ui, "Master password");
                     if field.lost_focus() && enter {
@@ -256,13 +257,17 @@ impl VaultUi {
             .open(&mut open)
             .collapsible(false)
             .resizable(false);
-        if unlocked {
-            window = window.default_width(560.0);
-        }
+        window = if unlocked {
+            window.default_width(560.0)
+        } else {
+            // As narrow as its field, not egui's default width.
+            window.auto_sized()
+        };
         window.show(ctx, |ui| {
             if self.vault.is_some() {
                 self.entries_ui(ui, config_dir);
             } else if exists {
+                ui.set_max_width(260.0);
                 ui.label("The vault is locked.");
                 let field = self.master_field(ui, "Master password");
                 let mut go = field.lost_focus() && enter;
