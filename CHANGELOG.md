@@ -26,8 +26,12 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Changed
 
-- A session tab holds its own close mark: the title, a thin divider and a
-  red ✕, in one box.
+- A session tab holds its close button: the title, a thin divider and a ✕
+  in the tab's own colours, in one box; the whole close part is the button
+  and lights up on its own.
+- With *Send to all* in a split tab, every pane that gets the keys has the
+  blue frame of the active pane (instead of an amber one); the status bar
+  button is blue too.
 - The session list's buttons (hide, reload, lock, settings, +) are drawn
   icons of one size, and the symbols in other buttons (◫ ▾ ⇱ ⇅ ▤ ●) sit on
   the text's line.
@@ -92,8 +96,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
 - The *File transfer* dialog's *Send* and *Receive* tabs share its whole
   width.
 - While *Send to all* is on, the status bar button reads *⇶ Typing to all*
-  in an amber outline, and every pane that gets the keys is framed in amber
-  with a *typing to all* tag in its caption.
+  in an outline, and every pane that gets the keys is framed with a *typing
+  to all* tag in its caption.
 - The status bar *Log* button names the log file while logging (*● Log*
   and the file's name, still green; *○ Log* in red when not). Click still
   starts or stops logging. Right-click opens a menu with the file's name,

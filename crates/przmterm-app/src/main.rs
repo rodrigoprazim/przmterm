@@ -139,9 +139,10 @@ pub fn cursor_label(shape: przmterm_session::CursorShape) -> &'static str {
     }
 }
 
-/// A session tab: its title, a thin divider and a red ✕ that closes it, in
-/// one rounded box (filled when active). Returns the tab's response (click
-/// selects, right-click opens its menu) and whether ✕ was clicked.
+/// A session tab: its title and, joined to it past a thin divider, a close
+/// segment with ✕ — one rounded box, filled when active. The whole segment
+/// closes the tab. Returns the tab's response (click selects, right-click
+/// opens its menu) and whether the close segment was clicked.
 fn tab_widget(ui: &mut egui::Ui, title: &str, active: bool) -> (egui::Response, bool) {
     let font = egui::TextStyle::Button.resolve(ui.style());
     let visuals = ui.visuals().clone();
@@ -153,45 +154,60 @@ fn tab_widget(ui: &mut egui::Ui, title: &str, active: bool) -> (egui::Response, 
     let galley = ui
         .painter()
         .layout_no_wrap(title.to_string(), font, text_color);
-    let pad = egui::vec2(8.0, 3.0);
-    let close_w = 18.0;
-    let gap = 6.0;
+    let pad = egui::vec2(9.0, 3.0);
+    let close_w = 24.0;
     let height = (galley.size().y + pad.y * 2.0).max(22.0);
-    let width = pad.x + galley.size().x + gap + 1.0 + gap + close_w + 4.0;
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
-    let close_rect = egui::Rect::from_min_max(
-        egui::pos2(rect.right() - 4.0 - close_w, rect.top() + 2.0),
-        egui::pos2(rect.right() - 4.0, rect.bottom() - 2.0),
-    );
-    // ✕ on top of the tab, so its clicks are its own.
+    let title_w = pad.x * 2.0 + galley.size().x;
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(title_w + close_w, height), egui::Sense::click());
+    let title_rect = rect.with_max_x(rect.left() + title_w);
+    let close_rect = rect.with_min_x(title_rect.right());
+    // The close segment on top of the tab, so its clicks are its own.
     let close = ui.interact(close_rect, response.id.with("close"), egui::Sense::click());
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
-        let hovered = response.hovered() || close.hovered();
         let fill = if active {
             visuals.selection.bg_fill
-        } else if hovered {
+        } else if response.hovered() || close.hovered() {
             visuals.widgets.hovered.weak_bg_fill
         } else {
             visuals.widgets.inactive.weak_bg_fill
         };
-        painter.rect_filled(rect, 5.0, fill);
-        let text_pos = egui::pos2(rect.left() + pad.x, rect.center().y - galley.size().y / 2.0);
-        painter.galley(text_pos, galley.clone(), text_color);
-        let divider_x = rect.left() + pad.x + galley.size().x + gap;
+        let radius: u8 = 5;
+        painter.rect_filled(rect, radius, fill);
+        // The segment lights up as a whole when the pointer is on it.
+        if close.hovered() {
+            painter.rect_filled(
+                close_rect,
+                egui::CornerRadius {
+                    nw: 0,
+                    sw: 0,
+                    ne: radius,
+                    se: radius,
+                },
+                text_color.gamma_multiply(0.16),
+            );
+        }
+        let text_pos = egui::pos2(
+            title_rect.left() + pad.x,
+            rect.center().y - galley.size().y / 2.0,
+        );
+        painter.galley(text_pos, galley, text_color);
         painter.line_segment(
             [
-                egui::pos2(divider_x, rect.top() + 4.0),
-                egui::pos2(divider_x, rect.bottom() - 4.0),
+                egui::pos2(close_rect.left(), rect.top() + 4.0),
+                egui::pos2(close_rect.left(), rect.bottom() - 4.0),
             ],
-            egui::Stroke::new(1.0, text_color.gamma_multiply(0.35)),
+            egui::Stroke::new(1.0, text_color.gamma_multiply(0.3)),
         );
-        let red = if close.hovered() {
-            egui::Color32::from_rgb(255, 110, 110)
+        // The ✕ in the tab's own text colour, softer until the pointer is on
+        // its segment.
+        let mark = if close.hovered() {
+            text_color
         } else {
-            egui::Color32::from_rgb(225, 75, 75)
+            text_color.gamma_multiply(0.6)
         };
-        icons::draw(painter, icons::Icon::Close, close_rect, red);
+        icons::draw(painter, icons::Icon::Close, close_rect, mark);
     }
     let close = close.on_hover_text("Close tab").clicked();
     (response, close)
@@ -2448,13 +2464,14 @@ fn short_name(name: &str) -> String {
     format!("{head}…{tail}")
 }
 
-/// The colour that marks "send to all": the status bar button and the
-/// frame of every pane that gets the keys.
+/// The colour that frames the pane with the keyboard; with "send to all"
+/// every pane that gets the keys is framed in it, and the status bar
+/// button wears it too.
 fn broadcast_color(visuals: &egui::Visuals) -> egui::Color32 {
     if visuals.dark_mode {
-        egui::Color32::from_rgb(240, 170, 60)
+        egui::Color32::from_rgb(110, 200, 255)
     } else {
-        egui::Color32::from_rgb(190, 110, 0)
+        egui::Color32::from_rgb(0, 105, 175)
     }
 }
 
@@ -2841,12 +2858,12 @@ impl eframe::App for PrzmApp {
                     let broadcast = split && {
                         let button = if self.broadcast {
                             // Outlined in the same colour as the panes it types into.
-                            let amber = broadcast_color(ui.visuals());
+                            let mark = broadcast_color(ui.visuals());
                             egui::Button::new(
-                                egui::RichText::new("⇶ Typing to all").color(amber).strong(),
+                                egui::RichText::new("⇶ Typing to all").color(mark).strong(),
                             )
-                            .fill(amber.gamma_multiply(0.12))
-                            .stroke(egui::Stroke::new(1.0, amber))
+                            .fill(mark.gamma_multiply(0.12))
+                            .stroke(egui::Stroke::new(1.0, mark))
                         } else {
                             egui::Button::selectable(false, "⇶ Send to all")
                         };
@@ -3344,7 +3361,7 @@ impl eframe::App for PrzmApp {
         let mut pasted: Option<(usize, String)> = None;
         let broadcast = self.broadcast;
         egui::CentralPanel::no_frame().show(ui, |ui| {
-            let amber = broadcast_color(ui.visuals());
+            let mark = broadcast_color(ui.visuals());
             let tab = &mut self.tabs[self.active_tab];
             let area = ui.available_rect_before_wrap();
             let n = tab.panes.len();
@@ -3388,7 +3405,7 @@ impl eframe::App for PrzmApp {
                             egui::Align2::RIGHT_CENTER,
                             "⇶ typing to all",
                             egui::FontId::proportional(11.0),
-                            amber,
+                            mark,
                         );
                     }
                     let grip = ui
@@ -3441,20 +3458,13 @@ impl eframe::App for PrzmApp {
                         pane.view.show(ui, &mut pane.term, active && !modal)
                     })
                     .inner;
-                if n > 1 && broadcast {
-                    // The caption and the terminal framed together.
-                    let framed = rect.with_min_y(rect.min.y - PANE_CAPTION);
-                    ui.painter().rect_stroke(
-                        framed,
-                        egui::CornerRadius::ZERO,
-                        egui::Stroke::new(if active { 2.0 } else { 1.0 }, amber),
-                        egui::StrokeKind::Inside,
-                    );
-                } else if n > 1 && active {
+                // The pane with the keyboard is framed in blue; with "send to
+                // all" every pane that gets the keys is.
+                if n > 1 && (active || (broadcast && !pane.transport.is_closed())) {
                     ui.painter().rect_stroke(
                         rect,
                         egui::CornerRadius::ZERO,
-                        egui::Stroke::new(1.0, egui::Color32::from_rgb(110, 200, 255)),
+                        egui::Stroke::new(1.0, mark),
                         egui::StrokeKind::Inside,
                     );
                 }
