@@ -664,7 +664,7 @@ mod tests {
         assert_eq!(s.terminal.term_type, None, "xterm-256color is the default");
         assert_eq!(s.terminal.scrollback, Some(MAX_SCROLLBACK));
         assert_eq!(s.keepalive, Some(60));
-        assert_eq!(s.anti_idle.as_deref(), Some("keep-"));
+        assert_eq!(s.anti_idle.as_deref(), Some("k"));
         assert_eq!(s.anti_idle_interval, Some(300));
         assert_eq!(s.x11_forwarding, Some(true));
         assert_eq!(s.log.enabled, Some(true));

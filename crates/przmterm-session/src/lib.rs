@@ -51,7 +51,7 @@ pub const DEFAULT_KEEPALIVE: u32 = 30;
 /// Seconds without typing before the anti-idle text is sent.
 pub const DEFAULT_ANTI_IDLE_INTERVAL: u32 = 60;
 /// Longest anti-idle text, in characters; more is cut off.
-pub const ANTI_IDLE_MAX: usize = 5;
+pub const ANTI_IDLE_MAX: usize = 1;
 /// Log file name used when logging is on and no `path` is set, relative to `<config>/logs`.
 pub const DEFAULT_LOG_TEMPLATE: &str = "%S-%Y%M%D-%h%m%s.log";
 pub const LOGS_DIR: &str = "logs";
@@ -224,8 +224,8 @@ pub struct SessionSettings {
     /// `<config>/scripts`, or a full path. `""` turns an inherited one off.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logon_script: Option<String>,
-    /// Anti-idle: up to [`ANTI_IDLE_MAX`] characters sent as they are (no
-    /// Enter after them) when nothing has been typed for
+    /// Anti-idle: one character ([`ANTI_IDLE_MAX`]) sent as it is (no
+    /// Enter after it) when nothing has been typed for
     /// `anti_idle_interval` seconds, so the far end does not close an idle
     /// session. `""` turns an inherited one off.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1935,10 +1935,10 @@ mod tests {
             resolve("host = 'r1'\nanti_idle = ' '"),
             Some((" ".to_string(), minute))
         );
-        // Sent as typed, cut at five characters.
+        // Sent as typed, cut to one character.
         assert_eq!(
-            resolve("host = 'r1'\nanti_idle = 'abc\\r123'\nanti_idle_interval = 300"),
-            Some(("abc\\r".to_string(), minute * 5))
+            resolve("host = 'r1'\nanti_idle = '\\r123'\nanti_idle_interval = 300"),
+            Some(("\\".to_string(), minute * 5))
         );
         assert_eq!(
             resolve("host = 'r1'\nanti_idle = ' '\nanti_idle_interval = 0"),

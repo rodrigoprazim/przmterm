@@ -315,8 +315,8 @@ normal logout or a rejected login never triggers it.
 
 Some devices close a session when nobody types, whatever the keepalives.
 **Anti-idle** (*Automation* page of the editor) sends a text after that many
-seconds without typing: up to five characters, sent as they are with no Enter
-after them (`anti_idle = ' '`), with `anti_idle_interval = 60` (the default;
+seconds without typing: one character, sent as it is with no Enter after it
+(`anti_idle = ' '`), with `anti_idle_interval = 60` (the default;
 0 turns it off). SecureCRT's "Send string" setting is imported.
 
 ### Telnet and serial
@@ -424,7 +424,7 @@ identity_file = "~/.ssh/id_lab"
 save_password = true       # keychain: unset asks, true always, false never
 debug = true               # show each step of the SSH login (like ssh -v)
 keepalive = 30             # seconds between keepalives, 0 = off
-anti_idle = ' '            # up to 5 characters, sent after anti_idle_interval s without typing
+anti_idle = ' '            # one character, sent after anti_idle_interval s without typing
 anti_idle_interval = 60    # 0 = off
 auto_reconnect = true      # reconnect when the connection drops
 legacy_algorithms = true   # also offer old SSH algorithms (old switches)

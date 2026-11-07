@@ -151,6 +151,8 @@ pub struct Editor {
     /// Triggers set here; `None` inherits the list from above.
     triggers: Option<Vec<Trigger>>,
     show_log_help: bool,
+    /// The section whose explanation is open (its title).
+    help: Option<&'static str>,
     /// Scroll to the log settings when the window first shows.
     scroll_to_log: bool,
     /// The page shown (side menu).
@@ -450,6 +452,7 @@ impl Editor {
             forwards: s.forwards.clone(),
             triggers: s.triggers.clone(),
             show_log_help: false,
+            help: None,
             scroll_to_log: false,
             page: Page::General,
             confirm: None,
@@ -668,9 +671,15 @@ impl Editor {
             )
         });
 
+        // Anchored at its top: a page that grows the window pushes its
+        // bottom down, and nothing moves under the pointer.
+        let screen = ctx.content_rect();
         egui::Window::new(self.title.clone())
-            .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(ctx.content_rect().center())
+            .pivot(egui::Align2::CENTER_TOP)
+            .default_pos(egui::pos2(
+                screen.center().x,
+                screen.top() + (screen.height() * 0.12).max(40.0),
+            ))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -728,7 +737,8 @@ impl Editor {
                 if !pages.contains(&self.page) {
                     self.page = Page::General;
                 }
-                let height = (ctx.content_rect().height() - 260.0).clamp(210.0, 240.0);
+                // The page grows the window; it scrolls only past the screen.
+                let max_height = (ctx.content_rect().height() - 240.0).max(210.0);
                 let row = ui.horizontal_top(|ui| {
                     ui.vertical(|ui| {
                         ui.set_width(118.0);
@@ -744,20 +754,21 @@ impl Editor {
                     // Room for the divider drawn below (a separator here
                     // would stretch the window to the screen's height).
                     ui.add_space(14.0);
-                    // A fixed box for the page, so the window keeps its
-                    // size; long pages scroll inside it.
+                    // The page, as tall as it needs (at least as tall as the
+                    // menu); a scroll bar only when the screen is too short.
                     ui.allocate_ui_with_layout(
-                        egui::vec2(520.0, height),
+                        egui::vec2(520.0, max_height),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
-                        ui.set_min_size(egui::vec2(520.0, height));
-                        // The scroll bar takes its own room instead of
-                        // covering the buttons at the right edge.
-                        ui.style_mut().spacing.scroll = egui::style::ScrollStyle::solid();
-                        egui::ScrollArea::vertical()
-                            .id_salt(("editor-page", self.page))
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| self.form(ui, &cx, root));
+                            ui.set_min_size(egui::vec2(520.0, 210.0));
+                            // The scroll bar takes its own room instead of
+                            // covering the buttons at the right edge.
+                            ui.style_mut().spacing.scroll = egui::style::ScrollStyle::solid();
+                            egui::ScrollArea::vertical()
+                                .id_salt(("editor-page", self.page))
+                                .max_height(max_height)
+                                .auto_shrink([false, true])
+                                .show(ui, |ui| self.form(ui, &cx, root));
                         },
                     );
                 });
@@ -890,10 +901,14 @@ impl Editor {
             Page::Login => grid(ui, "editor-login", |ui| self.login_fields(ui, cx)),
             Page::Ssh => {
                 grid(ui, "editor-ssh", |ui| self.ssh_fields(ui, cx));
-                section(
+                section_help(
                     ui,
+                    &mut self.help,
                     "Tunnels",
-                    "Port forwarding, opened after login and closed with the session.",
+                    "Port forwarding, opened after login and closed with the session. \
+                     Local: a port here reaches host:port through the server. Remote: a \
+                     port on the server reaches host:port from here. SOCKS: a proxy here \
+                     that goes out through the server.",
                 );
                 self.tunnels_ui(ui, cx);
             }
@@ -907,18 +922,24 @@ impl Editor {
             }
             Page::Automation => {
                 grid(ui, "editor-automation", |ui| self.automation_fields(ui, cx));
-                section(
+                section_help(
                     ui,
+                    &mut self.help,
                     "Anti-idle",
-                    "Sends a few characters (a space, say) when nothing was typed for a \
-                     while, so the far end does not close the session. No Enter is sent.",
+                    "Sends one character (a space, say) when nothing was typed for that \
+                     many seconds, so the far end does not close the session. No Enter \
+                     is sent. Empty: off.",
                 );
                 grid(ui, "editor-anti-idle", |ui| self.anti_idle_fields(ui, cx));
-                section(
+                section_help(
                     ui,
+                    &mut self.help,
                     "Triggers",
                     "When a text shows up in the output, type an answer: --More-- → space, \
-                     [confirm] → Enter, a device's prompt → a command.",
+                     [confirm] → \\r (Enter), a device's prompt → a command. In the answer \
+                     \\r is Enter, \\t Tab, \\e Esc and \\p a pause of 1 s. Once: only \
+                     the first time per connection. Saved as plain text: keep passwords in \
+                     the keychain, not here.",
                 );
                 self.triggers_ui(ui, cx);
             }
@@ -1093,14 +1114,18 @@ impl Editor {
     fn triggers_ui(&mut self, ui: &mut egui::Ui, cx: &Context) {
         ui.vertical(|ui| {
             let Some(list) = &mut self.triggers else {
+                // Not set here: the ones from above, if any; + copies them
+                // in to change.
+                let inherited = cx.inherited.triggers.clone().unwrap_or_default();
                 ui.horizontal(|ui| {
-                    ui.weak(cx.hint("trigger"));
-                    if ui
-                        .button("+ Add")
-                        .on_hover_text("Set the triggers here")
+                    if !inherited.is_empty() {
+                        ui.weak(format!("From above: {}", cx.hint("trigger")));
+                    }
+                    if crate::icons::button(ui, crate::icons::Icon::Plus, false)
+                        .on_hover_text("Add a trigger")
                         .clicked()
                     {
-                        let mut list = cx.inherited.triggers.clone().unwrap_or_default();
+                        let mut list = inherited;
                         list.push(Trigger::default());
                         self.triggers = Some(list);
                     }
@@ -1108,6 +1133,7 @@ impl Editor {
                 return;
             };
             let mut remove = None;
+            let mut add = false;
             for (i, t) in list.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
                     ui.add(
@@ -1134,25 +1160,23 @@ impl Editor {
                     {
                         remove = Some(i);
                     }
+                    if i == 0
+                        && crate::icons::button(ui, crate::icons::Icon::Plus, false)
+                            .on_hover_text("Add a trigger")
+                            .clicked()
+                    {
+                        add = true;
+                    }
                 });
             }
             if let Some(i) = remove {
                 list.remove(i);
             }
-            let mut inherit = false;
-            ui.horizontal(|ui| {
-                if ui.button("+ Add trigger").clicked() {
-                    list.push(Trigger::default());
-                }
-                inherit = crate::icons::button(ui, crate::icons::Icon::Reset, false)
-                    .on_hover_text(format!(
-                        "Back to the inherited triggers ({})",
-                        cx.hint("trigger")
-                    ))
-                    .clicked();
-            });
-            ui.weak("Saved as plain text: keep passwords in the keychain, not here.");
-            if inherit {
+            if add {
+                list.push(Trigger::default());
+            }
+            // None left: back to the ones from above.
+            if list.is_empty() {
                 self.triggers = None;
             }
         });
@@ -1161,14 +1185,18 @@ impl Editor {
     fn tunnels_ui(&mut self, ui: &mut egui::Ui, cx: &Context) {
         ui.vertical(|ui| {
             let Some(list) = &mut self.forwards else {
+                // Not set here: the ones from above, if any; + copies them
+                // in to change.
+                let inherited = cx.inherited.forwards.clone().unwrap_or_default();
                 ui.horizontal(|ui| {
-                    ui.weak(cx.hint("forward"));
-                    if ui
-                        .button("+ Add")
-                        .on_hover_text("Set the tunnels here")
+                    if !inherited.is_empty() {
+                        ui.weak(format!("From above: {}", cx.hint("forward")));
+                    }
+                    if crate::icons::button(ui, crate::icons::Icon::Plus, false)
+                        .on_hover_text("Add a tunnel")
                         .clicked()
                     {
-                        let mut list = cx.inherited.forwards.clone().unwrap_or_default();
+                        let mut list = inherited;
                         list.push(Forward::default());
                         self.forwards = Some(list);
                     }
@@ -1176,6 +1204,7 @@ impl Editor {
                 return;
             };
             let mut remove = None;
+            let mut add = false;
             for (i, f) in list.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
                     egui::ComboBox::from_id_salt(("tunnel-kind", i))
@@ -1214,24 +1243,23 @@ impl Editor {
                     {
                         remove = Some(i);
                     }
+                    if i == 0
+                        && crate::icons::button(ui, crate::icons::Icon::Plus, false)
+                            .on_hover_text("Add a tunnel")
+                            .clicked()
+                    {
+                        add = true;
+                    }
                 });
             }
             if let Some(i) = remove {
                 list.remove(i);
             }
-            let mut inherit = false;
-            ui.horizontal(|ui| {
-                if ui.button("+ Add tunnel").clicked() {
-                    list.push(Forward::default());
-                }
-                inherit = crate::icons::button(ui, crate::icons::Icon::Reset, false)
-                    .on_hover_text(format!(
-                        "Back to the inherited tunnels ({})",
-                        cx.hint("forward")
-                    ))
-                    .clicked();
-            });
-            if inherit {
+            if add {
+                list.push(Forward::default());
+            }
+            // None left: back to the ones from above.
+            if list.is_empty() {
                 self.forwards = None;
             }
         });
@@ -1476,12 +1504,9 @@ impl Editor {
                     .char_limit(przmterm_session::ANTI_IDLE_MAX)
                     .font(egui::TextStyle::Monospace)
                     .hint_text(cx.hint("anti_idle"))
-                    .desired_width(64.0),
+                    .desired_width(44.0),
             )
-            .on_hover_text(format!(
-                "Up to {} characters, sent as typed",
-                przmterm_session::ANTI_IDLE_MAX
-            ));
+            .on_hover_text("One character, sent as typed");
             ui.label("every");
             ui.add(
                 egui::TextEdit::singleline(&mut self.anti_idle_interval)
@@ -1693,6 +1718,31 @@ pub fn name_field(ui: &mut egui::Ui, value: &mut String, hint: &str) -> egui::Re
 /// A two-column form grid; every grid uses the same label width so that
 /// consecutive grids line up.
 /// A titled group in a page, with an optional line about it.
+/// A section title with a ? that shows `about` under it.
+fn section_help(
+    ui: &mut egui::Ui,
+    open: &mut Option<&'static str>,
+    title: &'static str,
+    about: &str,
+) {
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(title).strong());
+        let shown = *open == Some(title);
+        if ui
+            .selectable_label(shown, " ? ")
+            .on_hover_text("What is this?")
+            .clicked()
+        {
+            *open = if shown { None } else { Some(title) };
+        }
+    });
+    if *open == Some(title) {
+        ui.weak(about);
+    }
+    ui.add_space(2.0);
+}
+
 fn section(ui: &mut egui::Ui, title: &str, about: &str) {
     ui.add_space(10.0);
     ui.label(egui::RichText::new(title).strong());

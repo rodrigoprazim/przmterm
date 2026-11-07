@@ -24,8 +24,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
   monospace font), its size, the cursor shape (block, underline, bar), its
   colour and blinking. Changes show at once; *Cancel* (or Esc) undoes them,
   *Apply* keeps them in the tab and *Save* also in the session's settings.
-- Anti-idle: a session can send up to five characters (a space, say), as
-  they are and without Enter, after a number of seconds without typing, so
+- Anti-idle: a session can send one character (a space, say), as it is
+  and without Enter, after a number of seconds without typing, so
   devices that drop idle sessions keep it open
   (`anti_idle`, `anti_idle_interval`; *Automation* page of the editor).
   SecureCRT's "Send string every N seconds" is imported.
@@ -44,10 +44,13 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 - The session, folder and global settings are split into pages chosen from
   a menu on the left (Connection, Login, SSH, Serial port, Terminal,
-  Automation, Logging): the window stays one size, and its scroll bar no
-  longer covers the buttons beside the fields. Related options sit under a
-  title (Tunnels, Triggers, Font, Cursor) instead of repeating it in every
-  label, and the help for log file names opens under its field.
+  Automation, Logging): the window grows with the page instead of showing a
+  scroll bar (one appears only when the screen is too short). Related
+  options sit under a title (Tunnels, Anti-idle, Triggers, Font, Cursor)
+  instead of repeating it in every label; the explanations open with **?**
+  beside the title, like the help for log file names under its field.
+  Tunnels and triggers are added with **+** (beside the first one's ×);
+  removing the last one goes back to those from above.
 - Fonts: the list shows every installed font that can draw text, the
   monospace ones first and the rest apart, with a search box; fonts that
   cannot be drawn (bitmap-only, emoji) are left out.
