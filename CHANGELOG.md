@@ -9,6 +9,12 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Added
 
+- `przm run <session> -c …`: connects a session without a window, logs in
+  (key, vault entry or the password saved in the keychain; other questions
+  asked on the terminal), runs the commands one after another, waiting for
+  the prompt after each, and prints the output. Commands can also come from
+  stdin. Exit code 0, 1 (connection or login failed) or 2 (a prompt did not
+  come back in time).
 - CI checks the dependencies with `cargo deny` on every push and weekly:
   RustSec security advisories, licences and crate sources (`deny.toml`).
 - A scroll bar beside the terminal: it shows where the view is in the

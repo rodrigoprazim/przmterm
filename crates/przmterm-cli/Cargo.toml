@@ -16,6 +16,10 @@ path = "src/main.rs"
 przmterm-core.workspace = true
 przmterm-term.workspace = true
 przmterm-session.workspace = true
+przmterm-transport.workspace = true
+przmterm-connect.workspace = true
+fancy-regex.workspace = true
+rpassword = "7"
 anyhow.workspace = true
 clap.workspace = true
 

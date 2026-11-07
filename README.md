@@ -196,6 +196,28 @@ once = true                # only the first time per connection
 
 Triggers are saved as plain text, so leave passwords to the keychain.
 
+### Commands without a window
+
+`przm run` connects a session from a shell or a cron job, logs in, sends
+commands and prints what comes back:
+
+```sh
+przm run core-sw-01 -c 'show clock' -c 'show version'
+przm run Lab/Core/router-lab < commands.txt     # one command per line
+przm run admin@10.0.0.1:2222 --password-env PW -c uptime
+```
+
+The session logs in as it does in the app: with its key, its vault entry
+(the master password comes from `PRZMTERM_VAULT_PASSWORD`, or is asked) or
+the password saved in the keychain. Other login questions are asked on the
+terminal; without one, the run stops and says what was asked. A host key seen
+for the first time needs `--accept-host-key`. Each command waits for the
+prompt (`--prompt`, a regular expression, by default a line ending in `$ # >
+% ]`) up to `--timeout` seconds; the session's triggers answer `--More--` and
+the like. The exit code is 0 when all commands ran, 1 when the connection or
+login failed and 2 when a prompt did not come back. `-v` shows the login on
+stderr, `--raw` keeps the escape sequences.
+
 ### Scripts
 
 Scripts are [Rhai](https://rhai.rs) files (`.rhai`) kept in
@@ -474,6 +496,7 @@ A sample tree is in [examples/config](examples/config). Try it with
 | `przmterm-term` | Escape-sequence parser, grid, scrollback |
 | `przmterm-session` | Session files and inheritance |
 | `przmterm-script` | Rhai scripts that drive a session |
+| `przmterm-connect` | A session's transport: jump hosts, vault entries, saved passwords |
 | `przmterm-cli` | The `przm` binary |
 | `przmterm-app` | The `przmterm` desktop binary |
 

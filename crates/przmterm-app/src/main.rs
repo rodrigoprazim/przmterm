@@ -6,7 +6,6 @@ mod editor;
 mod fonts;
 mod icons;
 mod input;
-mod keychain;
 mod keymap;
 mod keywords;
 mod launcher;
@@ -26,8 +25,8 @@ use przmterm_transport::ssh::PasswordStore;
 use przmterm_transport::{TransportError, Waker};
 
 use crate::editor::{Editor, EditorResult};
-use crate::keychain::Keychain;
 use crate::pane::{Env, Pane};
+use przmterm_connect::Keychain;
 
 fn main() -> eframe::Result {
     tracing_subscriber::fmt()
@@ -713,6 +712,7 @@ impl PrzmApp {
                 .cloned()
                 .collect(),
             credentials: self.vault.credentials(),
+            headless: false,
         }
     }
 

@@ -172,7 +172,7 @@ and, when a device is at hand, a serial console (Xmodem or Ymodem).
 - [x] Settings folder can be moved (a synced folder shares it between computers)
 - [x] The opening tab is a PrzmTerm shell: `ssh <session>` with Tab
   completion, `ssh user@host`, `telnet`, `sessions`, history
-- `przm run <session> --cmd …` headless mode
+- [x] `przm run <session> --cmd …` headless mode
 - MCP server: `list_sessions`, `open_session`, `send`, `read_screen`, `run_script`,
   with per-session permissions and a command block list
 - Dedicated `wgpu` grid renderer with a glyph atlas

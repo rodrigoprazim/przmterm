@@ -10,7 +10,7 @@
   and ticks the matching item in ROADMAP.md.
 - Before committing: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace`.
-- Keep the crate layering: `core` ← `transport`/`term`/`session` ← `cli`/`app`.
+- Keep the crate layering: `core` ← `transport`/`term`/`session` ← `connect` ← `cli`/`app`.
 - egui 0.37 API: `eframe::App::ui(&mut self, ui, frame)`, `egui::Panel::left/bottom`,
   `CentralPanel::no_frame()`, `ctx.fonts_mut(..)`.
 - The user writes in Portuguese (pt-BR); code, comments and repo docs are in English.

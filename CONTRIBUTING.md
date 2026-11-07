@@ -17,8 +17,10 @@ apply needs an entry with the reason.
 ## Conventions
 
 - **Layers.** A crate depends only on crates below it:
-  `core` ← `transport`, `term`, `session` ← `cli`, `app`. Front ends never talk
-  to a transport except through a session.
+  `core` ← `transport`, `term`, `session` ← `connect` ← `cli`, `app`. Front
+  ends never talk to a transport except through a session; `connect` turns a
+  session into its transport (jump hosts, vault entries, saved passwords) for
+  both.
 - **Commands first.** A new user action is a command on the bus, then a menu
   item or shortcut that calls it.
 - **Tests.** Emulator changes come with a test that feeds bytes and checks the

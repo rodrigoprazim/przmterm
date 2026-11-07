@@ -20,6 +20,7 @@ przmterm-transport = { path = "crates/przmterm-transport" }
 przmterm-term = { path = "crates/przmterm-term" }
 przmterm-session = { path = "crates/przmterm-session" }
 przmterm-script = { path = "crates/przmterm-script" }
+przmterm-connect = { path = "crates/przmterm-connect" }
 
 anyhow = "1"
 thiserror = "2"
