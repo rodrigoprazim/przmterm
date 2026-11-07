@@ -40,7 +40,10 @@ All notable changes to PrzmTerm are recorded here. The format follows
   connects: `ssh <session>` opens a saved session, with Tab completing the
   name (or the folder path), `ssh [-p port] [-l user] user@host` and `telnet
   host [port]` connect to hosts that are not saved, `sessions [text]` lists
-  them, and Up/Down recall earlier lines.
+  them, and Up/Down recall earlier lines. Another one opens with **+** at
+  the end of the tabs, a double click on the free part of the tab bar or
+  Ctrl+Shift+N (⌘⇧N on macOS), or next to a session with *Split* (*A new
+  PrzmTerm shell*).
 
 - The session, folder and global settings are split into pages chosen from
   a menu on the left (Connection, Login, SSH, Serial port, Terminal,

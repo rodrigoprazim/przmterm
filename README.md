@@ -36,7 +36,9 @@ The tab PrzmTerm opens with is its own small shell: `ssh router-lab` opens a
 saved session (Tab completes the name, or `Lab/Core/` for a folder),
 `ssh -p 2222 admin@10.0.0.1` a host that is not saved, `telnet host [port]`
 a Telnet one and `sessions [text]` lists them; Up and Down go through what was
-typed. `help` lists the commands. It is not a system shell.
+typed. `help` lists the commands. It is not a system shell. Open another one
+with **+** at the end of the tabs, a double click on the free part of the tab
+bar or Ctrl+Shift+N (⌘⇧N on macOS), or next to a session with *Split*.
 Host key questions, `login as:`, passwords, key passphrases and two-factor
 prompts appear in the terminal, as with OpenSSH. Authentication tries, in
 order: ssh-agent (Pageant or the OpenSSH agent on Windows), the session's
@@ -344,6 +346,7 @@ changes, PrzmTerm refuses to connect and shows the old and new fingerprints.
 | Action | Linux / Windows | macOS |
 | --- | --- | --- |
 | New tab (same session, no new login) | Ctrl+Shift+T | ⌘⇧T |
+| New PrzmTerm tab (to connect to another host) | Ctrl+Shift+N | ⌘⇧N |
 | Split: grid / side by side / stacked | Ctrl+Shift+G / D / E | ⌘⇧G / D / E |
 | Close pane | Ctrl+Shift+W | ⌘⇧W |
 | Next / previous tab | Ctrl+Tab / Ctrl+Shift+Tab | same |

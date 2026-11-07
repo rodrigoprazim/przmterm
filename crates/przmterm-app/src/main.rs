@@ -86,15 +86,14 @@ impl Drop for ScriptPrompt {
 /// The "Split" dialog: what goes next to the current session.
 struct SplitDialog {
     layout: Layout,
+    /// A new PrzmTerm shell goes next to the session too.
+    shell: bool,
     /// Panes of other tabs (tab, pane) and whether they are picked.
     others: Vec<(usize, usize, bool)>,
 }
 
 /// Height of the caption above each pane of a split tab.
 const PANE_CAPTION: f32 = 18.0;
-
-const NO_OTHER_SESSION: &str =
-    "No other session is open. Open one first, or use Clone Session in the tab menu.";
 
 /// The session's name, with the title the remote side set when it differs.
 fn pane_name(pane: &Pane) -> String {
@@ -421,6 +420,8 @@ enum Action {
     /// PrzmTerm shell there.
     OpenHere(usize, usize, Box<Session>),
     NewTab,
+    /// A tab with the PrzmTerm shell.
+    NewShellTab,
     CloseTab(usize),
     SelectTab(usize),
     /// Asks what to put next to the current session.
@@ -430,6 +431,8 @@ enum Action {
     SplitWith {
         layout: Layout,
         others: Vec<(usize, usize)>,
+        /// And a new PrzmTerm shell.
+        shell: bool,
     },
     /// Changes how the current tab's panes are arranged.
     Arrange(Layout),
@@ -874,15 +877,30 @@ impl PrzmApp {
                             .map(move |(p, _)| (t, p, false))
                     })
                     .collect();
-                if others.is_empty() {
-                    self.notice = Some(NO_OTHER_SESSION.into());
-                } else {
-                    self.split_dialog = Some(SplitDialog { layout, others });
+                // With no other session, the shell is the only choice.
+                let shell = others.is_empty();
+                self.split_dialog = Some(SplitDialog {
+                    layout,
+                    shell,
+                    others,
+                });
+            }
+            Action::SplitWith {
+                layout,
+                others,
+                shell,
+            } => {
+                self.active_tab = merge_panes(&mut self.tabs, self.active_tab, &others);
+                let tab = self.tab_mut();
+                tab.layout = layout;
+                if shell {
+                    tab.panes.push(Pane::launcher());
+                    tab.active = tab.panes.len() - 1;
                 }
             }
-            Action::SplitWith { layout, others } => {
-                self.active_tab = merge_panes(&mut self.tabs, self.active_tab, &others);
-                self.tab_mut().layout = layout;
+            Action::NewShellTab => {
+                self.tabs.push(Tab::new(Pane::launcher()));
+                self.active_tab = self.tabs.len() - 1;
             }
             Action::Arrange(layout) => self.tab_mut().layout = layout,
             Action::SeparatePane => {
@@ -1298,6 +1316,7 @@ impl PrzmApp {
         Some(match binding.does().ok()? {
             Does::Command(id) => match id {
                 "new_tab" => Action::NewTab,
+                "new_shell_tab" => Action::NewShellTab,
                 "close_pane" => Action::RequestClosePane,
                 "close_tab" => Action::RequestClose(vec![t]),
                 "next_tab" => Action::SelectTab((t + 1) % n),
@@ -2012,8 +2031,14 @@ impl PrzmApp {
                 .collapsible(false)
                 .resizable(false)
                 .show(ctx, |ui| {
-                    ui.label("Sessions open in other tabs to show next to this one:");
+                    ui.label("Show next to this session:");
                     ui.add_space(4.0);
+                    ui.checkbox(&mut dialog.shell, "A new PrzmTerm shell")
+                        .on_hover_text("To connect to another host from there");
+                    if !dialog.others.is_empty() {
+                        ui.add_space(4.0);
+                        ui.weak("Sessions open in other tabs:");
+                    }
                     {
                         egui::ScrollArea::vertical()
                             .max_height(300.0)
@@ -2033,12 +2058,12 @@ impl PrzmApp {
                             });
                     }
                     ui.add_space(6.0);
-                    let any = dialog.others.iter().any(|o| o.2);
+                    let any = dialog.shell || dialog.others.iter().any(|o| o.2);
                     ui.horizontal(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui
                                 .add_enabled(any, egui::Button::new("Split"))
-                                .on_disabled_hover_text("Choose at least one session")
+                                .on_disabled_hover_text("Choose what goes next to it")
                                 .clicked()
                                 || (enter && any)
                             {
@@ -2056,6 +2081,7 @@ impl PrzmApp {
                     self.apply(
                         Action::SplitWith {
                             layout: dialog.layout,
+                            shell: dialog.shell,
                             others: dialog
                                 .others
                                 .iter()
@@ -3042,23 +3068,18 @@ impl eframe::App for PrzmApp {
                     }
                     let tab = &self.tabs[self.active_tab];
                     let split = tab.panes.len() > 1;
-                    let elsewhere = self.tabs.iter().enumerate().any(|(t, other)| {
-                        t != self.active_tab && other.panes.iter().any(|p| p.origin.is_some())
-                    });
                     ui.menu_button("◫ Split ▾", |ui| {
-                        ui.weak("Join sessions open in other tabs");
+                        ui.weak("A PrzmTerm shell or sessions of other tabs");
                         for (layout, id) in [
                             (Layout::Grid, "split_grid"),
                             (Layout::Columns, "split_columns"),
                             (Layout::Rows, "split_rows"),
                         ] {
                             if ui
-                                .add_enabled(
-                                    elsewhere,
+                                .add(
                                     egui::Button::new(format!("{}…", layout.label()))
                                         .shortcut_text(keys(id)),
                                 )
-                                .on_disabled_hover_text(NO_OTHER_SESSION)
                                 .clicked()
                             {
                                 actions.push(Action::Split(layout));
@@ -3631,6 +3652,24 @@ impl eframe::App for PrzmApp {
                             &mut actions,
                         );
                     });
+                }
+                if icons::button(ui, icons::Icon::Plus, false)
+                    .on_hover_text(format!(
+                        "New PrzmTerm tab{}\nAlso: double-click the empty bar",
+                        self.keys_hint("new_shell_tab")
+                    ))
+                    .clicked()
+                {
+                    actions.push(Action::NewShellTab);
+                }
+                // A double click on the free part of the bar does the same.
+                let free = ui.available_rect_before_wrap();
+                if free.width() > 0.0
+                    && ui
+                        .interact(free, egui::Id::unique("tab-bar-free"), egui::Sense::click())
+                        .double_clicked()
+                {
+                    actions.push(Action::NewShellTab);
                 }
             });
         });

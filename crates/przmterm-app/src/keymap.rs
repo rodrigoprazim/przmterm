@@ -16,11 +16,16 @@ pub struct Command {
     pub default: Option<&'static str>,
 }
 
-pub const COMMANDS: [Command; 23] = [
+pub const COMMANDS: [Command; 24] = [
     Command {
         id: "new_tab",
         label: "New tab (same session)",
         default: Some("Cmd+Shift+T"),
+    },
+    Command {
+        id: "new_shell_tab",
+        label: "New PrzmTerm tab",
+        default: Some("Cmd+Shift+N"),
     },
     Command {
         id: "close_pane",
