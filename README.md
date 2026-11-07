@@ -459,7 +459,8 @@ Global defaults live in `defaults.toml` (⚙ next to *Sessions* in the app).
 Changing them asks whether existing sessions that use the defaults should
 follow; if not, PrzmTerm writes the old value into those sessions.
 
-Unlock the padlock next to *Sessions* to drag sessions between folders.
+Unlock the padlock next to *Sessions* to drag sessions and folders (by the
+dots before their names) onto another folder, or to the top level.
 
 A sample tree is in [examples/config](examples/config). Try it with
 `PRZMTERM_HOME=examples/config cargo run`.

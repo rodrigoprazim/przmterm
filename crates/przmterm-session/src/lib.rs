@@ -1338,6 +1338,40 @@ pub fn move_session(path: &Path, folder_dir: &Path) -> Result<PathBuf, SessionEr
     Ok(target)
 }
 
+/// Moves the folder `dir` (with its sessions and subfolders) into
+/// `into`. Returns its new path.
+pub fn move_folder(dir: &Path, into: &Path) -> Result<PathBuf, SessionError> {
+    let invalid = |path: &Path, reason: &str| SessionError::Invalid {
+        path: path.to_path_buf(),
+        reason: reason.into(),
+    };
+    let name = dir
+        .file_name()
+        .ok_or_else(|| invalid(dir, "not a folder"))?;
+    let target = into.join(name);
+    if target == dir {
+        return Ok(target);
+    }
+    if into.starts_with(dir) {
+        return Err(invalid(into, "a folder cannot go inside itself"));
+    }
+    if target.exists() {
+        return Err(invalid(
+            &target,
+            "a folder with this name already exists there",
+        ));
+    }
+    fs::create_dir_all(into).map_err(|source| SessionError::Io {
+        path: into.to_path_buf(),
+        source,
+    })?;
+    fs::rename(dir, &target).map_err(|source| SessionError::Io {
+        path: dir.to_path_buf(),
+        source,
+    })?;
+    Ok(target)
+}
+
 /// Writes the global defaults (`<config>/defaults.toml`).
 pub fn write_defaults(config_dir: &Path, settings: &SessionSettings) -> Result<(), SessionError> {
     let path = config_dir.join(DEFAULTS_FILE);
@@ -1731,6 +1765,19 @@ mod tests {
         assert_eq!(moved, lab.join("a.toml"));
         write(dir, "sessions/a.toml", "host = 'other'");
         assert!(move_session(&dir.join("sessions/a.toml"), &lab).is_err());
+
+        // Folders move with what they hold, but not into themselves.
+        let core = create_folder(&lab, "Core").unwrap();
+        write(dir, "sessions/Lab/Core/r1.toml", "host = 'r1'");
+        let sessions = dir.join(SESSIONS_DIR);
+        let moved = move_folder(&core, &sessions).unwrap();
+        assert_eq!(moved, sessions.join("Core"));
+        assert!(moved.join("r1.toml").is_file());
+        assert!(move_folder(&lab, &lab.join("deeper")).is_err());
+        assert!(move_folder(&lab, &lab).is_err());
+        assert_eq!(move_folder(&moved, &sessions).unwrap(), moved);
+        create_folder(&lab, "Core").unwrap();
+        assert!(move_folder(&moved, &lab).is_err(), "name taken");
 
         let legacy = SessionSettings::from_toml("port = 1\nforce = ['port']").unwrap();
         assert_eq!(legacy.to_toml(), "port = 1\n");

@@ -591,7 +591,8 @@ enum TreeAction {
 }
 
 /// Drag-and-drop payload: the session file being moved.
-struct DragSession(PathBuf);
+/// A session file or a folder being dragged in the session list.
+struct DragItem(PathBuf);
 
 /// A small dialog asking for a folder name.
 struct NameDialog {
@@ -2822,6 +2823,77 @@ fn session_matches(s: &Session, filter: &str) -> bool {
         || s.display_target().to_lowercase().contains(filter)
 }
 
+/// One row of the session list: a grip while dragging is on, a folder icon
+/// for folders, then the text. It reaches the list's right edge, so it is
+/// easy to hit and to drop onto.
+fn tree_row(ui: &mut egui::Ui, drag: bool, folder: bool, text: egui::WidgetText) -> egui::Response {
+    let galley = text.into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        egui::TextStyle::Body,
+    );
+    const ICON: f32 = 16.0;
+    let lead = if drag { ICON } else { 0.0 } + if folder { ICON + 2.0 } else { 0.0 };
+    let pad = ui.spacing().button_padding.x;
+    let height = (galley.size().y + 4.0).max(ui.spacing().interact_size.y);
+    let width =
+        (pad * 2.0 + lead + galley.size().x).max(ui.clip_rect().right() - ui.cursor().left());
+    let sense = if drag {
+        egui::Sense::click_and_drag()
+    } else {
+        egui::Sense::click()
+    };
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), sense);
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact_selectable(&response, false);
+        let painter = ui.painter();
+        if response.hovered() || response.dragged() {
+            painter.rect_filled(rect, visuals.corner_radius, visuals.weak_bg_fill);
+        }
+        let color = visuals.text_color();
+        let mut x = rect.left() + pad;
+        let icon_rect =
+            |x: f32| egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(ICON, height));
+        if drag {
+            icons::draw(
+                painter,
+                icons::Icon::Grip,
+                icon_rect(x),
+                ui.visuals().weak_text_color(),
+            );
+            x += ICON;
+        }
+        if folder {
+            icons::draw(painter, icons::Icon::Folder, icon_rect(x), color);
+            x += ICON + 2.0;
+        }
+        let y = rect.center().y - galley.size().y / 2.0;
+        painter.galley(egui::pos2(x, y), galley, color);
+    }
+    response
+}
+
+/// Starts dragging `path` from `response`, with its name following the
+/// pointer.
+fn drag_item(ui: &egui::Ui, response: &egui::Response, path: &std::path::Path, name: &str) {
+    if response.drag_started() {
+        egui::DragAndDrop::set_payload(ui.ctx(), DragItem(path.to_path_buf()));
+    }
+    if response.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        if let Some(pos) = ui.ctx().pointer_interact_pos() {
+            egui::Area::new(egui::Id::unique("session-list-drag"))
+                .order(egui::Order::Tooltip)
+                .fixed_pos(pos + egui::vec2(14.0, 6.0))
+                .interactable(false)
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| ui.label(name));
+                });
+        }
+    }
+}
+
 fn folder_ui(
     ui: &mut egui::Ui,
     folder: &Folder,
@@ -2834,83 +2906,91 @@ fn folder_ui(
         if !filter.is_empty() && !f.all_sessions().iter().any(|s| session_matches(s, filter)) {
             continue;
         }
-        let mut header = egui::CollapsingHeader::new(format!("📁 {}", f.name))
-            .id_salt(&f.dir)
-            .default_open(true);
+        let id = ui.make_persistent_id(("folder", &f.dir));
+        let mut state =
+            egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true);
         if !filter.is_empty() {
-            header = header.open(Some(true)); // show every match while searching
+            state.set_open(true); // show every match while searching
         }
-        let header = header.show(ui, |ui| folder_ui(ui, f, picked, drag, filter, open));
+        let (_, header, _) = state
+            .show_header(ui, |ui| tree_row(ui, drag, true, f.name.clone().into()))
+            .body(|ui| folder_ui(ui, f, picked, drag, filter, open));
+        let r = header.inner;
+        // A click on the name opens or closes it, like the arrow.
+        if r.clicked()
+            && let Some(mut state) = egui::collapsing_header::CollapsingState::load(ui.ctx(), id)
+        {
+            state.toggle(ui);
+            state.store(ui.ctx());
+        }
         if drag {
-            let r = &header.header_response;
-            if r.dnd_hover_payload::<DragSession>().is_some() {
+            drag_item(ui, &r, &f.dir, &f.name);
+            // Not onto itself (nor, as move_folder checks, inside itself).
+            let dropped = |p: &DragItem| p.0 != f.dir;
+            if r.dnd_hover_payload::<DragItem>()
+                .is_some_and(|p| dropped(&p))
+            {
                 ui.painter().rect_stroke(
-                    r.rect.expand(2.0),
+                    r.rect.expand(1.0),
                     egui::CornerRadius::same(3),
                     egui::Stroke::new(1.5, ui.visuals().selection.stroke.color),
                     egui::StrokeKind::Outside,
                 );
             }
-            if let Some(payload) = r.dnd_release_payload::<DragSession>() {
+            if let Some(payload) = r.dnd_release_payload::<DragItem>()
+                && dropped(&payload)
+            {
                 picked.push(TreeAction::Move(payload.0.clone(), f.dir.clone()));
             }
         }
-        header
-            .header_response
-            .on_hover_text("Right-click to add sessions, rename or set folder defaults")
-            .context_menu(|ui| {
-                if ui.button("New session here…").clicked() {
-                    picked.push(TreeAction::NewSession(f.trail.clone()));
-                    ui.close();
-                }
-                if ui.button("New folder inside…").clicked() {
-                    picked.push(TreeAction::NewFolder(f.dir.clone()));
-                    ui.close();
-                }
-                ui.separator();
-                if ui.button("Rename…").clicked() {
-                    picked.push(TreeAction::RenameFolder(f.dir.clone(), f.name.clone()));
-                    ui.close();
-                }
-                if ui
-                    .button("Folder settings…")
-                    .on_hover_text("Values every session in this folder inherits")
-                    .clicked()
-                {
-                    picked.push(TreeAction::FolderSettings(f.trail.clone()));
-                    ui.close();
-                }
-                if ui
-                    .button("Export folder…")
-                    .on_hover_text("Save this folder and its sessions to a file to share")
-                    .clicked()
-                {
-                    picked.push(TreeAction::Export(f.dir.clone(), f.name.clone()));
-                    ui.close();
-                }
-                ui.separator();
-                if ui.button("Delete…").clicked() {
-                    picked.push(TreeAction::DeleteFolder(
-                        f.dir.clone(),
-                        f.name.clone(),
-                        f.session_count(),
-                    ));
-                    ui.close();
-                }
-            });
+        r.on_hover_text(if drag {
+            "Drag onto another folder to move it, or drop sessions and folders here"
+        } else {
+            "Right-click to add sessions, rename or set folder defaults"
+        })
+        .context_menu(|ui| {
+            if ui.button("New session here…").clicked() {
+                picked.push(TreeAction::NewSession(f.trail.clone()));
+                ui.close();
+            }
+            if ui.button("New folder inside…").clicked() {
+                picked.push(TreeAction::NewFolder(f.dir.clone()));
+                ui.close();
+            }
+            ui.separator();
+            if ui.button("Rename…").clicked() {
+                picked.push(TreeAction::RenameFolder(f.dir.clone(), f.name.clone()));
+                ui.close();
+            }
+            if ui
+                .button("Folder settings…")
+                .on_hover_text("Values every session in this folder inherits")
+                .clicked()
+            {
+                picked.push(TreeAction::FolderSettings(f.trail.clone()));
+                ui.close();
+            }
+            if ui
+                .button("Export folder…")
+                .on_hover_text("Save this folder and its sessions to a file to share")
+                .clicked()
+            {
+                picked.push(TreeAction::Export(f.dir.clone(), f.name.clone()));
+                ui.close();
+            }
+            ui.separator();
+            if ui.button("Delete…").clicked() {
+                picked.push(TreeAction::DeleteFolder(
+                    f.dir.clone(),
+                    f.name.clone(),
+                    f.session_count(),
+                ));
+                ui.close();
+            }
+        });
     }
     for s in &folder.sessions {
         if !session_matches(s, filter) {
-            continue;
-        }
-        if drag {
-            ui.dnd_drag_source(
-                ui.scope_id().with(("drag-session", &s.path)),
-                DragSession(s.path.clone()),
-                |ui| ui.label(format!("⠿ {}", s.name)),
-            )
-            .response
-            .on_hover_text("Drag onto a folder to move it");
             continue;
         }
         // Sessions connected in a tab get a green dot.
@@ -2932,12 +3012,20 @@ fn folder_ui(
         } else {
             s.name.clone().into()
         };
-        let response = ui.selectable_label(false, text).on_hover_text(format!(
-            "[{}] {}{}\nDouble-click to connect, right-click for more",
-            s.protocol,
-            s.display_target(),
-            if is_open { "\nOpen in a tab" } else { "" }
-        ));
+        let response = tree_row(ui, drag, false, text);
+        if drag {
+            drag_item(ui, &response, &s.path, &s.name);
+        }
+        let response = response.on_hover_text(if drag {
+            "Drag onto a folder to move it".to_string()
+        } else {
+            format!(
+                "[{}] {}{}\nDouble-click to connect, right-click for more",
+                s.protocol,
+                s.display_target(),
+                if is_open { "\nOpen in a tab" } else { "" }
+            )
+        });
         if response.double_clicked() {
             picked.push(TreeAction::Connect(s.clone()));
         }
@@ -3282,7 +3370,10 @@ impl eframe::App for PrzmApp {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     if icons::button(ui, icons::Icon::ChevronLeft, false)
-                        .on_hover_text(format!("Hide the sessions{}", self.keys_hint("toggle_sessions")))
+                        .on_hover_text(format!(
+                            "Hide the sessions{}",
+                            self.keys_hint("toggle_sessions")
+                        ))
                         .clicked()
                     {
                         actions.push(Action::ToggleSessions);
@@ -3299,10 +3390,10 @@ impl eframe::App for PrzmApp {
                     let (lock, hint) = if self.drag_unlocked {
                         (
                             icons::Icon::Unlock,
-                            "Dragging is on: drag sessions onto folders. Click to lock.",
+                            "Dragging is on: drag sessions and folders by their dots onto a folder. Click to lock.",
                         )
                     } else {
-                        (icons::Icon::Lock, "Unlock to drag sessions between folders")
+                        (icons::Icon::Lock, "Unlock to drag sessions and folders between folders")
                     };
                     if icons::button(ui, lock, self.drag_unlocked)
                         .on_hover_text(hint)
@@ -3392,7 +3483,9 @@ impl eframe::App for PrzmApp {
                             }
                             if ui
                                 .button("Keyboard shortcuts…")
-                                .on_hover_text("Choose the keys for commands, text, scripts and buttons")
+                                .on_hover_text(
+                                    "Choose the keys for commands, text, scripts and buttons",
+                                )
                                 .clicked()
                             {
                                 self.keymap_editor =
@@ -3462,78 +3555,86 @@ impl eframe::App for PrzmApp {
                 // Solid scroll bars take their own room, so they never cover
                 // the last session (or the end of a long name).
                 ui.style_mut().spacing.scroll = egui::style::ScrollStyle::solid();
-                egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
-                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                    if self.sessions.root.all_sessions().is_empty() {
-                        let hint = match &self.config_dir {
-                            Some(_) => "No sessions yet.\n+ › New session… adds one.",
-                            None => "No configuration directory.",
-                        };
-                        ui.weak(hint);
-                    } else {
-                        let mut picked = Vec::new();
-                        let drag = self.drag_unlocked;
-                        // Always shown while unlocked, so the tree does not move mid-drag.
-                        if drag {
-                            let (_, dropped) = ui.dnd_drop_zone::<DragSession, _>(
-                                egui::Frame::default().inner_margin(4.0),
-                                |ui| {
-                                    ui.weak("⬆ Drop here for the top level · drag ⠿ sessions onto folders");
-                                },
-                            );
-                            if let Some(payload) = dropped {
-                                picked.push(TreeAction::Move(
-                                    payload.0.clone(),
-                                    self.sessions.root.dir.clone(),
-                                ));
+                egui::ScrollArea::both()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                        if self.sessions.root.all_sessions().is_empty() {
+                            let hint = match &self.config_dir {
+                                Some(_) => "No sessions yet.\n+ › New session… adds one.",
+                                None => "No configuration directory.",
+                            };
+                            ui.weak(hint);
+                        } else {
+                            let mut picked = Vec::new();
+                            let drag = self.drag_unlocked;
+                            // Always shown while unlocked, so the tree does not move mid-drag.
+                            if drag {
+                                let (_, dropped) = ui.dnd_drop_zone::<DragItem, _>(
+                                    egui::Frame::default().inner_margin(4.0),
+                                    |ui| {
+                                        ui.weak("Drop here for the top level");
+                                    },
+                                );
+                                if let Some(payload) = dropped {
+                                    picked.push(TreeAction::Move(
+                                        payload.0.clone(),
+                                        self.sessions.root.dir.clone(),
+                                    ));
+                                }
                             }
-                        }
-                        let filter = self.session_filter.trim().to_lowercase();
-                        if !filter.is_empty()
-                            && !self
-                                .sessions
-                                .root
-                                .all_sessions()
+                            let filter = self.session_filter.trim().to_lowercase();
+                            if !filter.is_empty()
+                                && !self
+                                    .sessions
+                                    .root
+                                    .all_sessions()
+                                    .iter()
+                                    .any(|s| session_matches(s, &filter))
+                            {
+                                ui.weak("No session matches.");
+                            }
+                            if search_enter
+                                && let Some(first) = self
+                                    .sessions
+                                    .root
+                                    .all_sessions()
+                                    .into_iter()
+                                    .find(|s| session_matches(s, &filter))
+                            {
+                                picked.push(TreeAction::Connect(first.clone()));
+                            }
+                            let open: std::collections::HashSet<PathBuf> = self
+                                .tabs
                                 .iter()
-                                .any(|s| session_matches(s, &filter))
-                        {
-                            ui.weak("No session matches.");
-                        }
-                        if search_enter
-                            && let Some(first) = self
-                                .sessions
-                                .root
-                                .all_sessions()
-                                .into_iter()
-                                .find(|s| session_matches(s, &filter))
-                        {
-                            picked.push(TreeAction::Connect(first.clone()));
-                        }
-                        let open: std::collections::HashSet<PathBuf> = self
-                            .tabs
-                            .iter()
-                            .flat_map(|t| &t.panes)
-                            .filter(|p| !p.transport.is_closed())
-                            .filter_map(|p| p.origin.as_ref().map(|o| o.path.clone()))
-                            .filter(|p| !p.as_os_str().is_empty())
-                            .collect();
-                        folder_ui(ui, &self.sessions.root, &mut picked, drag, &filter, &open);
-                        for p in picked {
-                            match p {
-                                TreeAction::Connect(s) => actions.push(Action::Open(Box::new(s))),
-                                TreeAction::Browse(s, scp) => {
-                                    actions.push(Action::BrowseFor(Box::new(s), scp));
-                                }
-                                TreeAction::Edit(s) => self.editor = Some(Editor::edit(&s)),
-                                TreeAction::Duplicate(s) => {
-                                    self.editor = Some(Editor::duplicate(&s))
-                                }
-                                TreeAction::Delete(s) => {
-                                    self.confirm_delete = Some(Deletion::Session(Box::new(s)))
-                                }
-                                TreeAction::Move(path, dir) => {
-                                    self.notice =
-                                        Some(match przmterm_session::move_session(&path, &dir) {
+                                .flat_map(|t| &t.panes)
+                                .filter(|p| !p.transport.is_closed())
+                                .filter_map(|p| p.origin.as_ref().map(|o| o.path.clone()))
+                                .filter(|p| !p.as_os_str().is_empty())
+                                .collect();
+                            folder_ui(ui, &self.sessions.root, &mut picked, drag, &filter, &open);
+                            for p in picked {
+                                match p {
+                                    TreeAction::Connect(s) => {
+                                        actions.push(Action::Open(Box::new(s)))
+                                    }
+                                    TreeAction::Browse(s, scp) => {
+                                        actions.push(Action::BrowseFor(Box::new(s), scp));
+                                    }
+                                    TreeAction::Edit(s) => self.editor = Some(Editor::edit(&s)),
+                                    TreeAction::Duplicate(s) => {
+                                        self.editor = Some(Editor::duplicate(&s))
+                                    }
+                                    TreeAction::Delete(s) => {
+                                        self.confirm_delete = Some(Deletion::Session(Box::new(s)))
+                                    }
+                                    TreeAction::Move(path, dir) => {
+                                        let moved = if path.is_dir() {
+                                            przmterm_session::move_folder(&path, &dir)
+                                        } else {
+                                            przmterm_session::move_session(&path, &dir)
+                                        };
+                                        self.notice = Some(match moved {
                                             Ok(new) if new == path => "Already there.".into(),
                                             Ok(_) => format!(
                                                 "Moved {}.",
@@ -3543,68 +3644,68 @@ impl eframe::App for PrzmApp {
                                             ),
                                             Err(e) => format!("Cannot move: {e}"),
                                         });
-                                    self.reload_sessions();
-                                }
-                                TreeAction::NewSession(trail) => {
-                                    self.editor = Some(Editor::new_session(&trail))
-                                }
-                                TreeAction::NewFolder(parent) => {
-                                    self.name_dialog = Some(NameDialog {
-                                        title: "New folder",
-                                        dir: parent,
-                                        rename: false,
-                                        value: String::new(),
-                                        error: None,
-                                    })
-                                }
-                                TreeAction::RenameFolder(dir, name) => {
-                                    self.name_dialog = Some(NameDialog {
-                                        title: "Rename folder",
-                                        dir,
-                                        rename: true,
-                                        value: name,
-                                        error: None,
-                                    })
-                                }
-                                TreeAction::FolderSettings(trail) => {
-                                    if let Some(f) = self.sessions.root.find(&trail) {
-                                        self.editor = Some(Editor::folder(f));
+                                        self.reload_sessions();
                                     }
-                                }
-                                TreeAction::DeleteFolder(dir, name, sessions) => {
-                                    self.confirm_delete = Some(Deletion::Folder {
-                                        dir,
-                                        name,
-                                        sessions,
-                                    })
-                                }
-                                TreeAction::Export(path, name) => self.export(&path, &name),
-                                TreeAction::ForgetPassword(s) => {
-                                    if let Some(account) = s.password_account() {
-                                        Keychain.delete(&account);
-                                        self.notice =
-                                            Some(format!("Forgot the password for {account}."));
+                                    TreeAction::NewSession(trail) => {
+                                        self.editor = Some(Editor::new_session(&trail))
+                                    }
+                                    TreeAction::NewFolder(parent) => {
+                                        self.name_dialog = Some(NameDialog {
+                                            title: "New folder",
+                                            dir: parent,
+                                            rename: false,
+                                            value: String::new(),
+                                            error: None,
+                                        })
+                                    }
+                                    TreeAction::RenameFolder(dir, name) => {
+                                        self.name_dialog = Some(NameDialog {
+                                            title: "Rename folder",
+                                            dir,
+                                            rename: true,
+                                            value: name,
+                                            error: None,
+                                        })
+                                    }
+                                    TreeAction::FolderSettings(trail) => {
+                                        if let Some(f) = self.sessions.root.find(&trail) {
+                                            self.editor = Some(Editor::folder(f));
+                                        }
+                                    }
+                                    TreeAction::DeleteFolder(dir, name, sessions) => {
+                                        self.confirm_delete = Some(Deletion::Folder {
+                                            dir,
+                                            name,
+                                            sessions,
+                                        })
+                                    }
+                                    TreeAction::Export(path, name) => self.export(&path, &name),
+                                    TreeAction::ForgetPassword(s) => {
+                                        if let Some(account) = s.password_account() {
+                                            Keychain.delete(&account);
+                                            self.notice =
+                                                Some(format!("Forgot the password for {account}."));
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
-                    if !self.sessions.errors.is_empty() {
-                        ui.separator();
-                        ui.colored_label(
-                            ui.visuals().warn_fg_color,
-                            format!("{} file(s) with errors", self.sessions.errors.len()),
-                        )
-                        .on_hover_text(
-                            self.sessions
-                                .errors
-                                .iter()
-                                .map(|e| e.to_string())
-                                .collect::<Vec<_>>()
-                                .join("\n"),
-                        );
-                    }
-                });
+                        if !self.sessions.errors.is_empty() {
+                            ui.separator();
+                            ui.colored_label(
+                                ui.visuals().warn_fg_color,
+                                format!("{} file(s) with errors", self.sessions.errors.len()),
+                            )
+                            .on_hover_text(
+                                self.sessions
+                                    .errors
+                                    .iter()
+                                    .map(|e| e.to_string())
+                                    .collect::<Vec<_>>()
+                                    .join("\n"),
+                            );
+                        }
+                    });
             });
 
         // Added after the session list: the tabs and buttons span the

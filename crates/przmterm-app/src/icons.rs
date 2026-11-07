@@ -21,6 +21,10 @@ pub enum Icon {
     Up,
     /// Opens a list.
     ChevronDown,
+    /// Something that can be dragged: two columns of three dots.
+    Grip,
+    /// A folder of sessions.
+    Folder,
 }
 
 /// Size of an icon button: all of them match.
@@ -148,6 +152,25 @@ pub fn draw(painter: &egui::Painter, icon: Icon, rect: Rect, color: Color32) {
                 shackle.push(p(0.42, -0.05));
             }
             painter.add(Shape::line(shackle, stroke));
+        }
+        Icon::Grip => {
+            for x in [-0.3, 0.3] {
+                for y in [-0.6, 0.0, 0.6] {
+                    painter.circle_filled(p(x, y), 1.1, color);
+                }
+            }
+        }
+        Icon::Folder => {
+            // A tab on the top left, then the body.
+            let outline = vec![
+                p(-0.85, -0.55),
+                p(-0.3, -0.55),
+                p(-0.15, -0.35),
+                p(0.85, -0.35),
+                p(0.85, 0.65),
+                p(-0.85, 0.65),
+            ];
+            painter.add(Shape::closed_line(outline, Stroke::new(1.3, color)));
         }
         Icon::Gear => {
             let teeth = 8;

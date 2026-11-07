@@ -77,6 +77,9 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Fixed
 
+- Session list: with the padlock open, folders can be dragged too (into
+  another folder or to the top level), and the grip and folder icons are
+  drawn, so they line up with the names.
 - The session list's horizontal scroll bar no longer covers the last
   session: the scroll bars take their own room.
 - Quotes and accents typed with dead keys (ABNT2 and international layouts)
