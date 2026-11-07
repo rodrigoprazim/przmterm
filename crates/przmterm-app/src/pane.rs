@@ -905,7 +905,8 @@ impl Pane {
         if now < due {
             return Some(due);
         }
-        self.enqueue(&przmterm_session::buttons::parse_send(&text));
+        // As typed: no escapes, no Enter.
+        self.enqueue(&[Chunk::Bytes(text.into_bytes())]);
         self.last_sent = now;
         Some(now + every)
     }

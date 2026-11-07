@@ -24,8 +24,9 @@ All notable changes to PrzmTerm are recorded here. The format follows
   monospace font), its size, the cursor shape (block, underline, bar), its
   colour and blinking. Changes show at once; *Cancel* (or Esc) undoes them,
   *Apply* keeps them in the tab and *Save* also in the session's settings.
-- Anti-idle: a session can send a text (a space, `\r`…) after a number of
-  seconds without typing, so devices that drop idle sessions keep it open
+- Anti-idle: a session can send up to five characters (a space, say), as
+  they are and without Enter, after a number of seconds without typing, so
+  devices that drop idle sessions keep it open
   (`anti_idle`, `anti_idle_interval`; *Automation* page of the editor).
   SecureCRT's "Send string every N seconds" is imported.
 - *Settings folder…* (under **+**) moves PrzmTerm's settings to another

@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use przmterm_session::Session;
 use przmterm_transport::{Protocol, Size, Transport, TransportError};
 
-const PROMPT: &str = "\x1b[1;36mprzm\x1b[0m$ ";
+const PROMPT: &str = "\x1b[1;36mprzmterm\x1b[0m \x1b[1;34m~>\x1b[0m ";
 
 /// The commands, for `help` and Tab.
 const COMMANDS: [&str; 10] = [

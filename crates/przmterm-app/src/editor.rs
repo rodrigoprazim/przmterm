@@ -258,7 +258,7 @@ impl Context<'_> {
             "x11_forwarding" => "no".into(),
             "keywords" => "none".into(),
             "logon_script" => "none".into(),
-            "anti_idle" => "nothing (off); e.g. a space or \\r".into(),
+            "anti_idle" => "off".into(),
             "anti_idle_interval" => przmterm_session::DEFAULT_ANTI_IDLE_INTERVAL.to_string(),
             "scp_shell" => "Default".into(),
             "forward" => "none".into(),
@@ -910,18 +910,10 @@ impl Editor {
                 section(
                     ui,
                     "Anti-idle",
-                    "Sends a text when nothing was typed for a while, so the far end \
-                     does not close the session. \\r is Enter.",
+                    "Sends a few characters (a space, say) when nothing was typed for a \
+                     while, so the far end does not close the session. No Enter is sent.",
                 );
-                grid(ui, "editor-anti-idle", |ui| {
-                    field(ui, "Send", &mut self.anti_idle, &cx.hint("anti_idle"));
-                    field(
-                        ui,
-                        "Every (s)",
-                        &mut self.anti_idle_interval,
-                        &cx.hint("anti_idle_interval"),
-                    );
-                });
+                grid(ui, "editor-anti-idle", |ui| self.anti_idle_fields(ui, cx));
                 section(
                     ui,
                     "Triggers",
@@ -1472,6 +1464,33 @@ impl Editor {
             None,
             &cx.hint("auto_reconnect"),
         );
+        ui.end_row();
+    }
+
+    /// The anti-idle text and how often, on one row.
+    fn anti_idle_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
+        ui.label("Send");
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.anti_idle)
+                    .char_limit(przmterm_session::ANTI_IDLE_MAX)
+                    .font(egui::TextStyle::Monospace)
+                    .hint_text(cx.hint("anti_idle"))
+                    .desired_width(64.0),
+            )
+            .on_hover_text(format!(
+                "Up to {} characters, sent as typed",
+                przmterm_session::ANTI_IDLE_MAX
+            ));
+            ui.label("every");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.anti_idle_interval)
+                    .char_limit(5)
+                    .hint_text(cx.hint("anti_idle_interval"))
+                    .desired_width(48.0),
+            );
+            ui.label("seconds");
+        });
         ui.end_row();
     }
 

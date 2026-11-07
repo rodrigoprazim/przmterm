@@ -246,7 +246,7 @@ fn convert(name: &str, f: &Fields, report: &mut Report) -> Option<SessionSetting
     if number(f, "Idle Check") == Some(1)
         && let Some(idle) = text(f, "Idle String").filter(|t| !t.is_empty())
     {
-        s.anti_idle = Some(idle.to_string());
+        s.anti_idle = Some(idle.chars().take(crate::ANTI_IDLE_MAX).collect());
         s.anti_idle_interval =
             number(f, "Idle Timeout").filter(|&t| t != crate::DEFAULT_ANTI_IDLE_INTERVAL && t > 0);
     }
@@ -624,7 +624,7 @@ mod tests {
           <dword name="Idle NO-OP Check">1</dword>
           <dword name="Idle NO-OP Timeout">60</dword>
           <dword name="Idle Check">1</dword>
-          <string name="Idle String">\r</string>
+          <string name="Idle String">keep-alive</string>
           <dword name="Idle Timeout">300</dword>
           <dword name="Use Login Script">1</dword>
           <dword name="Forward X11">1</dword>
@@ -664,7 +664,7 @@ mod tests {
         assert_eq!(s.terminal.term_type, None, "xterm-256color is the default");
         assert_eq!(s.terminal.scrollback, Some(MAX_SCROLLBACK));
         assert_eq!(s.keepalive, Some(60));
-        assert_eq!(s.anti_idle.as_deref(), Some("\\r"));
+        assert_eq!(s.anti_idle.as_deref(), Some("keep-"));
         assert_eq!(s.anti_idle_interval, Some(300));
         assert_eq!(s.x11_forwarding, Some(true));
         assert_eq!(s.log.enabled, Some(true));
