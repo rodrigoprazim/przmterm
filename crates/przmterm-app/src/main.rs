@@ -3459,6 +3459,9 @@ impl eframe::App for PrzmApp {
                 }
                 ui.separator();
                 // Long names stay on one line; the list scrolls sideways.
+                // Solid scroll bars take their own room, so they never cover
+                // the last session (or the end of a long name).
+                ui.style_mut().spacing.scroll = egui::style::ScrollStyle::solid();
                 egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
                     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                     if self.sessions.root.all_sessions().is_empty() {

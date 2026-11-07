@@ -77,6 +77,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Fixed
 
+- The session list's horizontal scroll bar no longer covers the last
+  session: the scroll bars take their own room.
 - Quotes and accents typed with dead keys (ABNT2 and international layouts)
   reach the terminal; the key waiting for the next one shows at the cursor.
 - Text re-wraps when the terminal's width changes, so lines cut by a split
