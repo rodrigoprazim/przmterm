@@ -1,7 +1,6 @@
 //! PrzmTerm desktop application.
 
 mod buttonbar;
-mod demo;
 mod desktop;
 mod editor;
 mod fonts;
@@ -10,6 +9,7 @@ mod input;
 mod keychain;
 mod keymap;
 mod keywords;
+mod launcher;
 mod pane;
 mod scriptguide;
 mod sftp;
@@ -49,7 +49,9 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| {
             let fonts = fonts::TermFonts::new(&cc.egui_ctx);
-            Ok(Box::new(PrzmApp::new(fonts)))
+            let app = PrzmApp::new(fonts);
+            app.share_sessions();
+            Ok(Box::new(app))
         }),
     )
 }
@@ -415,6 +417,9 @@ impl Tab {
 /// User actions, collected while drawing and applied afterwards.
 enum Action {
     Open(Box<Session>),
+    /// Opens a session in place of this pane (tab, pane): asked by the
+    /// PrzmTerm shell there.
+    OpenHere(usize, usize, Box<Session>),
     NewTab,
     CloseTab(usize),
     SelectTab(usize),
@@ -548,6 +553,8 @@ struct PrzmApp {
     /// A backup or export being restored or imported, and the folder name
     /// for an import.
     bundle_dialog: Option<(przmterm_session::bundle::Bundle, String)>,
+    /// The "Settings folder" dialog: the folder being typed.
+    folder_dialog: Option<String>,
     /// The quit was confirmed: let the window close.
     quitting: bool,
 }
@@ -626,7 +633,7 @@ impl PrzmApp {
         Self {
             config_dir,
             sessions,
-            tabs: vec![Tab::new(Pane::demo())],
+            tabs: vec![Tab::new(Pane::launcher())],
             active_tab: 0,
             title: String::new(),
             quick_connect: String::new(),
@@ -662,6 +669,7 @@ impl PrzmApp {
             shortcuts,
             keymap_editor: None,
             bundle_dialog: None,
+            folder_dialog: None,
             quitting: false,
         }
     }
@@ -670,6 +678,19 @@ impl PrzmApp {
         if let Some(dir) = &self.config_dir {
             self.sessions = SessionTree::load(dir);
         }
+        self.share_sessions();
+    }
+
+    /// Tells the PrzmTerm shells which sessions there are.
+    fn share_sessions(&self) {
+        launcher::set_catalog(
+            self.sessions
+                .root
+                .all_sessions()
+                .into_iter()
+                .map(launcher::Entry::of)
+                .collect(),
+        );
     }
 
     fn env(&self) -> Env {
@@ -709,7 +730,7 @@ impl PrzmApp {
                 .collect()
         };
         let sessions = match action {
-            Action::Open(session) => vec![(**session).clone()],
+            Action::Open(session) | Action::OpenHere(_, _, session) => vec![(**session).clone()],
             Action::Reconnect => closed_origins(std::slice::from_ref(self.tab().pane())),
             Action::ReconnectTab(t) => closed_origins(&self.tabs[*t].panes),
             _ => return None,
@@ -730,6 +751,52 @@ impl PrzmApp {
         &self.tabs[self.active_tab]
     }
 
+    /// A pane on `session`. Already connected to it? Another channel on that
+    /// connection instead of logging in (and 2FA) again.
+    fn pane_for(&self, session: &Session, env: &Env, waker: Waker) -> Pane {
+        let live = self.tabs.iter().flat_map(|t| &t.panes).find(|p| {
+            !p.transport.is_closed()
+                && p.origin
+                    .as_ref()
+                    .is_some_and(|o| o.path == session.path && o.name == session.name)
+        });
+        match live {
+            Some(p) => p.clone_session(env, waker),
+            None => {
+                let size = self.tab().pane().size();
+                Pane::open(session, env, size, waker)
+            }
+        }
+    }
+
+    /// What the PrzmTerm shells asked for, as actions.
+    fn launcher_requests(&mut self) -> Vec<Action> {
+        let mut actions = Vec::new();
+        for (t, tab) in self.tabs.iter_mut().enumerate() {
+            for (p, pane) in tab.panes.iter_mut().enumerate() {
+                for request in pane.take_requests() {
+                    let session = match request {
+                        launcher::Request::Connect(session) => Some(*session),
+                        launcher::Request::Open(label) => self
+                            .sessions
+                            .root
+                            .all_sessions()
+                            .into_iter()
+                            .find(|s| launcher::Entry::of(s).label == label)
+                            .cloned(),
+                    };
+                    match session {
+                        Some(s) => actions.push(Action::OpenHere(t, p, Box::new(s))),
+                        None => pane
+                            .term
+                            .feed(b"\x1b[31mThat session is gone; try sessions.\x1b[0m\r\n"),
+                    }
+                }
+            }
+        }
+        actions
+    }
+
     fn tab_mut(&mut self) -> &mut Tab {
         &mut self.tabs[self.active_tab]
     }
@@ -744,23 +811,25 @@ impl PrzmApp {
             return;
         }
         match action {
+            Action::OpenHere(t, p, session) => {
+                let here = self
+                    .tabs
+                    .get(t)
+                    .and_then(|tab| tab.panes.get(p))
+                    .is_some_and(|pane| pane.is_launcher());
+                if !here {
+                    // The tabs changed meanwhile (the vault was asked first).
+                    return self.apply(Action::Open(session), ctx);
+                }
+                let pane = self.pane_for(&session, &env, waker);
+                let old = std::mem::replace(&mut self.tabs[t].panes[p], pane);
+                drop(old);
+                self.active_tab = t;
+                self.tabs[t].active = p;
+            }
             Action::Open(session) => {
-                // Already connected to this session? Open another channel on
-                // that connection instead of logging in (and 2FA) again.
-                let live = self.tabs.iter().flat_map(|t| &t.panes).find(|p| {
-                    !p.transport.is_closed()
-                        && p.origin
-                            .as_ref()
-                            .is_some_and(|o| o.path == session.path && o.name == session.name)
-                });
-                let pane = match live {
-                    Some(p) => p.clone_session(&env, waker),
-                    None => {
-                        let size = self.tab().pane().size();
-                        Pane::open(&session, &env, size, waker)
-                    }
-                };
-                // The first demo shell is just a placeholder: replace it.
+                let pane = self.pane_for(&session, &env, waker);
+                // The first PrzmTerm shell is just a starting point: replace it.
                 let tab = self.tab_mut();
                 if tab.panes.len() == 1 && tab.pane().origin.is_none() {
                     *tab = Tab::new(pane);
@@ -780,7 +849,7 @@ impl PrzmApp {
                     let _ = pane.transport.close();
                 }
                 if self.tabs.is_empty() {
-                    self.tabs.push(Tab::new(Pane::demo()));
+                    self.tabs.push(Tab::new(Pane::launcher()));
                 }
                 if self.active_tab >= index && self.active_tab > 0 {
                     self.active_tab -= 1;
@@ -1185,7 +1254,8 @@ impl PrzmApp {
             .tabs
             .iter_mut()
             .flat_map(|t| &mut t.panes)
-            .filter_map(|p| p.run_queue(now))
+            .flat_map(|p| [p.anti_idle(now), p.run_queue(now)])
+            .flatten()
             .min();
         if let Some(at) = next {
             ctx.request_repaint_after(at.saturating_duration_since(now));
@@ -1467,7 +1537,159 @@ impl PrzmApp {
             || self.transfer_dialog.is_some()
             || self.paste_confirm.is_some()
             || self.bundle_dialog.is_some()
+            || self.folder_dialog.is_some()
             || self.vault.modal()
+    }
+
+    /// The "Settings folder" dialog.
+    fn folder_dialog_ui(&mut self, ctx: &egui::Context, center: egui::Pos2, escape: bool) {
+        use przmterm_session::location::{self, Contents};
+        let Some(typed) = &mut self.folder_dialog else {
+            return;
+        };
+        let standard = location::standard_dir();
+        let forced = location::env_dir().is_some();
+        let current = self.config_dir.clone();
+        let wanted = przmterm_session::expand_tilde(typed.trim());
+        // What choosing the typed folder would do, and whether it can.
+        let (note, ok) = if forced {
+            (
+                "PRZMTERM_HOME is set: it decides the folder while it is.",
+                None,
+            )
+        } else if typed.trim().is_empty() {
+            ("Type or browse to a folder.", None)
+        } else if !wanted.is_absolute() {
+            ("Give the whole path of the folder.", Some(false))
+        } else if current
+            .as_deref()
+            .is_some_and(|c| location::same_dir(&wanted, c))
+        {
+            ("This is the folder in use.", None)
+        } else if current
+            .as_deref()
+            .is_some_and(|c| location::is_inside(&wanted, c))
+        {
+            ("Choose a folder outside the one in use.", Some(false))
+        } else {
+            match location::contents(&wanted) {
+                Contents::Empty => (
+                    "The settings are copied there; the ones in use now stay as they are.",
+                    Some(true),
+                ),
+                Contents::Settings => (
+                    "That folder has PrzmTerm settings: they are used as they are, \
+                     and nothing is copied.",
+                    Some(true),
+                ),
+                Contents::Other => (
+                    "That folder has other files: choose an empty folder or one with \
+                     PrzmTerm settings.",
+                    Some(false),
+                ),
+            }
+        };
+        // `None`: nothing to choose yet; `Some(false)`: the folder will not do.
+        let problem = ok == Some(false);
+        let ok = ok == Some(true);
+        let mut answer = None; // Some(true) use it, Some(false) cancel
+        egui::Window::new("Settings folder")
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(center)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.set_max_width(460.0);
+                ui.label(
+                    "Where PrzmTerm keeps sessions, defaults, buttons, keywords, scripts \
+                     and the password vault. A synced folder (iCloud Drive, Dropbox, \
+                     OneDrive) shares them between computers.",
+                );
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.add_enabled(
+                        !forced,
+                        egui::TextEdit::singleline(typed).desired_width(340.0),
+                    );
+                    if ui
+                        .add_enabled(!forced, egui::Button::new("Browse…"))
+                        .clicked()
+                        && let Some(dir) = rfd::FileDialog::new()
+                            .set_title("Folder for the PrzmTerm settings")
+                            .pick_folder()
+                    {
+                        *typed = dir.display().to_string();
+                    }
+                });
+                ui.add_space(2.0);
+                if problem {
+                    ui.colored_label(ui.visuals().warn_fg_color, note);
+                } else {
+                    ui.weak(note);
+                }
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if let Some(standard) = &standard
+                        && ui
+                            .add_enabled(!forced, egui::Button::new("Default"))
+                            .on_hover_text("The system's folder for application settings")
+                            .clicked()
+                    {
+                        *typed = standard.display().to_string();
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add_enabled(ok, egui::Button::new("Use folder"))
+                            .clicked()
+                        {
+                            answer = Some(true);
+                        }
+                        if ui.button("Cancel").clicked() || escape {
+                            answer = Some(false);
+                        }
+                    });
+                });
+            });
+        match answer {
+            Some(true) => {
+                self.folder_dialog = None;
+                let result = self.switch_config(&wanted);
+                self.notice = Some(result.unwrap_or_else(|e| format!("Failed: {e}")));
+            }
+            Some(false) => self.folder_dialog = None,
+            None => {}
+        }
+    }
+
+    /// Makes `dir` the settings folder, copying the current settings there
+    /// when it is empty, and loads what it holds.
+    fn switch_config(&mut self, dir: &std::path::Path) -> Result<String, String> {
+        use przmterm_session::location::{self, Contents};
+        let standard = location::standard_dir().ok_or("no system settings folder")?;
+        let copied = match (location::contents(dir), &self.config_dir) {
+            (Contents::Other, _) => return Err("that folder has other files".into()),
+            (Contents::Empty, Some(current)) => {
+                location::copy_settings(current, dir).map_err(|e| e.to_string())?
+            }
+            (Contents::Empty, None) => {
+                std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+                0
+            }
+            (Contents::Settings, _) => 0,
+        };
+        location::choose(&standard, Some(dir)).map_err(|e| e.to_string())?;
+        self.config_dir = Some(dir.to_path_buf());
+        self.reload_sessions();
+        self.buttons = buttonbar::ButtonBarUi::load(Some(dir));
+        self.shortcuts = keymap::Shortcuts::load(Some(dir));
+        self.vault.lock();
+        self.editor = None;
+        self.keyword_editor = None;
+        Ok(if copied > 0 {
+            format!("Settings folder changed; {copied} file(s) copied.")
+        } else {
+            "Settings folder changed.".to_string()
+        })
     }
 
     /// Panes with a live connection to a session.
@@ -1777,6 +1999,7 @@ impl PrzmApp {
                 }
             }
         }
+        self.folder_dialog_ui(ctx, center, escape);
         if let Some(dialog) = &mut self.split_dialog {
             let tabs = &self.tabs;
             dialog
@@ -2763,6 +2986,7 @@ impl eframe::App for PrzmApp {
         if got {
             ctx.request_repaint();
         }
+        actions.extend(self.launcher_requests());
         self.run_retries(&ctx);
         self.run_queues(&ctx);
         self.run_scripts();
@@ -3109,6 +3333,22 @@ impl eframe::App for PrzmApp {
                             {
                                 ui.close();
                                 self.open_bundle();
+                            }
+                            if ui
+                                .button("Settings folder…")
+                                .on_hover_text(
+                                    "Where PrzmTerm keeps its settings: a synced folder \
+                                     shares them between computers",
+                                )
+                                .clicked()
+                            {
+                                ui.close();
+                                self.folder_dialog = Some(
+                                    self.config_dir
+                                        .as_deref()
+                                        .map(|d| d.display().to_string())
+                                        .unwrap_or_default(),
+                                );
                             }
                             ui.separator();
                             if ui.button("Keyword sets…").clicked() {
@@ -3644,7 +3884,7 @@ mod tests {
 
     fn tab(labels: &[&str]) -> Tab {
         let mut panes = labels.iter().map(|l| {
-            let mut p = Pane::demo();
+            let mut p = Pane::launcher();
             p.label = l.to_string();
             p
         });

@@ -140,6 +140,9 @@ pub struct Editor {
     x11_forwarding: Option<bool>,
     keywords: Option<String>,
     logon_script: String,
+    /// Kept as typed: a single space is a usual anti-idle text.
+    anti_idle: String,
+    anti_idle_interval: String,
     scp_shell: String,
     /// The keyword editor was asked for, for this set (if any).
     keyword_request: Option<Option<String>>,
@@ -198,6 +201,8 @@ fn field_label(key: &str) -> &'static str {
         "x11_forwarding" => "X11 forwarding",
         "keywords" => "keyword highlighting",
         "logon_script" => "logon script",
+        "anti_idle" => "anti-idle text",
+        "anti_idle_interval" => "anti-idle interval",
         "scp_shell" => "SCP shell",
         "forward" => "tunnels",
         "trigger" => "triggers",
@@ -253,6 +258,8 @@ impl Context<'_> {
             "x11_forwarding" => "no".into(),
             "keywords" => "none".into(),
             "logon_script" => "none".into(),
+            "anti_idle" => "nothing (off); e.g. a space or \\r".into(),
+            "anti_idle_interval" => przmterm_session::DEFAULT_ANTI_IDLE_INTERVAL.to_string(),
             "scp_shell" => "Default".into(),
             "forward" => "none".into(),
             "trigger" => "none".into(),
@@ -436,6 +443,8 @@ impl Editor {
             x11_forwarding: s.x11_forwarding,
             keywords: s.keywords.clone(),
             logon_script: text(&s.logon_script),
+            anti_idle: s.anti_idle.clone().unwrap_or_default(),
+            anti_idle_interval: text(&s.anti_idle_interval),
             scp_shell: text(&s.scp_shell),
             keyword_request: None,
             forwards: s.forwards.clone(),
@@ -493,6 +502,8 @@ impl Editor {
             x11_forwarding: self.x11_forwarding,
             keywords: self.keywords.clone(),
             logon_script: opt(&self.logon_script),
+            anti_idle: (!self.anti_idle.is_empty()).then(|| self.anti_idle.clone()),
+            anti_idle_interval: number("Anti-idle interval", &self.anti_idle_interval)?,
             scp_shell: opt(&self.scp_shell),
             triggers: match &self.triggers {
                 None => None,
@@ -896,6 +907,21 @@ impl Editor {
             }
             Page::Automation => {
                 grid(ui, "editor-automation", |ui| self.automation_fields(ui, cx));
+                section(
+                    ui,
+                    "Anti-idle",
+                    "Sends a text when nothing was typed for a while, so the far end \
+                     does not close the session. \\r is Enter.",
+                );
+                grid(ui, "editor-anti-idle", |ui| {
+                    field(ui, "Send", &mut self.anti_idle, &cx.hint("anti_idle"));
+                    field(
+                        ui,
+                        "Every (s)",
+                        &mut self.anti_idle_interval,
+                        &cx.hint("anti_idle_interval"),
+                    );
+                });
                 section(
                     ui,
                     "Triggers",

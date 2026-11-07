@@ -11,7 +11,8 @@ use przmterm_term::Terminal;
 #[derive(Parser)]
 #[command(name = "przm", version = przmterm_core::VERSION, about = "PrzmTerm command-line interface")]
 struct Cli {
-    /// Configuration directory (default: $PRZMTERM_HOME or the OS config dir).
+    /// Configuration directory (default: $PRZMTERM_HOME, the folder chosen in
+    /// the app, or the OS config dir).
     #[arg(long, global = true)]
     config: Option<PathBuf>,
 

@@ -9,7 +9,7 @@
 //! * single session `.ini` files.
 //!
 //! Only what PrzmTerm can use is taken over: protocol, host, port, user name,
-//! key file, jump host, serial line, terminal type, scrollback, keepalive and
+//! key file, jump host, serial line, terminal type, scrollback, keepalive, anti-idle and
 //! logging. Passwords are never imported: SecureCRT stores them encrypted,
 //! and PrzmTerm keeps passwords in the system keychain, asked at first login.
 
@@ -241,6 +241,14 @@ fn convert(name: &str, f: &Fields, report: &mut Report) -> Option<SessionSetting
     // "Send protocol NO-OP every N seconds".
     if number(f, "Idle NO-OP Check") == Some(1) {
         s.keepalive = number(f, "Idle NO-OP Timeout").filter(|&t| t != DEFAULT_KEEPALIVE);
+    }
+    // Anti-idle: "Send string … every N seconds".
+    if number(f, "Idle Check") == Some(1)
+        && let Some(idle) = text(f, "Idle String").filter(|t| !t.is_empty())
+    {
+        s.anti_idle = Some(idle.to_string());
+        s.anti_idle_interval =
+            number(f, "Idle Timeout").filter(|&t| t != crate::DEFAULT_ANTI_IDLE_INTERVAL && t > 0);
     }
     if let Some(set) = text(f, "Keyword Set") {
         s.keywords = Some(clean_name(set));
@@ -615,6 +623,9 @@ mod tests {
           <string name="Log Filename V2">${VDS_USER_DATA_PATH}\SSH Logs\%H_%D%M%Y-%h%m%s.log</string>
           <dword name="Idle NO-OP Check">1</dword>
           <dword name="Idle NO-OP Timeout">60</dword>
+          <dword name="Idle Check">1</dword>
+          <string name="Idle String">\r</string>
+          <dword name="Idle Timeout">300</dword>
           <dword name="Use Login Script">1</dword>
           <dword name="Forward X11">1</dword>
           <array name="Port Forward Table V3"><string>web|127.0.0.1|8080|10.0.0.5|80</string></array>
@@ -653,6 +664,8 @@ mod tests {
         assert_eq!(s.terminal.term_type, None, "xterm-256color is the default");
         assert_eq!(s.terminal.scrollback, Some(MAX_SCROLLBACK));
         assert_eq!(s.keepalive, Some(60));
+        assert_eq!(s.anti_idle.as_deref(), Some("\\r"));
+        assert_eq!(s.anti_idle_interval, Some(300));
         assert_eq!(s.x11_forwarding, Some(true));
         assert_eq!(s.log.enabled, Some(true));
         assert_eq!(s.log.path.as_deref(), Some("%H_%D%M%Y-%h%m%s.log"));

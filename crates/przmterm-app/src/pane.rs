@@ -22,8 +22,8 @@ use przmterm_transport::{Ending, Size, Transport, TransportError, Waker};
 use przmterm_script::{Outcome, Request, Script, SessionInfo};
 use przmterm_term::plain::PlainText;
 
-use crate::demo::DemoShell;
 use crate::keychain::Keychain;
+use crate::launcher::{Launcher, Requests};
 use crate::view::TerminalView;
 
 /// What a pane needs from the application.
@@ -252,6 +252,12 @@ pub struct Pane {
     retry: Option<Retry>,
     /// Failed attempts in a row, for the back-off.
     attempts: usize,
+    /// What the PrzmTerm shell in this pane asks for (`None`: not one).
+    launcher: Option<Requests>,
+    /// When something was last sent, for the anti-idle text.
+    last_sent: std::time::Instant,
+    /// Output arrived since the connection started: the far end is up.
+    heard: bool,
     /// Watches the output for the session's triggers.
     triggers: Option<przmterm_term::triggers::TriggerEngine>,
     /// Macro text still to send, and when the next piece is due (`\p`).
@@ -375,6 +381,9 @@ impl Pane {
             closed_announced: false,
             retry: None,
             attempts: 0,
+            launcher: None,
+            last_sent: std::time::Instant::now(),
+            heard: false,
             triggers: None,
             queue: VecDeque::new(),
             queue_at: None,
@@ -651,14 +660,31 @@ impl Pane {
         self.transfer_events.push(TransferEvent::Ended(message));
     }
 
-    pub fn demo() -> Self {
-        Self::with(
+    /// A pane with the PrzmTerm shell, which opens sessions.
+    pub fn launcher() -> Self {
+        let requests = Requests::default();
+        let mut pane = Self::with(
             Terminal::new(80, 24),
-            Box::new(DemoShell::new()),
+            Box::new(Launcher::new(requests.clone())),
             TerminalView::default(),
-            "demo shell".into(),
+            "PrzmTerm".into(),
             None,
-        )
+        );
+        pane.launcher = Some(requests);
+        pane
+    }
+
+    /// What the PrzmTerm shell in this pane asked for since last time.
+    pub fn take_requests(&mut self) -> Vec<crate::launcher::Request> {
+        self.launcher
+            .as_ref()
+            .and_then(|r| r.lock().ok().map(|mut r| std::mem::take(&mut *r)))
+            .unwrap_or_default()
+    }
+
+    /// The PrzmTerm shell is running here.
+    pub fn is_launcher(&self) -> bool {
+        self.launcher.is_some()
     }
 
     pub fn open(session: &Session, env: &Env, size: Size, waker: Waker) -> Self {
@@ -868,6 +894,22 @@ impl Pane {
         None
     }
 
+    /// Queues the session's anti-idle text when nothing has been sent for
+    /// its interval. Returns when to check again.
+    pub fn anti_idle(&mut self, now: std::time::Instant) -> Option<std::time::Instant> {
+        let (text, every) = self.origin.as_ref()?.anti_idle.clone()?;
+        if self.transport.is_closed() || !self.heard || self.in_band_transfer() {
+            return None;
+        }
+        let due = self.last_sent + every;
+        if now < due {
+            return Some(due);
+        }
+        self.enqueue(&przmterm_session::buttons::parse_send(&text));
+        self.last_sent = now;
+        Some(now + every)
+    }
+
     /// Connects again on the same screen, keeping the scrollback and the log.
     pub fn reconnect(&mut self, env: &Env, waker: Waker) {
         let Some(session) = self.origin.clone() else {
@@ -878,6 +920,8 @@ impl Pane {
         let _ = self.transport.close();
         self.transport = connect(&session, env, self.size(), waker.clone());
         self.closed_announced = false;
+        self.heard = false;
+        self.last_sent = std::time::Instant::now();
         if let Some(engine) = &mut self.triggers {
             engine.reset();
         }
@@ -934,7 +978,7 @@ impl Pane {
         let session = self
             .origin
             .clone()
-            .unwrap_or_else(|| Session::quick_connect("demo").expect("valid quick-connect"));
+            .unwrap_or_else(|| Session::quick_connect("przmterm").expect("valid quick-connect"));
         let path = session.log_file(env.config_dir.as_deref(), &chrono::Local::now());
         match SessionLog::start(path.clone(), &session.name) {
             Ok(log) => {
@@ -969,6 +1013,7 @@ impl Pane {
                 Ok(0) => break,
                 Ok(n) => {
                     got = true;
+                    self.heard = true;
                     let now = std::time::Instant::now();
                     if let Some(t) = self.transfer.as_mut().filter(|t| t.in_band) {
                         t.engine.input(&buf[..n], now);
@@ -1078,7 +1123,8 @@ impl Pane {
             return;
         }
         match self.transport.write(bytes) {
-            Ok(()) | Err(TransportError::Closed) => {}
+            Ok(()) => self.last_sent = std::time::Instant::now(),
+            Err(TransportError::Closed) => {}
             Err(e) => tracing::warn!("transport write failed: {e}"),
         }
     }
@@ -1153,15 +1199,16 @@ impl Pane {
 
     /// A new pane on the same session: another channel on the live
     /// connection when possible (no new login, so no 2FA prompt), else a
-    /// fresh connection. Without a session, a demo shell.
+    /// fresh connection. Without a session, the PrzmTerm shell.
     pub fn clone_session(&self, env: &Env, waker: Waker) -> Self {
         let Some(session) = &self.origin else {
-            return Pane::demo();
+            return Pane::launcher();
         };
         let size = self.size();
         if let (Target::Serial(line), false) = (&session.target, self.transport.is_closed()) {
             // A port opens once: a second pane would only get "busy".
-            let mut pane = Pane::demo();
+            let mut pane = Pane::launcher();
+            pane.launcher = None;
             pane.transport = message(&format!(
                 "\x1b[33m{}\r\nis open in another pane.\x1b[0m\r\n",
                 line.port
@@ -1231,7 +1278,7 @@ mod tests {
     fn ended_pane(ending: Ending, auto_reconnect: bool) -> Pane {
         let mut session = Session::quick_connect("10.0.0.1").unwrap();
         session.auto_reconnect = auto_reconnect;
-        let mut pane = Pane::demo();
+        let mut pane = Pane::launcher();
         pane.origin = Some(session);
         pane.transport = Box::new(Ended(ending));
         pane
@@ -1326,7 +1373,7 @@ mod tests {
     #[test]
     fn macro_queue_waits_at_pauses() {
         use przmterm_session::buttons::parse_send;
-        let mut pane = Pane::demo();
+        let mut pane = Pane::launcher();
         pane.enqueue(&parse_send("one\\r\\ptwo\\r"));
         let now = std::time::Instant::now();
         let next = pane.run_queue(now).expect("waits at the pause");

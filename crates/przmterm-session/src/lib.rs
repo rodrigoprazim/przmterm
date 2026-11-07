@@ -20,6 +20,7 @@
 pub mod bundle;
 pub mod buttons;
 pub mod keymap;
+pub mod location;
 pub mod securecrt;
 pub mod vault;
 
@@ -47,6 +48,8 @@ pub const DEFAULT_TERM_TYPE: &str = "xterm-256color";
 pub const DEFAULT_SCROLLBACK: usize = 10_000;
 /// Seconds between keepalives.
 pub const DEFAULT_KEEPALIVE: u32 = 30;
+/// Seconds without typing before the anti-idle text is sent.
+pub const DEFAULT_ANTI_IDLE_INTERVAL: u32 = 60;
 /// Log file name used when logging is on and no `path` is set, relative to `<config>/logs`.
 pub const DEFAULT_LOG_TEMPLATE: &str = "%S-%Y%M%D-%h%m%s.log";
 pub const LOGS_DIR: &str = "logs";
@@ -219,6 +222,15 @@ pub struct SessionSettings {
     /// `<config>/scripts`, or a full path. `""` turns an inherited one off.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logon_script: Option<String>,
+    /// Anti-idle: text sent when nothing has been typed for
+    /// `anti_idle_interval` seconds, so the far end does not close an idle
+    /// session. The escapes of the button bar work (`\r` Enter…). `""`
+    /// turns an inherited one off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anti_idle: Option<String>,
+    /// Seconds without typing before `anti_idle` is sent; 0 turns it off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anti_idle_interval: Option<u32>,
     /// The shell SCP sessions run their commands in: `Default` (the login
     /// shell), `/bin/bash`, `sudo su -`… `""` turns an inherited one off.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -256,7 +268,7 @@ pub struct SessionSettings {
 }
 
 /// Keys of the individual settings, used to compare and copy them.
-pub const FIELDS: [&str; 34] = [
+pub const FIELDS: [&str; 36] = [
     "protocol",
     "host",
     "port",
@@ -272,6 +284,8 @@ pub const FIELDS: [&str; 34] = [
     "x11_forwarding",
     "keywords",
     "logon_script",
+    "anti_idle",
+    "anti_idle_interval",
     "scp_shell",
     "forward",
     "trigger",
@@ -312,6 +326,8 @@ impl SessionSettings {
             "x11_forwarding" => self.x11_forwarding = from.x11_forwarding,
             "keywords" => self.keywords = from.keywords.clone(),
             "logon_script" => self.logon_script = from.logon_script.clone(),
+            "anti_idle" => self.anti_idle = from.anti_idle.clone(),
+            "anti_idle_interval" => self.anti_idle_interval = from.anti_idle_interval,
             "scp_shell" => self.scp_shell = from.scp_shell.clone(),
             "forward" => self.forwards = from.forwards.clone(),
             "trigger" => self.triggers = from.triggers.clone(),
@@ -356,6 +372,8 @@ impl SessionSettings {
             "x11_forwarding" => self.x11_forwarding.map(yes_no),
             "keywords" => self.keywords.clone(),
             "logon_script" => self.logon_script.clone(),
+            "anti_idle" => self.anti_idle.clone(),
+            "anti_idle_interval" => self.anti_idle_interval.map(|v| v.to_string()),
             "scp_shell" => self.scp_shell.clone(),
             "forward" => self.forwards.as_ref().map(|f| {
                 if f.is_empty() {
@@ -427,6 +445,8 @@ impl SessionSettings {
             x11_forwarding: pick(&self.x11_forwarding, &over.x11_forwarding),
             keywords: pick(&self.keywords, &over.keywords),
             logon_script: pick(&self.logon_script, &over.logon_script),
+            anti_idle: pick(&self.anti_idle, &over.anti_idle),
+            anti_idle_interval: pick(&self.anti_idle_interval, &over.anti_idle_interval),
             scp_shell: pick(&self.scp_shell, &over.scp_shell),
             forwards: pick(&self.forwards, &over.forwards),
             triggers: pick(&self.triggers, &over.triggers),
@@ -474,6 +494,7 @@ impl SessionSettings {
             "log.enabled" => s.log.enabled = Some(false),
             "debug" => s.debug = Some(false),
             "keepalive" => s.keepalive = Some(DEFAULT_KEEPALIVE),
+            "anti_idle_interval" => s.anti_idle_interval = Some(DEFAULT_ANTI_IDLE_INTERVAL),
             "auto_reconnect" => s.auto_reconnect = Some(false),
             "legacy_algorithms" => s.legacy_algorithms = Some(false),
             "x11_forwarding" => s.x11_forwarding = Some(false),
@@ -535,6 +556,9 @@ pub struct Session {
     pub keywords: Option<String>,
     /// See [`SessionSettings::logon_script`]; resolve with [`script_path`].
     pub logon_script: Option<String>,
+    /// Text to send and the time without typing before it is sent (see
+    /// [`SessionSettings::anti_idle`]); `None` when off.
+    pub anti_idle: Option<(String, std::time::Duration)>,
     /// See [`SessionSettings::scp_shell`]; `None` is the login shell.
     pub scp_shell: Option<String>,
     pub term_type: String,
@@ -633,6 +657,18 @@ impl Session {
                 .logon_script
                 .clone()
                 .filter(|k| !k.trim().is_empty()),
+            anti_idle: match (
+                settings.anti_idle.as_deref(),
+                settings
+                    .anti_idle_interval
+                    .unwrap_or(DEFAULT_ANTI_IDLE_INTERVAL),
+            ) {
+                (Some(text), secs) if !text.is_empty() && secs > 0 => Some((
+                    text.to_string(),
+                    std::time::Duration::from_secs(u64::from(secs)),
+                )),
+                _ => None,
+            },
             scp_shell: settings
                 .scp_shell
                 .clone()
@@ -1310,12 +1346,10 @@ pub fn write_defaults(config_dir: &Path, settings: &SessionSettings) -> Result<(
     fs::write(&path, settings.to_toml()).map_err(|source| SessionError::Io { path, source })
 }
 
-/// Default configuration directory: `$PRZMTERM_HOME`, else the OS config dir.
+/// The configuration directory: `$PRZMTERM_HOME`, else the folder chosen
+/// in PrzmTerm, else the OS config dir (see [`location`]).
 pub fn default_config_dir() -> Option<PathBuf> {
-    if let Some(home) = std::env::var_os("PRZMTERM_HOME") {
-        return Some(PathBuf::from(home));
-    }
-    dirs::config_dir().map(|d| d.join("przmterm"))
+    location::env_dir().or_else(|| location::standard_dir().map(|d| location::resolve(&d)))
 }
 
 /// Expands a log file name template:
@@ -1883,6 +1917,31 @@ mod tests {
             "{toml}"
         );
         assert_eq!(SessionSettings::from_toml(&toml).unwrap(), own);
+    }
+
+    #[test]
+    fn anti_idle_needs_text_and_an_interval() {
+        let resolve = |toml: &str| {
+            let s = SessionSettings::from_toml(toml).unwrap();
+            Session::resolve("r1", Vec::new(), "r1.toml", &s)
+                .unwrap()
+                .anti_idle
+        };
+        let minute = std::time::Duration::from_secs(60);
+        assert_eq!(resolve("host = 'r1'"), None);
+        assert_eq!(
+            resolve("host = 'r1'\nanti_idle = ' '"),
+            Some((" ".to_string(), minute))
+        );
+        assert_eq!(
+            resolve("host = 'r1'\nanti_idle = '\\r'\nanti_idle_interval = 300"),
+            Some(("\\r".to_string(), minute * 5))
+        );
+        assert_eq!(
+            resolve("host = 'r1'\nanti_idle = ' '\nanti_idle_interval = 0"),
+            None
+        );
+        assert_eq!(resolve("host = 'r1'\nanti_idle = ''"), None);
     }
 
     #[test]

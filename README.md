@@ -32,6 +32,11 @@ cargo run --release -p przmterm-cli -- --help   # CLI (przm)
 ## Connecting
 
 Type `user@host:port` in **Quick connect**, or double-click a saved session.
+The tab PrzmTerm opens with is its own small shell: `ssh router-lab` opens a
+saved session (Tab completes the name, or `Lab/Core/` for a folder),
+`ssh -p 2222 admin@10.0.0.1` a host that is not saved, `telnet host [port]`
+a Telnet one and `sessions [text]` lists them; Up and Down go through what was
+typed. `help` lists the commands. It is not a system shell.
 Host key questions, `login as:`, passwords, key passphrases and two-factor
 prompts appear in the terminal, as with OpenSSH. Authentication tries, in
 order: ssh-agent (Pageant or the OpenSSH agent on Windows), the session's
@@ -308,6 +313,12 @@ or cannot be made, tries again after 2, 5, 10, 20 and then every 30 seconds,
 on the same screen. Enter reconnects at once; Ctrl+C stops the retries. A
 normal logout or a rejected login never triggers it.
 
+Some devices close a session when nobody types, whatever the keepalives.
+**Anti-idle** (*Automation* page of the editor) sends a text after that many
+seconds without typing: `anti_idle = ' '` or `'\r'`, with
+`anti_idle_interval = 60` (the default; 0 turns it off). The escapes of the
+button bar work, and SecureCRT's "Send string" setting is imported.
+
 ### Telnet and serial
 
 Quick connect also takes `telnet://host[:port]` and `serial://PORT[@BAUD]`,
@@ -375,13 +386,21 @@ command = "new_tab"
 
 ## Sessions
 
-PrzmTerm reads its configuration from `$PRZMTERM_HOME`, or by default from:
+PrzmTerm reads its configuration from `$PRZMTERM_HOME`, else from the folder
+chosen in **+** › *Settings folder…*, or by default from:
 
 | OS | Directory |
 | --- | --- |
 | Linux | `~/.config/przmterm` |
 | macOS | `~/Library/Application Support/przmterm` |
 | Windows | `%APPDATA%\przmterm` |
+
+*Settings folder…* moves them to any folder, such as one synced by iCloud
+Drive, Dropbox or OneDrive, so several computers share the sessions. An empty
+folder gets a copy of the current settings (the old ones stay where they
+were); a folder that already holds PrzmTerm settings is used as it is, which is
+how a second computer joins. Only `location.toml`, naming the folder, stays in
+the default place. The `przm` CLI follows the same choice.
 
 ```text
 przmterm/
@@ -405,6 +424,8 @@ identity_file = "~/.ssh/id_lab"
 save_password = true       # keychain: unset asks, true always, false never
 debug = true               # show each step of the SSH login (like ssh -v)
 keepalive = 30             # seconds between keepalives, 0 = off
+anti_idle = '\r'           # sent after anti_idle_interval s without typing
+anti_idle_interval = 60    # 0 = off
 auto_reconnect = true      # reconnect when the connection drops
 legacy_algorithms = true   # also offer old SSH algorithms (old switches)
 x11_forwarding = true      # remote graphical programs on this screen (ssh -X)

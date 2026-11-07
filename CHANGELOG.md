@@ -24,8 +24,22 @@ All notable changes to PrzmTerm are recorded here. The format follows
   monospace font), its size, the cursor shape (block, underline, bar), its
   colour and blinking. Changes show at once; *Cancel* (or Esc) undoes them,
   *Apply* keeps them in the tab and *Save* also in the session's settings.
+- Anti-idle: a session can send a text (a space, `\r`…) after a number of
+  seconds without typing, so devices that drop idle sessions keep it open
+  (`anti_idle`, `anti_idle_interval`; *Automation* page of the editor).
+  SecureCRT's "Send string every N seconds" is imported.
+- *Settings folder…* (under **+**) moves PrzmTerm's settings to another
+  folder, a synced one for instance: an empty folder gets a copy of the
+  current settings, a folder that already has PrzmTerm settings is used as it
+  is. The `przm` CLI follows the choice.
 
 ### Changed
+
+- The tab PrzmTerm opens with (the demo shell) is now a PrzmTerm shell that
+  connects: `ssh <session>` opens a saved session, with Tab completing the
+  name (or the folder path), `ssh [-p port] [-l user] user@host` and `telnet
+  host [port]` connect to hosts that are not saved, `sessions [text]` lists
+  them, and Up/Down recall earlier lines.
 
 - The session, folder and global settings are split into pages chosen from
   a menu on the left (Connection, Login, SSH, Serial port, Terminal,

@@ -168,6 +168,10 @@ and, when a device is at hand, a serial console (Xmodem or Ymodem).
   window), locking a session with a password
 - [x] Font family and size saved per session, with the cursor shape, colour
   and blinking
+- [x] Anti-idle: a text sent after N seconds without typing
+- [x] Settings folder can be moved (a synced folder shares it between computers)
+- [x] The opening tab is a PrzmTerm shell: `ssh <session>` with Tab
+  completion, `ssh user@host`, `telnet`, `sessions`, history
 - `przm run <session> --cmd …` headless mode
 - MCP server: `list_sessions`, `open_session`, `send`, `read_screen`, `run_script`,
   with per-session permissions and a command block list
