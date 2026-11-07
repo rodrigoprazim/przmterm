@@ -8,8 +8,10 @@ use clap::{Parser, Subcommand};
 use przmterm_session::{Folder, SessionTree};
 use przmterm_term::Terminal;
 
+mod headless;
+mod mcp;
 mod run;
-use run::Asker;
+use headless::Asker;
 
 #[derive(Parser)]
 #[command(name = "przm", version = przmterm_core::VERSION, about = "PrzmTerm command-line interface")]
@@ -64,7 +66,7 @@ enum Command {
         #[arg(long, default_value_t = 30)]
         timeout: u64,
         /// The prompt, as a regular expression the last line matches.
-        #[arg(long, default_value = run::DEFAULT_PROMPT)]
+        #[arg(long, default_value = headless::DEFAULT_PROMPT)]
         prompt: String,
         /// Milliseconds of quiet after a prompt before a command counts as done.
         #[arg(long, default_value_t = 400)]
@@ -82,6 +84,10 @@ enum Command {
         #[arg(short, long)]
         verbose: bool,
     },
+    /// Serves the Model Context Protocol on stdin/stdout, for AI assistants
+    /// (Claude Desktop, Claude Code…): list, open and read sessions, send
+    /// commands, run scripts. Only sessions whose AI access allows it.
+    Mcp,
 }
 
 fn main() {
@@ -133,6 +139,7 @@ fn real_main() -> Result<()> {
             let code = run_session(cli.config, &session, opts)?;
             std::process::exit(code);
         }
+        Command::Mcp => mcp::serve(cli.config),
     }
 }
 
@@ -158,48 +165,22 @@ fn run_session(config: Option<PathBuf>, target: &str, mut opts: run::Options) ->
             }
         }
     }
-    let mut env = przmterm_connect::Env {
-        known_hosts: dir
-            .clone()
-            .unwrap_or_else(std::env::temp_dir)
-            .join(przmterm_session::KNOWN_HOSTS_FILE),
-        config_dir: dir.clone(),
-        sessions,
-        credentials: None,
-        headless: true,
-    };
-    // Vault entries need the master password.
-    if !przmterm_connect::vault_entries_used(&session, &env).is_empty()
-        && let Some(dir) = &dir
-    {
-        let path = przmterm_session::vault::vault_path(dir);
-        let master = match std::env::var("PRZMTERM_VAULT_PASSWORD") {
-            Ok(m) => m,
-            Err(_) => run::TerminalAsker
-                .ask("Vault master password: ", true)
-                .context(
-                    "the session logs in with a vault entry: set PRZMTERM_VAULT_PASSWORD \
-                     or run from a terminal",
-                )?,
-        };
-        let vault = przmterm_session::vault::Vault::open(&path, &master)
-            .map_err(|e| anyhow::anyhow!("vault: {e}"))?;
-        env.credentials = Some(std::sync::Arc::new(vault.entries.clone()));
-    }
-    let (waker, wait) = run::new_waker();
-    let mut transport = przmterm_connect::connect(&session, &env, run::SIZE, waker);
+    let mut env = headless_env(dir.as_deref(), sessions);
+    unlock_vault(&session, &mut env, &mut headless::TerminalAsker)?;
+    let (waker, wait) = headless::new_waker();
+    let transport = przmterm_connect::connect(&session, &env, headless::SIZE, waker);
+    let mut conn = headless::Conn::new(transport, &session.triggers);
     let stdout = std::io::stdout();
     let stderr = std::io::stderr();
     let ending = run::drive(
-        transport.as_mut(),
-        &session.triggers,
+        &mut conn,
         &opts,
-        &mut run::TerminalAsker,
+        &mut headless::TerminalAsker,
         &wait,
         &mut stdout.lock(),
         &mut stderr.lock(),
     );
-    let _ = transport.close();
+    let _ = conn.transport.close();
     match ending? {
         run::Ending::Done => Ok(0),
         run::Ending::TimedOut(cmd) => {
@@ -212,33 +193,90 @@ fn run_session(config: Option<PathBuf>, target: &str, mut opts: run::Options) ->
     }
 }
 
-/// A saved session by Folder/name or name (case does not matter), else a
-/// quick-connect target.
-fn find_session(
-    sessions: &[przmterm_session::Session],
-    target: &str,
-) -> Result<przmterm_session::Session> {
-    let label = |s: &przmterm_session::Session| {
-        let mut l = s.folder.join("/");
-        if !l.is_empty() {
-            l.push('/');
-        }
-        l.push_str(&s.name);
-        l
+/// What connecting needs, with nobody reading the terminal.
+pub(crate) fn headless_env(
+    dir: Option<&std::path::Path>,
+    sessions: Vec<przmterm_session::Session>,
+) -> przmterm_connect::Env {
+    przmterm_connect::Env {
+        known_hosts: dir
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(std::env::temp_dir)
+            .join(przmterm_session::KNOWN_HOSTS_FILE),
+        config_dir: dir.map(std::path::Path::to_path_buf),
+        sessions,
+        credentials: None,
+        headless: true,
+    }
+}
+
+/// Opens the vault when `session` (or a jump host) logs in with one of its
+/// entries: the master password comes from `PRZMTERM_VAULT_PASSWORD`, else
+/// from `asker`.
+pub(crate) fn unlock_vault(
+    session: &przmterm_session::Session,
+    env: &mut przmterm_connect::Env,
+    asker: &mut dyn Asker,
+) -> Result<()> {
+    if env.credentials.is_some() || przmterm_connect::vault_entries_used(session, env).is_empty() {
+        return Ok(());
+    }
+    let Some(dir) = env.config_dir.clone() else {
+        return Ok(());
     };
+    let master = match std::env::var("PRZMTERM_VAULT_PASSWORD") {
+        Ok(m) => m,
+        Err(_) => asker.ask("Vault master password: ", true).context(
+            "the session logs in with a vault entry: set PRZMTERM_VAULT_PASSWORD \
+             or run from a terminal",
+        )?,
+    };
+    let vault =
+        przmterm_session::vault::Vault::open(&przmterm_session::vault::vault_path(&dir), &master)
+            .map_err(|e| anyhow::anyhow!("vault: {e}"))?;
+    env.credentials = Some(std::sync::Arc::new(vault.entries.clone()));
+    Ok(())
+}
+
+/// Folders and name: `Lab/Core/router-lab`.
+pub(crate) fn label(s: &przmterm_session::Session) -> String {
+    let mut l = s.folder.join("/");
+    if !l.is_empty() {
+        l.push('/');
+    }
+    l.push_str(&s.name);
+    l
+}
+
+/// The saved sessions `target` names: by Folder/name, else by name (case
+/// does not matter).
+pub(crate) fn saved_sessions<'a>(
+    sessions: &'a [przmterm_session::Session],
+    target: &str,
+) -> Vec<&'a przmterm_session::Session> {
     let wanted = target.trim().trim_end_matches('/');
     let by_label: Vec<_> = sessions
         .iter()
         .filter(|s| label(s).eq_ignore_ascii_case(wanted))
         .collect();
-    let found = if by_label.is_empty() {
+    if by_label.is_empty() {
         sessions
             .iter()
             .filter(|s| s.name.eq_ignore_ascii_case(wanted))
             .collect()
     } else {
         by_label
-    };
+    }
+}
+
+/// A saved session by Folder/name or name (case does not matter), else a
+/// quick-connect target.
+fn find_session(
+    sessions: &[przmterm_session::Session],
+    target: &str,
+) -> Result<przmterm_session::Session> {
+    let wanted = target.trim().trim_end_matches('/');
+    let found = saved_sessions(sessions, target);
     match found.as_slice() {
         [one] => Ok((*one).clone()),
         [] => przmterm_session::Session::quick_connect(wanted)

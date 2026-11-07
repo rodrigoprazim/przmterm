@@ -20,6 +20,8 @@ przmterm-transport.workspace = true
 przmterm-connect.workspace = true
 fancy-regex.workspace = true
 rpassword = "7"
+przmterm-script.workspace = true
+serde_json.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 

@@ -25,6 +25,7 @@ przmterm-connect = { path = "crates/przmterm-connect" }
 anyhow = "1"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 toml = "1"
 vte = "0.15"
 unicode-width = "0.2"

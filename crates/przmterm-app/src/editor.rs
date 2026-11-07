@@ -10,7 +10,8 @@ use eframe::egui;
 use przmterm_core::Protocol;
 use przmterm_session::{
     COMMON_BAUD_RATES, DEFAULT_DATA_BITS, DEFAULT_STOP_BITS, FlowControl, Folder, Forward,
-    ForwardKind, LogSettings, Parity, Session, SessionSettings, TerminalSettings, Trigger,
+    ForwardKind, LogSettings, McpAccess, McpSettings, Parity, Session, SessionSettings,
+    TerminalSettings, Trigger,
 };
 use przmterm_transport::serial::{PortInfo, available_ports};
 
@@ -72,6 +73,7 @@ enum Page {
     Terminal,
     Automation,
     Logging,
+    Mcp,
 }
 
 impl Page {
@@ -84,6 +86,7 @@ impl Page {
             Page::Terminal => "Terminal",
             Page::Automation => "Automation",
             Page::Logging => "Logging",
+            Page::Mcp => "AI access",
         }
     }
 }
@@ -151,6 +154,9 @@ pub struct Editor {
     /// Triggers set here; `None` inherits the list from above.
     triggers: Option<Vec<Trigger>>,
     show_log_help: bool,
+    mcp_access: Option<McpAccess>,
+    /// One regular expression per line; empty inherits.
+    mcp_block: String,
     /// The section whose explanation is open (its title).
     help: Option<&'static str>,
     /// Scroll to the log settings when the window first shows.
@@ -223,6 +229,8 @@ fn field_label(key: &str) -> &'static str {
         "log.enabled" => "log to file",
         "log.path" => "log file",
         "log.dir" => "log folder",
+        "mcp.access" => "AI access",
+        "mcp.block" => "AI blocked commands",
         "host" => "host",
         "serial_port" => "serial port",
         _ => "setting",
@@ -281,6 +289,8 @@ impl Context<'_> {
             "log.enabled" => "no".into(),
             "log.path" => przmterm_session::DEFAULT_LOG_TEMPLATE.into(),
             "log.dir" => self.logs_dir.clone(),
+            "mcp.access" => "none".into(),
+            "mcp.block" => przmterm_session::DEFAULT_MCP_BLOCK.join("\n"),
             _ => String::new(),
         }
     }
@@ -452,6 +462,13 @@ impl Editor {
             forwards: s.forwards.clone(),
             triggers: s.triggers.clone(),
             show_log_help: false,
+            mcp_access: s.mcp.access,
+            mcp_block: s
+                .mcp
+                .block
+                .as_ref()
+                .map(|b| b.join("\n"))
+                .unwrap_or_default(),
             help: None,
             scroll_to_log: false,
             page: Page::General,
@@ -569,6 +586,25 @@ impl Editor {
                 enabled: self.log,
                 path: opt(&self.log_path),
                 dir: opt(&self.log_dir),
+            },
+            mcp: McpSettings {
+                access: self.mcp_access,
+                block: match self.mcp_block.trim() {
+                    "" => None,
+                    text => {
+                        let list: Vec<String> = text
+                            .lines()
+                            .map(str::trim)
+                            .filter(|l| !l.is_empty())
+                            .map(String::from)
+                            .collect();
+                        for line in &list {
+                            fancy_regex::Regex::new(line)
+                                .map_err(|e| format!("AI access, blocked `{line}`: {e}"))?;
+                        }
+                        Some(list)
+                    }
+                },
             },
             ..SessionSettings::default()
         })
@@ -855,7 +891,7 @@ impl Editor {
         if !session {
             pages.push(Page::Serial);
         }
-        pages.extend([Page::Terminal, Page::Automation, Page::Logging]);
+        pages.extend([Page::Terminal, Page::Automation, Page::Logging, Page::Mcp]);
         pages
     }
 
@@ -942,6 +978,19 @@ impl Editor {
                      the keychain, not here.",
                 );
                 self.triggers_ui(ui, cx);
+            }
+            Page::Mcp => {
+                section_help(
+                    ui,
+                    &mut self.help,
+                    "AI access",
+                    "What an AI assistant connected with `przm mcp` may do with this \
+                     session. None: it does not see it. Read: open it and read the \
+                     screen. Full: also send commands and run scripts, except lines that \
+                     match the blocked list (regular expressions, case ignored; empty \
+                     uses the list shown in grey).",
+                );
+                grid(ui, "editor-mcp", |ui| self.mcp_fields(ui, cx));
             }
             Page::Logging => {
                 grid(ui, "editor-logging", |ui| self.log_fields(ui, cx));
@@ -1495,6 +1544,37 @@ impl Editor {
         ui.end_row();
     }
 
+    /// AI access: the level, and the commands never sent.
+    fn mcp_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
+        ui.label("Access");
+        choice_pick(
+            ui,
+            &mut self.mcp_access,
+            cx.inherited.mcp.access.unwrap_or_default(),
+            &[
+                (McpAccess::None, "none"),
+                (McpAccess::Read, "read"),
+                (McpAccess::Full, "full"),
+            ],
+            &cx.hint("mcp.access"),
+        );
+        ui.end_row();
+        ui.label("Blocked");
+        let hint = match &cx.inherited.mcp.block {
+            Some(list) if list.is_empty() => "nothing".to_string(),
+            Some(list) => list.join("\n"),
+            None => przmterm_session::DEFAULT_MCP_BLOCK.join("\n"),
+        };
+        ui.add(
+            egui::TextEdit::multiline(&mut self.mcp_block)
+                .hint_text(hint)
+                .font(egui::TextStyle::Monospace)
+                .desired_rows(6)
+                .desired_width(380.0),
+        );
+        ui.end_row();
+    }
+
     /// The anti-idle text and how often, on one row.
     fn anti_idle_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
         ui.label("Send");
@@ -1811,7 +1891,7 @@ fn folder_picker(ui: &mut egui::Ui, root: &Folder, trail: &mut Vec<String>) {
     } else {
         trail.join(" › ")
     };
-    ui.menu_button(format!("📁 {label}  ▾"), |ui| {
+    ui.menu_button(format!("{label}  ▾"), |ui| {
         egui::ScrollArea::vertical()
             .max_height(260.0)
             .show(ui, |ui| {
@@ -1829,15 +1909,12 @@ fn picker_level(ui: &mut egui::Ui, folder: &Folder, trail: &mut Vec<String>) {
     for f in &folder.folders {
         let selected = *trail == f.trail;
         if f.folders.is_empty() {
-            if ui
-                .selectable_label(selected, format!("📁 {}", f.name))
-                .clicked()
-            {
+            if ui.selectable_label(selected, f.name.as_str()).clicked() {
                 *trail = f.trail.clone();
                 ui.close();
             }
         } else {
-            egui::CollapsingHeader::new(format!("📁 {}", f.name))
+            egui::CollapsingHeader::new(f.name.as_str())
                 .id_salt(&f.dir)
                 .default_open(trail.starts_with(&f.trail))
                 .show(ui, |ui| {

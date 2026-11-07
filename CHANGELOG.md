@@ -9,6 +9,13 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Added
 
+- `przm mcp`: a Model Context Protocol server, so AI assistants (Claude
+  Desktop, Claude Code…) can list sessions, open them, send commands, read
+  the screen and run scripts. Each session (or folder, or the defaults) sets
+  its **AI access** on a page of its own: none (the default: not even
+  listed), read or full; a block list of regular expressions (by default
+  restarts, erasing, formatting, `rm -r`, `mkfs`, `dd` onto disks) is never
+  sent, also from scripts. New host keys are never accepted there.
 - `przm run <session> -c …`: connects a session without a window, logs in
   (key, vault entry or the password saved in the keychain; other questions
   asked on the terminal), runs the commands one after another, waiting for

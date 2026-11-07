@@ -19,6 +19,7 @@ przmterm-term.workspace = true
 przmterm-session.workspace = true
 przmterm-script.workspace = true
 przmterm-connect.workspace = true
+fancy-regex.workspace = true
 eframe.workspace = true
 arboard = { version = "3.7", default-features = false }
 # Native file dialogs; on Linux through the XDG portal (pure Rust, no GTK).

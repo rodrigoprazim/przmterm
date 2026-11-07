@@ -218,6 +218,48 @@ the like. The exit code is 0 when all commands ran, 1 when the connection or
 login failed and 2 when a prompt did not come back. `-v` shows the login on
 stderr, `--raw` keeps the escape sequences.
 
+### AI assistants (MCP)
+
+`przm mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
+server: an AI assistant such as Claude Desktop or Claude Code can list your
+sessions, open one, send commands, read the screen and run scripts. It only
+sees the sessions you allow, on the **AI access** page of a session's (or a
+folder's, or the global) settings:
+
+| Access | The assistant can |
+| --- | --- |
+| none (default) | nothing: the session is not listed |
+| read | open it and read the screen |
+| full | also send commands and run scripts |
+
+Even with full access, lines matching the **Blocked** list (regular
+expressions, case ignored) are refused: by default restarts and shutdowns
+(`reload`, `reboot`, `sudo shutdown`…), `write erase`, `erase`, `format`,
+`delete`, `rm -r`, `mkfs` and `dd` onto a disk. New host keys are never
+accepted from there: connect once in the app first.
+
+Claude Desktop (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "przmterm": { "command": "/Users/you/.cargo/bin/przm", "args": ["mcp"] }
+  }
+}
+```
+
+Claude Code: `claude mcp add przmterm -- przm mcp`.
+
+Sessions log in with their key or the password saved in the keychain. For
+vault entries, add `"env": { "PRZMTERM_VAULT_PASSWORD": "…" }` to the server;
+that file then holds the master password in plain text, so prefer keys or the
+keychain for the sessions you share.
+
+The tools: `list_sessions`, `open_session` (returns an id such as `s1`),
+`send` (types a command, waits for the prompt and returns the output),
+`read_screen`, `run_script` (a file of the scripts folder, or its source) and
+`close_session`.
+
 ### Scripts
 
 Scripts are [Rhai](https://rhai.rs) files (`.rhai`) kept in
@@ -470,6 +512,10 @@ scrollback = 10000
 enabled = true
 dir = "~/logs"                 # folder for relative file names (default <config>/logs)
 path = "%S-%Y%M%D.log"         # %S session, %H host, %Y%M%D date, %h%m%s time
+
+[mcp]
+access = "read"                # none | read | full: what `przm mcp` may do
+block = ['^\s*reload\b']      # lines never sent (default: see AI assistants)
 ```
 
 Sessions can also be created and edited from the app: **+** next to

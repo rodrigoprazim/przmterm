@@ -173,7 +173,7 @@ and, when a device is at hand, a serial console (Xmodem or Ymodem).
 - [x] The opening tab is a PrzmTerm shell: `ssh <session>` with Tab
   completion, `ssh user@host`, `telnet`, `sessions`, history
 - [x] `przm run <session> --cmd …` headless mode
-- MCP server: `list_sessions`, `open_session`, `send`, `read_screen`, `run_script`,
+- [x] MCP server: `list_sessions`, `open_session`, `send`, `read_screen`, `run_script`,
   with per-session permissions and a command block list
 - Dedicated `wgpu` grid renderer with a glyph atlas
 - [x] `cargo deny` in CI (RustSec advisories as `cargo audit` checks them,

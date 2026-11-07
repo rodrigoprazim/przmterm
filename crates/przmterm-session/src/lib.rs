@@ -155,6 +155,56 @@ impl CursorShape {
     }
 }
 
+/// What an AI assistant connected through `przm mcp` may do with a session.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum McpAccess {
+    /// Not listed, cannot be opened.
+    #[default]
+    None,
+    /// Opened and read, nothing typed.
+    Read,
+    /// Commands and scripts too, except those the block list stops.
+    Full,
+}
+
+impl McpAccess {
+    pub const ALL: [McpAccess; 3] = [McpAccess::None, McpAccess::Read, McpAccess::Full];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            McpAccess::None => "none",
+            McpAccess::Read => "read",
+            McpAccess::Full => "full",
+        }
+    }
+}
+
+/// Commands an AI assistant may never send, when no list is set: restarts,
+/// erasing configuration or disks, deleting files. Regular expressions,
+/// matched against each line sent, case ignored.
+pub const DEFAULT_MCP_BLOCK: [&str; 7] = [
+    r"(^|[;&|(]|\b(sudo|doas|nohup|exec)(\s+-\S+)*)\s*(reload|reboot|shutdown|halt|poweroff|init\s+[06])\b",
+    r"(^|[;&|(]|\b(sudo|doas)(\s+-\S+)*)\s*(write\s+erase|erase|format|delete)\b",
+    r"\bsystemctl\s+(reboot|poweroff|halt|kexec)\b",
+    r"\brm\s+(-\w*\s+)*-\w*[rR]\w*\s",
+    r"\bmkfs\b",
+    r"\bdd\b.*\bof=/dev/",
+    r"^\s*(request\s+system\s+(reboot|halt|power-off|zeroize))\b",
+];
+
+/// AI access options of a settings layer (`[mcp]`). `None` = inherit.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct McpSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access: Option<McpAccess>,
+    /// Lines matching one of these regular expressions are never sent.
+    /// Unset: [`DEFAULT_MCP_BLOCK`]; `[]` blocks nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub block: Option<Vec<String>>,
+}
+
 /// Font size when none is set.
 pub const DEFAULT_FONT_SIZE: u16 = 14;
 /// Sizes a font may have.
@@ -263,6 +313,8 @@ pub struct SessionSettings {
     pub terminal: TerminalSettings,
     #[serde(skip_serializing_if = "is_default")]
     pub log: LogSettings,
+    #[serde(skip_serializing_if = "is_default")]
+    pub mcp: McpSettings,
     /// Accepted and ignored: written by a development build of 0.3.
     #[doc(hidden)]
     #[serde(rename = "force", skip_serializing)]
@@ -270,7 +322,7 @@ pub struct SessionSettings {
 }
 
 /// Keys of the individual settings, used to compare and copy them.
-pub const FIELDS: [&str; 36] = [
+pub const FIELDS: [&str; 38] = [
     "protocol",
     "host",
     "port",
@@ -307,6 +359,8 @@ pub const FIELDS: [&str; 36] = [
     "log.enabled",
     "log.path",
     "log.dir",
+    "mcp.access",
+    "mcp.block",
 ];
 
 impl SessionSettings {
@@ -351,6 +405,8 @@ impl SessionSettings {
             "log.enabled" => self.log.enabled = from.log.enabled,
             "log.path" => self.log.path = from.log.path.clone(),
             "log.dir" => self.log.dir = from.log.dir.clone(),
+            "mcp.access" => self.mcp.access = from.mcp.access,
+            "mcp.block" => self.mcp.block = from.mcp.block.clone(),
             _ => {}
         }
     }
@@ -413,6 +469,14 @@ impl SessionSettings {
             "log.enabled" => self.log.enabled.map(yes_no),
             "log.path" => self.log.path.clone(),
             "log.dir" => self.log.dir.clone(),
+            "mcp.access" => self.mcp.access.map(|a| a.name().to_string()),
+            "mcp.block" => self.mcp.block.as_ref().map(|b| {
+                if b.is_empty() {
+                    "none".to_string()
+                } else {
+                    b.join("; ")
+                }
+            }),
             _ => None,
         }
     }
@@ -472,6 +536,10 @@ impl SessionSettings {
                 path: pick(&self.log.path, &over.log.path),
                 dir: pick(&self.log.dir, &over.log.dir),
             },
+            mcp: McpSettings {
+                access: pick(&self.mcp.access, &over.mcp.access),
+                block: pick(&self.mcp.block, &over.mcp.block),
+            },
             legacy_force: Vec::new(),
         }
     }
@@ -501,6 +569,7 @@ impl SessionSettings {
             "legacy_algorithms" => s.legacy_algorithms = Some(false),
             "x11_forwarding" => s.x11_forwarding = Some(false),
             "log.path" => s.log.path = Some(DEFAULT_LOG_TEMPLATE.into()),
+            "mcp.access" => s.mcp.access = Some(McpAccess::None),
             _ => return None,
         }
         s.field_text(key).is_some().then_some(s)
@@ -576,6 +645,10 @@ pub struct Session {
     pub log_path: Option<String>,
     /// Folder for relative log file names, with `~` expanded.
     pub log_dir: Option<PathBuf>,
+    /// What `przm mcp` may do with the session.
+    pub mcp_access: McpAccess,
+    /// Regular expressions of lines `przm mcp` never sends.
+    pub mcp_block: Vec<String>,
 }
 
 impl Session {
@@ -715,6 +788,12 @@ impl Session {
             log_enabled: settings.log.enabled.unwrap_or(false),
             log_path: settings.log.path.clone(),
             log_dir: settings.log.dir.as_deref().map(expand_tilde),
+            mcp_access: settings.mcp.access.unwrap_or_default(),
+            mcp_block: settings
+                .mcp
+                .block
+                .clone()
+                .unwrap_or_else(|| DEFAULT_MCP_BLOCK.iter().map(|b| b.to_string()).collect()),
             path,
         })
     }
