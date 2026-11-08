@@ -353,7 +353,8 @@ impl Launcher {
             _ => (head, word),
         };
         let command = head.split_whitespace().next().unwrap_or("");
-        let options: Vec<String> = if head.trim().is_empty() {
+        let sessions = !head.trim().is_empty();
+        let options: Vec<String> = if !sessions {
             COMMANDS
                 .iter()
                 .filter(|c| c.starts_with(&word))
@@ -376,8 +377,13 @@ impl Launcher {
                     self.line = format!("{head}{common}");
                     self.redraw();
                 } else {
-                    let list = many.join("  ");
-                    self.emit(&format!("\r\n{list}\r\n"));
+                    let cols = usize::from(self.size.cols);
+                    let list = if sessions {
+                        by_folder(&catalog(), many, cols)
+                    } else {
+                        columns(many, cols, "")
+                    };
+                    self.emit(&format!("\r\n{list}"));
                     self.redraw();
                 }
             }
@@ -531,6 +537,81 @@ fn completions(entries: &[Entry], word: &str) -> Vec<String> {
         }
     }
     out.sort_by_key(|o| o.to_lowercase());
+    out
+}
+
+/// Session `options` under the folder each one is in (the top level first),
+/// in columns that fit `cols`.
+fn by_folder(entries: &[Entry], options: &[String], cols: usize) -> String {
+    let folder = |option: &String| {
+        entries
+            .iter()
+            .find(|e| &e.label == option || &e.name == option)
+            .and_then(|e| e.label.rsplit_once('/'))
+            .map(|(dir, _)| dir.to_string())
+            .unwrap_or_default()
+    };
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+    for option in options {
+        let dir = folder(option);
+        match groups.iter_mut().find(|(d, _)| *d == dir) {
+            Some((_, items)) => items.push(option.clone()),
+            None => groups.push((dir, vec![option.clone()])),
+        }
+    }
+    groups.sort_by_key(|(d, _)| (!d.is_empty(), d.to_lowercase()));
+    if let [(dir, items)] = groups.as_slice()
+        && dir.is_empty()
+    {
+        return columns(items, cols, "");
+    }
+    let mut out = String::new();
+    for (dir, items) in &groups {
+        let title = if dir.is_empty() { "(top level)" } else { dir };
+        out.push_str(&format!("\x1b[1;34m{title}\x1b[0m\r\n"));
+        out.push_str(&columns(items, cols, "  "));
+    }
+    out
+}
+
+/// `items` in as many columns as fit `cols`, read down then across like
+/// `ls`, every line starting with `indent`. Two spaces apart, or four when
+/// names have spaces of their own.
+fn columns(items: &[String], cols: usize, indent: &str) -> String {
+    let gap = if items.iter().any(|i| i.contains(' ')) {
+        4
+    } else {
+        2
+    };
+    let len = |s: &String| s.chars().count();
+    let room = cols.saturating_sub(indent.len()).max(1);
+    // The most columns whose widths (and gaps) fit the room.
+    let mut layout = (items.len().max(1), vec![0]);
+    for across in (1..=items.len()).rev() {
+        let down = items.len().div_ceil(across);
+        let widths: Vec<usize> = items
+            .chunks(down)
+            .map(|col| col.iter().map(len).max().unwrap_or(0))
+            .collect();
+        let total = widths.iter().sum::<usize>() + gap * (widths.len() - 1);
+        if total <= room || across == 1 {
+            layout = (down, widths);
+            break;
+        }
+    }
+    let (down, widths) = layout;
+    let mut out = String::new();
+    for row in 0..down {
+        let mut line = String::from(indent);
+        for (col, width) in widths.iter().enumerate() {
+            if let Some(item) = items.get(col * down + row) {
+                line.push_str(item);
+                line.push_str(&" ".repeat(width - len(item) + gap));
+            }
+        }
+        out.push_str(line.trim_end());
+        out.push_str("\r\n");
+    }
     out
 }
 
@@ -711,5 +792,32 @@ mod tests {
         t.write(b"open nothing\r").unwrap();
         assert!(drain(&mut t).contains("no saved session"));
         assert!(requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn lists_many_sessions_in_columns_by_folder() {
+        let items: Vec<String> = ["a", "bb", "c - d", "e", "ff"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        // Down then across, as many columns as fit.
+        assert_eq!(
+            columns(&items, 14, ""),
+            "a        e\r\nbb       ff\r\nc - d\r\n"
+        );
+        assert_eq!(
+            columns(&items, 4, "  "),
+            "  a\r\n  bb\r\n  c - d\r\n  e\r\n  ff\r\n"
+        );
+        let entries = vec![entry("Geo/Geo - DB"), entry("Geo/Geo - Host"), entry("gw")];
+        let options = completions(&entries, "g");
+        assert_eq!(
+            by_folder(&entries, &options, 80),
+            "\x1b[1;34m(top level)\x1b[0m\r\n  gw\r\n\
+             \x1b[1;34mGeo\x1b[0m\r\n  Geo - DB    Geo - Host\r\n"
+        );
+        // All at the top level: no titles.
+        let top = vec![entry("x1"), entry("x2")];
+        assert_eq!(by_folder(&top, &completions(&top, "x"), 80), "x1  x2\r\n");
     }
 }
