@@ -1,5 +1,6 @@
 //! PrzmTerm desktop application.
 
+mod appmenu;
 mod atlas;
 mod buttonbar;
 mod desktop;
@@ -58,6 +59,7 @@ fn main() -> eframe::Result {
             }
             let fonts = fonts::TermFonts::new(&cc.egui_ctx);
             let mut app = PrzmApp::new(fonts);
+            app.menu_bar = appmenu::install(&cc.egui_ctx);
             app.share_sessions();
             Ok(Box::new(app))
         }),
@@ -672,6 +674,10 @@ struct PrzmApp {
     sftp_pending: Option<(PathBuf, std::time::Instant, bool)>,
     /// The script guide, when open.
     script_guide: Option<scriptguide::ScriptGuide>,
+    /// The macOS menu bar (none elsewhere), kept while the app runs.
+    menu_bar: Option<appmenu::MenuBar>,
+    /// The About window, with the icon once loaded.
+    about: Option<Option<egui::TextureHandle>>,
     /// Questions from scripts, asked one at a time.
     script_prompts: std::collections::VecDeque<ScriptPrompt>,
     /// A backup or export being restored or imported, and the folder name
@@ -794,6 +800,8 @@ impl PrzmApp {
             split_dialog: None,
             script_prompts: Default::default(),
             script_guide: None,
+            menu_bar: None,
+            about: None,
             transfer_dialog: None,
             paste_confirm: None,
             fonts,
@@ -2228,6 +2236,75 @@ impl PrzmApp {
             || self.vault.modal()
     }
 
+    /// Runs a command of the app menu (macOS) or the **+** menu.
+    fn app_command(&mut self, ctx: &egui::Context, command: appmenu::AppCommand) {
+        use appmenu::AppCommand;
+        match command {
+            AppCommand::About => {
+                self.about.get_or_insert(None);
+            }
+            AppCommand::Settings => {
+                if let Some(dir) = &self.config_dir {
+                    self.editor = Some(Editor::global(dir));
+                }
+            }
+            AppCommand::Shortcuts => {
+                self.keymap_editor = Some(keymap::KeymapEditor::new(&self.shortcuts));
+            }
+            AppCommand::Vault => self.vault.open_window(),
+            AppCommand::Keywords => {
+                if let Some(dir) = &self.config_dir {
+                    self.keyword_editor = Some(keywords::KeywordEditor::new(dir, None));
+                }
+            }
+            AppCommand::SettingsFolder => {
+                self.folder_dialog = Some(
+                    self.config_dir
+                        .as_deref()
+                        .map(|d| d.display().to_string())
+                        .unwrap_or_default(),
+                );
+            }
+            AppCommand::ScriptGuide => {
+                self.script_guide
+                    .get_or_insert_with(scriptguide::ScriptGuide::new);
+            }
+            AppCommand::Website => ctx.open_url(egui::OpenUrl::new_tab(appmenu::WEBSITE)),
+            // As closing the window: asks first when sessions are open.
+            AppCommand::Quit => {
+                ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
+            }
+        }
+    }
+
+    /// The About window.
+    fn about_ui(&mut self, ctx: &egui::Context) {
+        let Some(icon) = &mut self.about else {
+            return;
+        };
+        let icon = icon.get_or_insert_with(|| {
+            let png =
+                eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/icon-256.png"))
+                    .unwrap_or_default();
+            let image = egui::ColorImage::from_rgba_unmultiplied(
+                [png.width as usize, png.height as usize],
+                &png.rgba,
+            );
+            ctx.load_texture("przmterm-icon", image, egui::TextureOptions::LINEAR)
+        });
+        let mut open = true;
+        egui::Window::new("About PrzmTerm")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .auto_sized()
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| appmenu::about(ui, Some(icon)));
+        if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.about = None;
+        }
+    }
+
     /// The "Settings folder" dialog.
     fn folder_dialog_ui(&mut self, ctx: &egui::Context, center: egui::Pos2, escape: bool) {
         use przmterm_session::location::{self, Contents};
@@ -2991,6 +3068,7 @@ impl PrzmApp {
             }
         }
         self.folder_dialog_ui(ctx, center, escape);
+        self.about_ui(ctx);
         if let Some(dialog) = &mut self.split_dialog {
             let tabs = &self.tabs;
             dialog
@@ -4120,6 +4198,9 @@ impl eframe::App for PrzmApp {
         // A glyph atlas that filled up last frame starts over.
         grid::atlas().begin_frame();
         let ctx = ui.ctx().clone();
+        for command in appmenu::take() {
+            self.app_command(&ctx, command);
+        }
         let mut actions: Vec<Action> = Vec::new();
         // Closing the window (or ⌘Q) with sessions open asks first.
         if ctx.input(|i| i.viewport().close_requested())
@@ -4416,6 +4497,7 @@ impl eframe::App for PrzmApp {
             .resizable(true)
             .default_size(220.0)
             .show_collapsible(ui, &mut sessions_open, |ui| {
+                let mut menu_command = None;
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     if icons::button(ui, icons::Icon::ChevronLeft, false)
@@ -4504,19 +4586,11 @@ impl eframe::App for PrzmApp {
                                 .clicked()
                             {
                                 ui.close();
-                                self.folder_dialog = Some(
-                                    self.config_dir
-                                        .as_deref()
-                                        .map(|d| d.display().to_string())
-                                        .unwrap_or_default(),
-                                );
+                                menu_command = Some(appmenu::AppCommand::SettingsFolder);
                             }
                             ui.separator();
                             if ui.button("Keyword sets…").clicked() {
-                                if let Some(dir) = &self.config_dir {
-                                    self.keyword_editor =
-                                        Some(keywords::KeywordEditor::new(dir, None));
-                                }
+                                menu_command = Some(appmenu::AppCommand::Keywords);
                                 ui.close();
                             }
                             if ui
@@ -4527,7 +4601,7 @@ impl eframe::App for PrzmApp {
                                 )
                                 .clicked()
                             {
-                                self.vault.open_window();
+                                menu_command = Some(appmenu::AppCommand::Vault);
                                 ui.close();
                             }
                             if ui
@@ -4537,8 +4611,7 @@ impl eframe::App for PrzmApp {
                                 )
                                 .clicked()
                             {
-                                self.keymap_editor =
-                                    Some(keymap::KeymapEditor::new(&self.shortcuts));
+                                menu_command = Some(appmenu::AppCommand::Shortcuts);
                                 ui.close();
                             }
                             if ui
@@ -4546,8 +4619,7 @@ impl eframe::App for PrzmApp {
                                 .on_hover_text("How to write scripts, with examples")
                                 .clicked()
                             {
-                                self.script_guide
-                                    .get_or_insert_with(scriptguide::ScriptGuide::new);
+                                menu_command = Some(appmenu::AppCommand::ScriptGuide);
                                 ui.close();
                             }
                             ui.separator();
@@ -4582,9 +4654,17 @@ impl eframe::App for PrzmApp {
                                     self.import_securecrt(&[dir]);
                                 }
                             }
+                            ui.separator();
+                            if ui.button("About PrzmTerm…").clicked() {
+                                menu_command = Some(appmenu::AppCommand::About);
+                                ui.close();
+                            }
                         });
                     }
                 });
+                if let Some(command) = menu_command {
+                    self.app_command(ui.ctx(), command);
+                }
                 let search = ui.add(
                     egui::TextEdit::singleline(&mut self.session_filter)
                         .hint_text("🔍 Name, host or IP")

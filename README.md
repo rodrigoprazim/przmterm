@@ -477,6 +477,12 @@ changes, PrzmTerm refuses to connect and shows the old and new fingerprints.
 | Scroll back | wheel, scroll bar, Shift+PageUp/PageDown, Shift+Home/End | same |
 | Send BREAK (serial, Telnet) | Ctrl+Shift+B | ⌘⇧B |
 | Hide / show the session list | Ctrl+Shift+S | ⌘⇧S |
+| Global settings | the gear above the sessions | ⌘, |
+
+On macOS the PrzmTerm menu in the menu bar has *About PrzmTerm*, *Settings…*
+and the other app windows (shortcuts, vault, keyword sets, settings folder),
+and *Help* has the script guide and the project's page. Elsewhere they are in
+the **+** menu above the sessions.
 
 Drag to select, double-click selects a word, triple-click a line. Right-click
 opens Copy / Paste / Select all. Text with line breaks is shown before it is
