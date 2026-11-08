@@ -133,6 +133,8 @@ impl Launcher {
         let Some((&first, args)) = words.split_first() else {
             return;
         };
+        // All after the command, as typed: session names can have spaces.
+        let rest = unquote(cmd.trim_start()[first.len()..].trim());
         match first {
             "help" | "?" => self.emit(
                 "  ssh <session>            open a saved session (Tab completes the name)\r\n  \
@@ -145,15 +147,15 @@ impl Launcher {
                  \r\n  \
                  Terminal checks: colors, styles, size, version\r\n",
             ),
-            "ssh" => self.ssh(args),
+            "ssh" => self.ssh(rest, args),
             "telnet" => self.telnet(args),
-            "open" => match args {
-                [name] => {
+            "open" => match rest {
+                "" => self.error("usage: open <session>"),
+                name => {
                     if let Some(entry) = self.find(name) {
                         self.request(Request::Open(entry.label));
                     }
                 }
-                _ => self.error("usage: open <session>"),
             },
             "sessions" | "ls" => self.list(&args.join(" ")),
             "colors" => self.colors(),
@@ -175,7 +177,16 @@ impl Launcher {
     }
 
     /// `ssh <session>` or `ssh [-p port] [-l user] [-v] [user@]host[:port]`.
-    fn ssh(&mut self, args: &[&str]) {
+    fn ssh(&mut self, rest: &str, args: &[&str]) {
+        // A saved session, its name as typed (spaces and all).
+        if !rest.is_empty() && !rest.starts_with('-') {
+            let found = matching(&catalog(), rest);
+            match found.len() {
+                1 => return self.request(Request::Open(found[0].label.clone())),
+                0 => {}
+                _ => return self.ambiguous(rest, &found),
+            }
+        }
         let mut port = None;
         let mut user = None;
         let mut verbose = false;
@@ -331,6 +342,16 @@ impl Launcher {
             Some(i) => (self.line[..=i].to_string(), self.line[i + 1..].to_string()),
             None => (String::new(), self.line.clone()),
         };
+        // After `ssh` or `open` without options the word is all the rest:
+        // session names can have spaces.
+        let (head, word) = match self.line.split_once(' ') {
+            Some((cmd @ ("ssh" | "open"), rest))
+                if !rest.trim_start().starts_with('-') && !rest.trim().is_empty() =>
+            {
+                (format!("{cmd} "), rest.trim_start().to_string())
+            }
+            _ => (head, word),
+        };
         let command = head.split_whitespace().next().unwrap_or("");
         let options: Vec<String> = if head.trim().is_empty() {
             COMMANDS
@@ -459,6 +480,16 @@ impl Launcher {
             _ => {}
         }
     }
+}
+
+/// `text` without the quotes around it, if it has them.
+fn unquote(text: &str) -> &str {
+    for q in ['"', '\''] {
+        if let Some(inner) = text.strip_prefix(q).and_then(|t| t.strip_suffix(q)) {
+            return inner;
+        }
+    }
+    text
 }
 
 /// The saved sessions `name` stands for: the one with that label (folders
@@ -666,6 +697,17 @@ mod tests {
             [Request::Connect(s)] => assert_eq!(s.display_target(), "admin@10.0.0.9:2222"),
             other => panic!("{other:?}"),
         }
+        // Names with spaces, typed or completed.
+        set_catalog(vec![entry("GeoFibra/GeoFibra - DB"), entry("gw")]);
+        t.write(b"ssh GeoFibra/GeoFibra - DB\r").unwrap();
+        let got = std::mem::take(&mut *requests.lock().unwrap());
+        assert!(matches!(&got[..], [Request::Open(l)] if l == "GeoFibra/GeoFibra - DB"));
+        t.write(b"open \"GeoFibra - DB\"\r").unwrap();
+        let got = std::mem::take(&mut *requests.lock().unwrap());
+        assert!(matches!(&got[..], [Request::Open(l)] if l == "GeoFibra/GeoFibra - DB"));
+        t.write(b"ssh GeoFibra - \t").unwrap();
+        assert_eq!(t.line, "ssh GeoFibra - DB ");
+        t.write(b"\x15").unwrap();
         t.write(b"open nothing\r").unwrap();
         assert!(drain(&mut t).contains("no saved session"));
         assert!(requests.lock().unwrap().is_empty());

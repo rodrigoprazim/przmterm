@@ -101,6 +101,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Fixed
 
+- `ssh` and `open` in the PrzmTerm shell take session names with spaces and
+  dashes (`ssh Lab/Core - DB`, quotes allowed), and Tab completes them.
 - The PrzmTerm shell tab uses the font and cursor of the global settings
   (and follows them when they change).
 - Session list: with the padlock open, folders can be dragged too (into
