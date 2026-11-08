@@ -7,6 +7,16 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- macOS: PrzmTerm's own menu bar. The app menu says PrzmTerm (not
+  "przmterm") and has *About PrzmTerm*, *Settings…* (⌘,), *Keyboard
+  Shortcuts…*, *Password Vault…*, *Keyword Sets…* and *Settings Folder…*;
+  *Help* has the script guide and the project on GitHub. *Quit PrzmTerm*
+  (⌘Q) asks first when sessions are open, as closing the window does.
+- *About PrzmTerm* (also at the end of the **+** menu): the version, the
+  developer and links to the project.
+
 ## [0.9.0] - 2026-11-08
 
 ### Added

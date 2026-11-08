@@ -40,6 +40,10 @@ vello_cpu = { version = "0.2", default-features = false, features = ["std", "u8_
 bytemuck = { version = "1.25", features = ["derive"] }
 
 
+# The menu bar on macOS: the app menu with About, Settings and the like.
+[target.'cfg(target_os = "macos")'.dependencies]
+muda = { version = "0.21", default-features = false }
+
 [build-dependencies]
 # Windows version information (see build.rs).
 winresource = { version = "0.1.34", default-features = false }
