@@ -365,7 +365,9 @@ impl Atlas {
         // White on a dark background reads thin: egui's dark-mode curve.
         let alpha = pixmap
             .data_as_u8_slice()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|px| {
                 let c = f32::from(px[3]) / 255.0;
                 ((2.0 * c - c * c) * 255.0).round() as u8
