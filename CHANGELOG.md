@@ -9,6 +9,12 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Added
 
+- macOS releases come as `PrzmTerm.app` on a disk image (drag it to
+  Applications) instead of loose binaries: it has an icon, sits in the Dock,
+  opens without a Terminal window and asks for local network access like
+  other apps. `przm` is inside the app. PrzmTerm has an icon on every
+  system: the window, and the Windows executables.
+
 - Release signing with free services: Windows executables signed through
   the SignPath Foundation (they now carry the product name and version),
   macOS binaries ad-hoc signed, and `SHA256SUMS.txt` signed with GPG. The

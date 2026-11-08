@@ -21,23 +21,27 @@ Electron, no web view.
 
 ## Install
 
-Download the archive for your system from the
-[releases](https://github.com/rodrigoprazim/przmterm/releases), unpack it and
-run `przmterm` (the desktop app) or `przm` (the command line). There is no
-installer: to remove PrzmTerm, delete the folder, and the settings folder if
-you no longer want your sessions (see [Sessions](#sessions)).
+Download the file for your system from the
+[releases](https://github.com/rodrigoprazim/przmterm/releases). To remove
+PrzmTerm, delete what you installed, and the settings folder if you no
+longer want your sessions (see [Sessions](#sessions)).
 
-- **Windows:** the executables are signed through the
+- **Windows:** unpack the `.zip` and run `przmterm.exe` (the desktop app)
+  or `przm.exe` (the command line). The executables are signed through the
   [SignPath Foundation](https://signpath.org) (see
   [Code signing policy](#code-signing-policy)). A release made before the
   signing was set up shows *Windows protected your PC*: choose *More info ›
   Run anyway*.
-- **macOS:** the binaries are universal (Apple Silicon and Intel) but not
-  notarised, which needs a paid Apple account. The first time, macOS refuses
-  to open them: go to *System Settings › Privacy & Security* and choose
-  *Open Anyway*, or remove the download mark in Terminal with
-  `xattr -dr com.apple.quarantine przmterm-*`.
-- **Linux:** x86_64; needs a desktop with OpenGL or Vulkan.
+- **macOS:** open the `.dmg` and drag PrzmTerm to Applications. The app is
+  universal (Apple Silicon and Intel) but not notarised, which needs a paid
+  Apple account, so the first time macOS refuses to open it: go to
+  *System Settings › Privacy & Security* and choose *Open Anyway* (once).
+  When macOS asks whether PrzmTerm may find devices on your local network,
+  allow it, or hosts on your network cannot be reached. The command line is
+  inside the app; to type `przm` in Terminal:
+  `sudo ln -s /Applications/PrzmTerm.app/Contents/MacOS/przm /usr/local/bin/przm`.
+- **Linux:** unpack the `.tar.gz`; x86_64, needs a desktop with OpenGL or
+  Vulkan.
 
 `SHA256SUMS.txt` lists every file's checksum. When it comes with
 `SHA256SUMS.txt.asc`, that is signed with the release key in

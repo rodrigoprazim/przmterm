@@ -118,16 +118,16 @@ jobs:
               echo "ASSET=$dir.zip" >> "$GITHUB_ENV"
               ;;
             macos-*)
+              # Universal binaries, in PrzmTerm.app (ad-hoc signed) on a
+              # disk image.
+              mkdir universal
               for bin in przmterm przm; do
-                lipo -create -output "$dir/$bin" \
+                lipo -create -output "universal/$bin" \
                   target/${{ matrix.target }}/release/$bin \
                   target/${{ matrix.extra_target }}/release/$bin
-                # Ad-hoc signature: Apple Silicon runs only signed code, and
-                # notarisation needs a paid Apple account.
-                codesign --force --sign - "$dir/$bin"
               done
-              tar czf "$dir.tar.gz" "$dir"
-              echo "ASSET=$dir.tar.gz" >> "$GITHUB_ENV"
+              scripts/macos-app.sh "$version" universal "$dir.dmg"
+              echo "ASSET=$dir.dmg" >> "$GITHUB_ENV"
               ;;
             *)
               cp target/${{ matrix.target }}/release/przmterm target/${{ matrix.target }}/release/przm "$dir/"

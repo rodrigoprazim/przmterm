@@ -42,7 +42,11 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_title("PrzmTerm")
             .with_inner_size([1100.0, 700.0])
-            .with_min_inner_size([480.0, 320.0]),
+            .with_min_inner_size([480.0, 320.0])
+            .with_icon(
+                eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/icon-256.png"))
+                    .unwrap_or_default(),
+            ),
         ..Default::default()
     };
     eframe::run_native(

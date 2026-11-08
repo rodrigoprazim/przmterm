@@ -183,6 +183,8 @@ and, when a device is at hand, a serial console (Xmodem or Ymodem).
   configuration, the approval step), macOS ad-hoc signed (notarising needs a
   paid Apple account), checksums signed with GPG; install notes and a code
   signing policy in the README
+- [x] macOS release as `PrzmTerm.app` on a disk image, with an icon (also on
+  the window and the Windows executables)
 - SignPath Foundation approval and the release key set up (maintainer)
 - Release candidates `1.0.0-rc.N`
 

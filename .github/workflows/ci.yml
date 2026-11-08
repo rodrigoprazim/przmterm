@@ -45,6 +45,15 @@ jobs:
         run: sudo apt-get install -y lrzsz
       - run: cargo clippy --workspace --all-targets
       - run: cargo test --workspace
+      # The release packs PrzmTerm.app in a disk image: check that it builds.
+      - if: runner.os == 'macOS'
+        run: |
+          cargo build -p przmterm-app -p przmterm-cli
+          scripts/macos-app.sh 0.0.0-ci target/debug "$RUNNER_TEMP/przmterm-ci.dmg"
+          hdiutil attach -quiet -nobrowse -mountpoint "$RUNNER_TEMP/dmg" "$RUNNER_TEMP/przmterm-ci.dmg"
+          codesign --verify --strict "$RUNNER_TEMP/dmg/PrzmTerm.app"
+          test -x "$RUNNER_TEMP/dmg/PrzmTerm.app/Contents/MacOS/przm"
+          hdiutil detach -quiet "$RUNNER_TEMP/dmg"
 
   deny:
     name: Dependencies (cargo deny)
