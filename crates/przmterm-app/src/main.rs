@@ -457,6 +457,14 @@ struct Group {
     color: egui::Color32,
 }
 
+/// The group name being typed: for this group, or (`None`) a new one made
+/// of `tabs` (by id) only once the name is confirmed.
+struct GroupName {
+    group: Option<u32>,
+    tabs: Vec<u64>,
+    name: String,
+}
+
 /// The colours groups take in turn.
 const GROUP_COLORS: [egui::Color32; 6] = [
     egui::Color32::from_rgb(90, 160, 240),
@@ -578,8 +586,8 @@ struct PrzmApp {
     next_group: u32,
     /// The "Send to group" dialog: group, text, Enter after it.
     group_send: Option<(u32, String, bool)>,
-    /// The "Rename group" dialog.
-    group_rename: Option<(u32, String)>,
+    /// The dialog naming a new group, or renaming one.
+    group_rename: Option<GroupName>,
     /// The "Lock" dialog: tab id, password, again.
     lock_dialog: Option<(u64, String, String)>,
     /// The password typed on a locked tab, and whether the last one was
@@ -1092,10 +1100,15 @@ impl PrzmApp {
                 });
             });
         };
-        if let Some((g, name)) = &mut self.group_rename {
+        if let Some(naming) = &mut self.group_rename {
             let mut answer = None;
-            window("Group name").show(ctx, |ui| {
-                ui.add(egui::TextEdit::singleline(name).desired_width(240.0))
+            let title = if naming.group.is_some() {
+                "Rename group"
+            } else {
+                "New group"
+            };
+            window(title).show(ctx, |ui| {
+                ui.add(egui::TextEdit::singleline(&mut naming.name).desired_width(240.0))
                     .request_focus();
                 buttons(ui, "OK", true, &mut answer);
             });
@@ -1103,14 +1116,21 @@ impl PrzmApp {
                 answer = Some(true);
             }
             if let Some(yes) = answer {
-                let (g, name) = (*g, name.trim().to_string());
-                if yes
-                    && !name.is_empty()
-                    && let Some(group) = self.groups.iter_mut().find(|x| x.id == g)
-                {
-                    group.name = name;
+                let naming = self.group_rename.take().expect("open");
+                let name = naming.name.trim().to_string();
+                if yes {
+                    match naming.group {
+                        Some(g) => {
+                            if !name.is_empty()
+                                && let Some(group) = self.groups.iter_mut().find(|x| x.id == g)
+                            {
+                                group.name = name;
+                            }
+                        }
+                        // Only now does the group exist.
+                        None => self.new_group(&naming.tabs, name),
+                    }
                 }
-                self.group_rename = None;
             }
         }
         if let Some((g, text, enter_after)) = &mut self.group_send {
@@ -1227,6 +1247,33 @@ impl PrzmApp {
                 self.lock_dialog = None;
             }
         }
+    }
+
+    /// A group of the tabs `tabs` (by id) called `name`.
+    fn new_group(&mut self, tabs: &[u64], name: String) {
+        let id = self.next_group;
+        self.next_group += 1;
+        let used: Vec<egui::Color32> = self.groups.iter().map(|g| g.color).collect();
+        let color = GROUP_COLORS
+            .iter()
+            .copied()
+            .find(|c| !used.contains(c))
+            .unwrap_or(GROUP_COLORS[id as usize % GROUP_COLORS.len()]);
+        self.groups.push(Group {
+            id,
+            name: if name.is_empty() {
+                format!("Group {id}")
+            } else {
+                name
+            },
+            color,
+        });
+        for tab in &mut self.tabs {
+            if tabs.contains(&tab.id) {
+                tab.group = Some(id);
+            }
+        }
+        self.settle_tabs();
     }
 
     /// A locked tab: in place of its panes, the password that opens it.
@@ -1423,26 +1470,15 @@ impl PrzmApp {
             }
             Action::ToggleSessions => self.sessions_hidden = !self.sessions_hidden,
             Action::NewGroup(tabs) => {
-                let id = self.next_group;
-                self.next_group += 1;
-                let used: Vec<egui::Color32> = self.groups.iter().map(|g| g.color).collect();
-                let color = GROUP_COLORS
-                    .iter()
-                    .copied()
-                    .find(|c| !used.contains(c))
-                    .unwrap_or(GROUP_COLORS[id as usize % GROUP_COLORS.len()]);
-                self.groups.push(Group {
-                    id,
-                    name: format!("Group {id}"),
-                    color,
+                // Made once it is named; Cancel leaves the tabs as they are.
+                self.group_rename = Some(GroupName {
+                    group: None,
+                    tabs: tabs
+                        .iter()
+                        .filter_map(|&t| self.tabs.get(t).map(|tab| tab.id))
+                        .collect(),
+                    name: format!("Group {}", self.next_group),
                 });
-                for t in tabs {
-                    if let Some(tab) = self.tabs.get_mut(t) {
-                        tab.group = Some(id);
-                    }
-                }
-                // Name it now.
-                self.group_rename = Some((id, format!("Group {id}")));
             }
             Action::SetGroup(t, group) => {
                 if let Some(tab) = self.tabs.get_mut(t) {
@@ -1451,7 +1487,11 @@ impl PrzmApp {
             }
             Action::RenameGroup(g) => {
                 if let Some(group) = self.groups.iter().find(|x| x.id == g) {
-                    self.group_rename = Some((g, group.name.clone()));
+                    self.group_rename = Some(GroupName {
+                        group: Some(g),
+                        tabs: Vec::new(),
+                        name: group.name.clone(),
+                    });
                 }
             }
             Action::SendToGroup(g) => self.group_send = Some((g, String::new(), true)),
