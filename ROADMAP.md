@@ -185,7 +185,8 @@ and, when a device is at hand, a serial console (Xmodem or Ymodem).
   signing policy in the README
 - [x] macOS release as `PrzmTerm.app` on a disk image, with an icon (also on
   the window and the Windows executables)
-- SignPath Foundation approval and the release key set up (maintainer)
+- [x] Release key set up (`docs/release-key.asc`)
+- SignPath Foundation approval (applied for on 2026-11-08)
 - Release candidates `1.0.0-rc.N`
 
 ## 1.0.0 — Stable

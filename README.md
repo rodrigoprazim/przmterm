@@ -45,7 +45,8 @@ longer want your sessions (see [Sessions](#sessions)).
 
 `SHA256SUMS.txt` lists every file's checksum. When it comes with
 `SHA256SUMS.txt.asc`, that is signed with the release key in
-[docs/release-key.asc](docs/release-key.asc):
+[docs/release-key.asc](docs/release-key.asc), fingerprint
+`7DD0 DEC1 0FB0 F51E E1AD 6455 96A1 88FD 92F2 8ECF`:
 
 ```sh
 gpg --import docs/release-key.asc
