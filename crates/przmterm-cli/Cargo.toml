@@ -25,5 +25,9 @@ serde_json.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 
+[build-dependencies]
+# Windows version information (see build.rs).
+winresource = { version = "0.1.34", default-features = false }
+
 [lints]
 workspace = true

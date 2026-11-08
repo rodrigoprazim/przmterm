@@ -37,6 +37,31 @@ Every user-visible change adds a line under `## [Unreleased]` in
    Versions before 1.0.0 and release candidates are marked as pre-releases.
 5. Bump `main` to the next `-dev` version: `scripts/release.sh --next 0.(Y+1).0`.
 
+## Signing
+
+The release workflow signs what it can with free services, each step only
+when its secret is set, so a release still builds without them:
+
+| What | How | Secrets and variables (repository settings) |
+| --- | --- | --- |
+| Windows `.exe` | Authenticode through the [SignPath Foundation](https://signpath.org) (free for open source); the job waits until the request is approved on SignPath | secret `SIGNPATH_API_TOKEN`; variable `SIGNPATH_ORGANIZATION_ID`; optional `SIGNPATH_PROJECT_SLUG` (default `przmterm`) and `SIGNPATH_POLICY_SLUG` (default `release-signing`) |
+| macOS binaries | ad-hoc signature (`codesign -s -`); not notarised, which needs a paid Apple Developer account | none |
+| `SHA256SUMS.txt` | detached GPG signature `SHA256SUMS.txt.asc`, covering every archive | secrets `RELEASE_GPG_KEY` (armoured private key) and `RELEASE_GPG_PASSPHRASE` |
+
+SignPath checks the files against [.signpath/artifact-configuration.xml](../.signpath/artifact-configuration.xml),
+which goes into the SignPath project: both executables must say product
+`PrzmTerm` and the version being released, which `build.rs` in
+`przmterm-app` and `przmterm-cli` writes into them.
+
+The release key, made once:
+
+```sh
+gpg --quick-generate-key "PrzmTerm releases" ed25519 sign 5y
+gpg --armor --export-secret-keys "PrzmTerm releases" | gh secret set RELEASE_GPG_KEY
+gh secret set RELEASE_GPG_PASSPHRASE          # the passphrase chosen above
+gpg --armor --export "PrzmTerm releases" > docs/release-key.asc   # commit it
+```
+
 ## Patch releases
 
 Fixes land on `main` first. If `main` already carries features for the next

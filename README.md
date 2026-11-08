@@ -5,8 +5,8 @@ serial consoles, a session tree with inherited settings, logging and automation.
 Written in Rust, one binary per platform for macOS, Windows and Linux. No
 Electron, no web view.
 
-> **Status:** early development. 0.3.0 is out (SSH, tabs, logging, keychain);
-> 0.4.0 adds Telnet and serial consoles. See the [roadmap](ROADMAP.md).
+> **Status:** before 1.0. 0.8.0 is out; 0.9.0 (automation and hardening)
+> comes next. See the [roadmap](ROADMAP.md).
 
 ## Goals
 
@@ -18,6 +18,35 @@ Electron, no web view.
   call the same command bus.
 - **Plain-text configuration.** Sessions are TOML files you can keep in Git.
   Passwords live in the OS keychain, never in the files.
+
+## Install
+
+Download the archive for your system from the
+[releases](https://github.com/rodrigoprazim/przmterm/releases), unpack it and
+run `przmterm` (the desktop app) or `przm` (the command line). There is no
+installer: to remove PrzmTerm, delete the folder, and the settings folder if
+you no longer want your sessions (see [Sessions](#sessions)).
+
+- **Windows:** the executables are signed (see
+  [Code signing policy](#code-signing-policy)). A release made before the
+  signing was set up shows *Windows protected your PC*: choose *More info ›
+  Run anyway*.
+- **macOS:** the binaries are universal (Apple Silicon and Intel) but not
+  notarised, which needs a paid Apple account. The first time, macOS refuses
+  to open them: go to *System Settings › Privacy & Security* and choose
+  *Open Anyway*, or remove the download mark in Terminal with
+  `xattr -dr com.apple.quarantine przmterm-*`.
+- **Linux:** x86_64; needs a desktop with OpenGL or Vulkan.
+
+`SHA256SUMS.txt` lists every file's checksum. When it comes with
+`SHA256SUMS.txt.asc`, that is signed with the release key in
+[docs/release-key.asc](docs/release-key.asc):
+
+```sh
+gpg --import docs/release-key.asc
+gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt
+sha256sum --check --ignore-missing SHA256SUMS.txt
+```
 
 ## Build
 
@@ -53,9 +82,9 @@ and password.
 Passwords are never written to session files. After a typed password works,
 PrzmTerm offers to save it in the OS keychain (Keychain on macOS, Credential
 Manager on Windows, Secret Service on Linux); right-click a session to forget it.
-On macOS, unsigned development builds make the system ask for your login
-keychain password (your Mac account password) after each rebuild; choose
-*Always Allow*.
+On macOS, builds not signed with an Apple Developer ID (development builds
+and the releases) make the system ask for your login keychain password (your
+Mac account password) after each rebuild or update; choose *Always Allow*.
 
 ### Why did the login fail?
 
@@ -568,6 +597,23 @@ A sample tree is in [examples/config](examples/config). Try it with
 | `przmterm-connect` | A session's transport: jump hosts, vault entries, saved passwords |
 | `przmterm-cli` | The `przm` binary |
 | `przmterm-app` | The `przmterm` desktop binary |
+
+## Code signing policy
+
+Windows releases are signed with free code signing provided by
+[SignPath.io](https://about.signpath.io), certificate by
+[SignPath Foundation](https://signpath.org). They are built from this
+repository's source by the [release workflow](.github/workflows/release.yml)
+on GitHub Actions, and each signing is approved by hand.
+
+| Role | Who |
+| --- | --- |
+| Committers and reviewers | [Rodrigo Prazim](https://github.com/rodrigoprazim) |
+| Approvers | [Rodrigo Prazim](https://github.com/rodrigoprazim) |
+
+**Privacy:** PrzmTerm does not send any information to other networked
+systems unless the user asks for it: it connects only to the hosts you open,
+and has no telemetry and no update check.
 
 ## Contributing
 

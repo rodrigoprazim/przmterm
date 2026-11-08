@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SignPath artifact configuration for the Windows release binaries: the zip
+  that .github/workflows/release.yml uploads holds przmterm.exe and przm.exe.
+  Both must carry the product name and the version being released (set by
+  build.rs in each crate). Paste this into the SignPath project.
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+  <zip-file>
+    <pe-file path="przmterm.exe" product-name="PrzmTerm" product-version="${version}">
+      <authenticode-sign />
+    </pe-file>
+    <pe-file path="przm.exe" product-name="PrzmTerm" product-version="${version}">
+      <authenticode-sign />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

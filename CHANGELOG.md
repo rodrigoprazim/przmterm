@@ -9,6 +9,12 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Added
 
+- Release signing with free services: Windows executables signed through
+  the SignPath Foundation (they now carry the product name and version),
+  macOS binaries ad-hoc signed, and `SHA256SUMS.txt` signed with GPG. The
+  README explains how to install on each system, how to check a download,
+  and the code signing policy.
+
 - The terminal grid has its own wgpu renderer: backgrounds, underlines and
   glyphs are drawn as one batch per pane, glyphs rasterised once into an
   atlas, instead of laying the text out every frame. Colour emoji and

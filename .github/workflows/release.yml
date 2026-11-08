@@ -52,6 +52,10 @@ jobs:
             os: windows-latest
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
+    env:
+      # Windows binaries are signed through the SignPath Foundation when its
+      # token is set (docs/VERSIONING.md, "Signing").
+      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -69,6 +73,37 @@ jobs:
             cargo build --release --locked --target ${{ matrix.extra_target }} -p przmterm-app -p przmterm-cli
           fi
 
+      - name: Collect the Windows binaries
+        if: startsWith(matrix.name, 'windows')
+        shell: bash
+        run: |
+          mkdir windows-bin
+          cp target/${{ matrix.target }}/release/przmterm.exe target/${{ matrix.target }}/release/przm.exe windows-bin/
+
+      - name: Upload the Windows binaries for signing
+        id: unsigned
+        if: startsWith(matrix.name, 'windows') && env.SIGNPATH_API_TOKEN != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-unsigned
+          path: windows-bin/
+
+      # Waits for the maintainer to approve the request on SignPath.
+      - name: Sign the Windows binaries (SignPath)
+        if: steps.unsigned.outcome == 'success'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'przmterm' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: windows-bin
+          parameters: |
+            version: ${{ toJSON(needs.verify.outputs.version) }}
+
       - name: Package
         shell: bash
         run: |
@@ -78,7 +113,7 @@ jobs:
           cp README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE "$dir/"
           case "${{ matrix.name }}" in
             windows-*)
-              cp target/${{ matrix.target }}/release/przmterm.exe target/${{ matrix.target }}/release/przm.exe "$dir/"
+              cp windows-bin/przmterm.exe windows-bin/przm.exe "$dir/"
               7z a "$dir.zip" "$dir" > /dev/null
               echo "ASSET=$dir.zip" >> "$GITHUB_ENV"
               ;;
@@ -87,6 +122,9 @@ jobs:
                 lipo -create -output "$dir/$bin" \
                   target/${{ matrix.target }}/release/$bin \
                   target/${{ matrix.extra_target }}/release/$bin
+                # Ad-hoc signature: Apple Silicon runs only signed code, and
+                # notarisation needs a paid Apple account.
+                codesign --force --sign - "$dir/$bin"
               done
               tar czf "$dir.tar.gz" "$dir"
               echo "ASSET=$dir.tar.gz" >> "$GITHUB_ENV"
@@ -100,21 +138,34 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.name }}
+          name: release-${{ matrix.name }}
           path: ${{ env.ASSET }}
 
   publish:
     name: Publish release
     needs: [verify, build]
     runs-on: ubuntu-latest
+    env:
+      # The checksums are signed when the release key is set
+      # (docs/VERSIONING.md, "Signing").
+      RELEASE_GPG_KEY: ${{ secrets.RELEASE_GPG_KEY }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
+          pattern: release-*
       - name: Checksums
         run: cd dist && sha256sum * > SHA256SUMS.txt
+      - name: Sign the checksums (GPG)
+        if: env.RELEASE_GPG_KEY != ''
+        env:
+          RELEASE_GPG_PASSPHRASE: ${{ secrets.RELEASE_GPG_PASSPHRASE }}
+        run: |
+          echo "$RELEASE_GPG_KEY" | gpg --batch --import
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$RELEASE_GPG_PASSPHRASE" \
+            --armor --detach-sign dist/SHA256SUMS.txt
       - name: Release notes from CHANGELOG
         run: |
           version="${{ needs.verify.outputs.version }}"

@@ -178,13 +178,19 @@ and, when a device is at hand, a serial console (Xmodem or Ymodem).
 - [x] Dedicated `wgpu` grid renderer with a glyph atlas
 - [x] `cargo deny` in CI (RustSec advisories as `cargo audit` checks them,
   licences, crate sources), also weekly
-- Signed and notarised binaries
+- [x] Release signing with free services: Windows through the SignPath
+  Foundation (version information in the executables, the artifact
+  configuration, the approval step), macOS ad-hoc signed (notarising needs a
+  paid Apple account), checksums signed with GPG; install notes and a code
+  signing policy in the README
+- SignPath Foundation approval and the release key set up (maintainer)
 - Release candidates `1.0.0-rc.N`
 
 ## 1.0.0 — Stable
 
 - Configuration format declared stable (compatibility promise for 1.x)
-- Signed binaries for macOS (universal), Windows and Linux
+- Signed binaries: Windows through the SignPath Foundation, macOS
+  (universal) ad-hoc signed, checksums signed with GPG
 - User guide and scripting reference
 
 **Gate:** the maintainer's own automation scripts in daily use and no open
