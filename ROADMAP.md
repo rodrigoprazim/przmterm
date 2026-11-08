@@ -12,11 +12,11 @@ date. Version numbering and the release procedure are in
 | 0.3.0 | Daily-driver MVP | Released |
 | 0.4.0 | Telnet and serial | Released |
 | 0.5.0 | Network gear | Released |
-| 0.6.0 | Productivity | In progress |
-| 0.7.0 | Scripting | Planned |
-| 0.8.0 | File transfer | Planned |
-| 0.9.0 | Automation and hardening | Planned |
-| 1.0.0 | Stable | Planned |
+| 0.6.0 | Productivity | Released |
+| 0.7.0 | Scripting | Released |
+| 0.8.0 | File transfer | Released |
+| 0.9.0 | Automation and hardening | Released |
+| 1.0.0 | Stable | Next |
 
 ## 0.1.0 — Foundation
 
@@ -186,10 +186,12 @@ and, when a device is at hand, a serial console (Xmodem or Ymodem).
 - [x] macOS release as `PrzmTerm.app` on a disk image, with an icon (also on
   the window and the Windows executables)
 - [x] Release key set up (`docs/release-key.asc`)
-- SignPath Foundation approval (applied for on 2026-11-08)
-- Release candidates `1.0.0-rc.N`
 
 ## 1.0.0 — Stable
+
+- SignPath Foundation approval for the Windows signing (applied for on
+  2026-11-08)
+- Release candidates `1.0.0-rc.N`
 
 - Configuration format declared stable (compatibility promise for 1.x)
 - Signed binaries: Windows through the SignPath Foundation, macOS
