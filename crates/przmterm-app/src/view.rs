@@ -1,8 +1,8 @@
 //! The terminal widget: paints a [`Screen`] and turns keyboard input into bytes.
 //!
-//! Text is painted in runs positioned on the cell grid, so double-width
-//! characters stay aligned. A dedicated wgpu grid renderer with a glyph atlas
-//! replaces this before 1.0 (see ROADMAP.md).
+//! The grid is drawn with wgpu from a glyph atlas ([`crate::grid`]) when
+//! the window has wgpu; otherwise text is painted by egui in runs placed on
+//! the cell grid, so double-width characters stay aligned either way.
 
 use eframe::egui::{
     self, Align2, Color32, CornerRadius, EventFilter, FontId, Key, PointerButton, Pos2, Rect,
@@ -334,6 +334,11 @@ impl TerminalView {
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, CornerRadius::ZERO, rgb(DEFAULT_BG));
         let span = self.selection.and_then(|s| s.span(screen));
+        let mut grid = crate::grid::enabled().then(|| GridFrame {
+            ppp: ui.ctx().pixels_per_point(),
+            ascent: crate::grid::atlas().ascent(&self.family, self.font_size),
+            ..GridFrame::default()
+        });
         for row in 0..screen.rows() {
             let index = screen.view_row_index(row);
             let selected = span.and_then(|((sl, sc), (el, ec))| {
@@ -348,14 +353,34 @@ impl TerminalView {
             if let Some(h) = &self.highlighter {
                 h.apply(line.to_mut());
             }
-            paint_row(
-                &painter,
-                &line,
-                origin,
-                (cell_w, cell_h),
-                &font_id,
-                selected,
-            );
+            match &mut grid {
+                Some(grid) => grid.row(&line, origin, (cell_w, cell_h), &font_id, selected),
+                None => paint_row(
+                    &painter,
+                    &line,
+                    origin,
+                    (cell_w, cell_h),
+                    &font_id,
+                    selected,
+                ),
+            }
+        }
+        if let Some(grid) = grid {
+            let leftovers = grid.leftovers;
+            let mut quads = grid.backgrounds;
+            quads.extend(grid.glyphs);
+            painter.add(crate::grid::paint(rect, response.id.value(), quads));
+            // What the atlas cannot draw, egui draws over the grid.
+            for (at, ch, fg, italics) in leftovers {
+                let format = TextFormat {
+                    font_id: font_id.clone(),
+                    color: fg,
+                    italics,
+                    ..TextFormat::default()
+                };
+                let galley = painter.layout_job(LayoutJob::single_section(ch.to_string(), format));
+                painter.galley(at, galley, fg);
+            }
         }
 
         let offset = screen.display_offset();
@@ -750,6 +775,93 @@ impl TerminalView {
     }
 }
 
+/// The quads of the cells shown, for the GPU grid, and the characters the
+/// atlas leaves to egui.
+#[derive(Default)]
+struct GridFrame {
+    /// Physical pixels per point.
+    ppp: f32,
+    /// Points from a row's top to the baseline.
+    ascent: f32,
+    /// Cell backgrounds and underlines, drawn under all the glyphs.
+    backgrounds: Vec<crate::grid::Quad>,
+    glyphs: Vec<crate::grid::Quad>,
+    /// Where (in points), what, its colour and whether italic.
+    leftovers: Vec<(Pos2, char, Color32, bool)>,
+}
+
+impl GridFrame {
+    /// Adds one row, as [`paint_row`] paints it.
+    fn row(
+        &mut self,
+        cells: &[Cell],
+        origin: Pos2,
+        (cell_w, cell_h): (f32, f32),
+        font_id: &FontId,
+        selected: Option<(usize, usize)>,
+    ) {
+        use crate::atlas::{BINS, Shape};
+        use crate::grid::Quad;
+        let ppp = self.ppp;
+        // Edges on whole pixels, so neighbouring cells meet without seams.
+        let x_at = |col: usize| (origin.x + col as f32 * cell_w) * ppp;
+        let top = (origin.y * ppp).round();
+        let bottom = ((origin.y + cell_h) * ppp).round();
+        let baseline = ((origin.y + self.ascent) * ppp).round();
+        let line = ppp.round().max(1.0);
+        let is_selected = |col: usize| selected.is_some_and(|(a, b)| col >= a && col <= b);
+        let mut atlas = crate::grid::atlas();
+        let mut col = 0;
+        while col < cells.len() {
+            let cell = cells[col];
+            if cell.is_spacer() {
+                col += 1;
+                continue;
+            }
+            let width = if cell.is_wide() { 2 } else { 1 };
+            let (fg, mut bg) = colors(&cell.style);
+            if is_selected(col) {
+                bg = SELECTION;
+            }
+            let (left, right) = (x_at(col).round(), x_at(col + width).round());
+            if bg != rgb(DEFAULT_BG) {
+                self.backgrounds
+                    .push(Quad::solid([left, top], [right - left, bottom - top], bg));
+            }
+            if cell.style.underline {
+                self.backgrounds
+                    .push(Quad::solid([left, bottom - line], [right - left, line], fg));
+            }
+            let x = x_at(col);
+            let mut whole = x.floor();
+            let mut bin = ((x - whole) * f32::from(BINS)).round() as u8;
+            if bin == BINS {
+                whole += 1.0;
+                bin = 0;
+            }
+            match atlas.glyph(&font_id.family, cell.ch, font_id.size, ppp, bin) {
+                Shape::Blank => {}
+                Shape::Drawn { slot, dy } => self.glyphs.push(Quad::glyph(
+                    [
+                        whole + slot.left as f32,
+                        baseline + dy.round() + slot.top as f32,
+                    ],
+                    slot,
+                    fg,
+                    cell.style.italic,
+                )),
+                Shape::Elsewhere => self.leftovers.push((
+                    Pos2::new(origin.x + col as f32 * cell_w, origin.y),
+                    cell.ch,
+                    fg,
+                    cell.style.italic,
+                )),
+            }
+            col += width;
+        }
+    }
+}
+
 /// Paints one row: backgrounds as rectangles, text in style runs placed on
 /// the grid. `selected` is the inclusive column range highlighted in this row.
 fn paint_row(
@@ -821,6 +933,77 @@ fn paint_row(
 mod tests {
     use super::*;
     use przmterm_term::Color;
+
+    #[test]
+    fn grid_rows_become_quads() {
+        use crate::grid::{GLYPH, ITALIC};
+        crate::grid::atlas().set_fonts(&egui::FontDefinitions::default());
+        let cell = |ch: char| Cell {
+            ch,
+            ..Cell::default()
+        };
+        let mut red = cell('r');
+        red.style.bg = Color::Indexed(1);
+        red.style.underline = true;
+        let mut italic = cell('i');
+        italic.style.italic = true;
+        let wide = Cell {
+            ch: '漢',
+            flags: Cell::WIDE,
+            ..Cell::default()
+        };
+        let spacer = Cell {
+            flags: Cell::SPACER,
+            ..Cell::default()
+        };
+        let row = [red, italic, cell(' '), wide, spacer, cell('\u{10FFFD}')];
+        let mut grid = GridFrame {
+            ppp: 2.0,
+            ascent: 12.0,
+            ..GridFrame::default()
+        };
+        let font = FontId::monospace(14.0);
+        grid.row(
+            &row,
+            Pos2::new(10.0, 20.0),
+            (8.5, 17.0),
+            &font,
+            Some((2, 2)),
+        );
+
+        // A red background and its underline; the selected blank cell.
+        let solid: Vec<_> = grid.backgrounds.iter().map(|q| (q.pos, q.size)).collect();
+        assert_eq!(
+            solid,
+            [
+                ([20.0, 40.0], [17.0, 34.0]),
+                ([20.0, 72.0], [17.0, 2.0]),
+                ([54.0, 40.0], [17.0, 34.0]),
+            ]
+        );
+        assert_eq!(
+            grid.backgrounds[2].color,
+            u32::from_le_bytes(SELECTION.to_array())
+        );
+        // r and i (leaning) from the atlas, on whole pixels; what egui's
+        // own fonts lack (CJK here: a system font has it) goes to egui, at
+        // its cell, the spacer skipped.
+        let flags: Vec<u32> = grid.glyphs.iter().map(|q| q.flags).collect();
+        assert_eq!(flags, [GLYPH, GLYPH | ITALIC]);
+        assert!(
+            grid.glyphs
+                .iter()
+                .all(|q| q.pos[0].fract() == 0.0 && q.pos[1].fract() == 0.0)
+        );
+        let left: Vec<(Pos2, char)> = grid.leftovers.iter().map(|l| (l.0, l.1)).collect();
+        assert_eq!(
+            left,
+            [
+                (Pos2::new(10.0 + 3.0 * 8.5, 20.0), '漢'),
+                (Pos2::new(10.0 + 5.0 * 8.5, 20.0), '\u{10FFFD}'),
+            ]
+        );
+    }
 
     #[test]
     fn bold_brightens_and_reverse_swaps() {

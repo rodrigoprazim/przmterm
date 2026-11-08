@@ -10,7 +10,8 @@ Electron, no web view.
 
 ## Goals
 
-- **Native and fast.** egui on the GPU; a dedicated grid renderer before 1.0.
+- **Native and fast.** egui on the GPU; the terminal grid has its own wgpu
+  renderer, glyphs drawn once into an atlas.
 - **Built for network gear.** Serial with BREAK, Telnet, legacy SSH algorithms
   per session, SecureCRT session import.
 - **Everything is a command.** The GUI, the `przm` CLI, scripts and an MCP server
@@ -28,6 +29,10 @@ cd przmterm
 cargo run --release            # desktop app (przmterm)
 cargo run --release -p przmterm-cli -- --help   # CLI (przm)
 ```
+
+The terminal grid is drawn with wgpu. If text looks wrong on a graphics
+driver, `PRZMTERM_RENDERER=egui` paints it with egui instead, as before
+0.9.0.
 
 ## Connecting
 

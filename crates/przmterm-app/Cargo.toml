@@ -34,6 +34,10 @@ fontdb = { version = "0.24", default-features = false, features = ["std", "fs", 
 # Tells monospace fonts and fonts that can draw (not bitmap-only) apart; egui
 # already uses it.
 skrifa = "0.44"
+# The terminal grid on the GPU (see src/grid.rs): glyphs filled on the CPU
+# as egui does it, quads uploaded as plain bytes.
+vello_cpu = { version = "0.2", default-features = false, features = ["std", "u8_pipeline"] }
+bytemuck = { version = "1.25", features = ["derive"] }
 
 
 [dev-dependencies]

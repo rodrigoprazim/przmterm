@@ -9,6 +9,12 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Added
 
+- The terminal grid has its own wgpu renderer: backgrounds, underlines and
+  glyphs are drawn as one batch per pane, glyphs rasterised once into an
+  atlas, instead of laying the text out every frame. Colour emoji and
+  characters only a system font has are still drawn by egui.
+  `PRZMTERM_RENDERER=egui` brings back egui's painting.
+
 - Tab groups: *Group* in the tab menu starts a group or adds a tab to one;
   the group's tabs sit together after a coloured label, each starting with a
   bar of the group's colour; new groups take the lowest free "Group N". The

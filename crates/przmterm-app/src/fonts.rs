@@ -54,6 +54,7 @@ impl TermFonts {
             failed: HashSet::new(),
         };
         ctx.set_fonts(fonts.defs.clone());
+        crate::grid::atlas().set_fonts(&fonts.defs);
         fonts
     }
 
@@ -101,6 +102,7 @@ impl TermFonts {
                     .families
                     .insert(egui::FontFamily::Name(key.into()), chain);
                 ctx.set_fonts(self.defs.clone());
+                crate::grid::atlas().set_fonts(&self.defs);
                 self.loaded.insert(name.to_string(), pass);
                 ctx.request_repaint();
             }

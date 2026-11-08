@@ -1,9 +1,11 @@
 //! PrzmTerm desktop application.
 
+mod atlas;
 mod buttonbar;
 mod desktop;
 mod editor;
 mod fonts;
+mod grid;
 mod icons;
 mod input;
 mod keymap;
@@ -47,6 +49,9 @@ fn main() -> eframe::Result {
         "PrzmTerm",
         options,
         Box::new(|cc| {
+            if let Some(state) = &cc.wgpu_render_state {
+                grid::install(state);
+            }
             let fonts = fonts::TermFonts::new(&cc.egui_ctx);
             let mut app = PrzmApp::new(fonts);
             app.share_sessions();
@@ -4108,6 +4113,8 @@ fn folder_ui(
 
 impl eframe::App for PrzmApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // A glyph atlas that filled up last frame starts over.
+        grid::atlas().begin_frame();
         let ctx = ui.ctx().clone();
         let mut actions: Vec<Action> = Vec::new();
         // Closing the window (or ⌘Q) with sessions open asks first.
