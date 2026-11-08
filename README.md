@@ -27,7 +27,8 @@ run `przmterm` (the desktop app) or `przm` (the command line). There is no
 installer: to remove PrzmTerm, delete the folder, and the settings folder if
 you no longer want your sessions (see [Sessions](#sessions)).
 
-- **Windows:** the executables are signed (see
+- **Windows:** the executables are signed through the
+  [SignPath Foundation](https://signpath.org) (see
   [Code signing policy](#code-signing-policy)). A release made before the
   signing was set up shows *Windows protected your PC*: choose *More info ›
   Run anyway*.
