@@ -176,6 +176,24 @@ connected sessions have a green dot in the session list.
 In a split tab, **⇶ Send to all** in the status bar sends what you type to
 every pane of the tab (after a warning) until you turn it off.
 
+**Tab groups.** *Group › New Group* in a tab's menu starts a group: its tabs
+sit together under a coloured label and *Group › Add to …* puts more tabs in
+it. Clicking the label offers *Send Command to Group…* (one or more commands,
+to every connected session of the group, with Enter after each line),
+*Rename Group…*, *Ungroup* and *Close Group*.
+
+**Windows.** *Window › Move to New Window* opens the tab in a window of its
+own, the connection and all; *Clone to New Window* opens a second connection
+to the same session there; *Move to Main Window* brings it back. Other
+windows have their tabs and panes; dialogs and the session list stay in the
+main one. Closing a window closes its tabs (asking first if any is
+connected).
+
+**Locking.** *Lock…* hides a tab's screen behind a password: nothing is typed
+into it, it does not close, and its session cannot be cloned or browsed until
+the password is given again. The connection stays up and keeps receiving.
+The password is only kept in memory (as an Argon2 hash).
+
 ### Triggers
 
 A trigger types an answer when some text shows up: `--More--` → space,

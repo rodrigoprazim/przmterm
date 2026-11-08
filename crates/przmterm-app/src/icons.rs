@@ -49,12 +49,17 @@ pub fn button(ui: &mut egui::Ui, icon: Icon, selected: bool) -> egui::Response {
     response
 }
 
-/// Draws `icon` centred in `rect` in `color`.
+/// Draws `icon` centred in `rect` in `color`, in a box of 12 points
+/// whatever the size of `rect`.
 pub fn draw(painter: &egui::Painter, icon: Icon, rect: Rect, color: Color32) {
+    draw_scaled(painter, icon, rect, color, 1.0);
+}
+
+/// [`draw`], `scale` times as big (lines too).
+pub fn draw_scaled(painter: &egui::Painter, icon: Icon, rect: Rect, color: Color32, scale: f32) {
     let c = rect.center();
-    // The icon's box: a square of 12 points, whatever the button's size.
-    let s = 6.0;
-    let stroke = Stroke::new(1.5, color);
+    let s = 6.0 * scale;
+    let stroke = Stroke::new(1.5 * scale, color);
     let p = |x: f32, y: f32| Pos2::new(c.x + x * s, c.y + y * s);
     match icon {
         Icon::ChevronLeft => {
@@ -107,7 +112,7 @@ pub fn draw(painter: &egui::Painter, icon: Icon, rect: Rect, color: Color32) {
             painter.line_segment([p(0.0, -0.75), p(0.0, 0.75)], stroke);
         }
         Icon::Close => {
-            let stroke = Stroke::new(1.6, color);
+            let stroke = Stroke::new(1.6 * scale, color);
             painter.line_segment([p(-0.55, -0.55), p(0.55, 0.55)], stroke);
             painter.line_segment([p(-0.55, 0.55), p(0.55, -0.55)], stroke);
         }
@@ -135,7 +140,7 @@ pub fn draw(painter: &egui::Painter, icon: Icon, rect: Rect, color: Color32) {
         }
         Icon::Lock | Icon::Unlock => {
             let body = Rect::from_min_max(p(-0.7, -0.05), p(0.7, 0.85));
-            painter.rect_filled(body, 1.5, color);
+            painter.rect_filled(body, 1.5 * scale, color);
             // The shackle: an arch over the body, lifted to one side when
             // open.
             let lift = if icon == Icon::Unlock { -0.35 } else { 0.0 };
@@ -156,7 +161,7 @@ pub fn draw(painter: &egui::Painter, icon: Icon, rect: Rect, color: Color32) {
         Icon::Grip => {
             for x in [-0.3, 0.3] {
                 for y in [-0.6, 0.0, 0.6] {
-                    painter.circle_filled(p(x, y), 1.1, color);
+                    painter.circle_filled(p(x, y), 1.1 * scale, color);
                 }
             }
         }
@@ -170,11 +175,11 @@ pub fn draw(painter: &egui::Painter, icon: Icon, rect: Rect, color: Color32) {
                 p(0.85, 0.65),
                 p(-0.85, 0.65),
             ];
-            painter.add(Shape::closed_line(outline, Stroke::new(1.3, color)));
+            painter.add(Shape::closed_line(outline, Stroke::new(1.3 * scale, color)));
         }
         Icon::Gear => {
             let teeth = 8;
-            let thick = Stroke::new(2.4, color);
+            let thick = Stroke::new(2.4 * scale, color);
             for i in 0..teeth {
                 let a = i as f32 / teeth as f32 * std::f32::consts::TAU;
                 let (sin, cos) = a.sin_cos();

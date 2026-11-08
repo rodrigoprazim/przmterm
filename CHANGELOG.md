@@ -9,6 +9,15 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Added
 
+- Tab groups: *Group* in the tab menu starts a group or adds a tab to one;
+  the group's tabs sit together under a coloured label, which offers *Send
+  Command to Group…*, *Rename Group…*, *Ungroup* and *Close Group*.
+- Several windows: *Window › Move to New Window* (with its live connection),
+  *Clone to New Window* and *Move to Main Window* in the tab menu. Each
+  window has its own tabs; next/previous tab stays within it.
+- *Lock…* in the tab menu locks a tab with a password: its screen is hidden,
+  and it takes no typing, does not close and cannot be cloned or browsed
+  until unlocked. The password is kept in memory only, hashed.
 - `przm mcp`: a Model Context Protocol server, so AI assistants (Claude
   Desktop, Claude Code…) can list sessions, open them, send commands, read
   the screen and run scripts. Each session (or folder, or the defaults) sets

@@ -137,7 +137,12 @@ pub fn cursor_label(shape: przmterm_session::CursorShape) -> &'static str {
 /// segment with ✕ — one rounded box, filled when active. The whole segment
 /// closes the tab. Returns the tab's response (click selects, right-click
 /// opens its menu) and whether the close segment was clicked.
-fn tab_widget(ui: &mut egui::Ui, title: &str, active: bool) -> (egui::Response, bool) {
+fn tab_widget(
+    ui: &mut egui::Ui,
+    title: &str,
+    active: bool,
+    locked: bool,
+) -> (egui::Response, bool) {
     let font = egui::TextStyle::Button.resolve(ui.style());
     let visuals = ui.visuals().clone();
     let text_color = if active {
@@ -151,7 +156,9 @@ fn tab_widget(ui: &mut egui::Ui, title: &str, active: bool) -> (egui::Response, 
     let pad = egui::vec2(9.0, 3.0);
     let close_w = 24.0;
     let height = (galley.size().y + pad.y * 2.0).max(22.0);
-    let title_w = pad.x * 2.0 + galley.size().x;
+    // Room for a padlock before the title.
+    let lock_w = if locked { 16.0 } else { 0.0 };
+    let title_w = pad.x * 2.0 + lock_w + galley.size().x;
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(title_w + close_w, height), egui::Sense::click());
     let title_rect = rect.with_max_x(rect.left() + title_w);
@@ -182,8 +189,15 @@ fn tab_widget(ui: &mut egui::Ui, title: &str, active: bool) -> (egui::Response, 
                 text_color.gamma_multiply(0.16),
             );
         }
+        if locked {
+            let lock_rect = egui::Rect::from_center_size(
+                egui::pos2(title_rect.left() + pad.x + 6.0, rect.center().y),
+                egui::vec2(12.0, 12.0),
+            );
+            icons::draw(painter, icons::Icon::Lock, lock_rect, text_color);
+        }
         let text_pos = egui::pos2(
-            title_rect.left() + pad.x,
+            title_rect.left() + pad.x + lock_w,
             rect.center().y - galley.size().y / 2.0,
         );
         painter.galley(text_pos, galley, text_color);
@@ -331,6 +345,15 @@ fn separate_panes(tabs: &mut Vec<Tab>, t: usize, only: Option<usize>) -> usize {
 
 /// A tab: one or more panes, one of them active.
 struct Tab {
+    /// Stays the same while the tab lives, whatever moves around it.
+    id: u64,
+    /// The window it shows in: 0 the main one ([`UNPLACED`] until placed).
+    window: u32,
+    /// The tab group it belongs to.
+    group: Option<u32>,
+    /// Locked with a password: the screen is hidden, and nothing is typed
+    /// and the tab does not close until it is given again.
+    lock: Option<przmterm_session::vault::Lock>,
     panes: Vec<Pane>,
     active: usize,
     layout: Layout,
@@ -376,9 +399,17 @@ impl Layout {
     }
 }
 
+/// A new tab's window, until it is placed in the window it was made in.
+const UNPLACED: u32 = u32::MAX;
+
 impl Tab {
     fn new(pane: Pane) -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         Self {
+            id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            window: UNPLACED,
+            group: None,
+            lock: None,
             panes: vec![pane],
             active: 0,
             layout: Layout::Grid,
@@ -411,6 +442,30 @@ impl Tab {
         }
     }
 }
+
+/// Another window, with tabs of its own.
+struct Win {
+    id: u32,
+    /// Its active tab (by id).
+    active: u64,
+}
+
+/// A tab group: its tabs sit together, under a coloured label.
+struct Group {
+    id: u32,
+    name: String,
+    color: egui::Color32,
+}
+
+/// The colours groups take in turn.
+const GROUP_COLORS: [egui::Color32; 6] = [
+    egui::Color32::from_rgb(90, 160, 240),
+    egui::Color32::from_rgb(110, 190, 110),
+    egui::Color32::from_rgb(230, 160, 60),
+    egui::Color32::from_rgb(200, 110, 200),
+    egui::Color32::from_rgb(90, 190, 190),
+    egui::Color32::from_rgb(220, 100, 100),
+];
 
 /// User actions, collected while drawing and applied afterwards.
 enum Action {
@@ -485,6 +540,24 @@ enum Action {
     SessionOptions(usize),
     FontTab(usize),
     ToggleSessions,
+    /// Puts these tabs in a new group.
+    NewGroup(Vec<usize>),
+    /// Puts the tab in this group (`None`: out of its group).
+    SetGroup(usize, Option<u32>),
+    RenameGroup(u32),
+    /// Asks what to send to every session of the group.
+    SendToGroup(u32),
+    /// Closes the group's tabs (asking first if any is connected).
+    CloseGroup(u32),
+    /// The group's tabs stay, without the group.
+    Ungroup(u32),
+    /// Moves the tab to a new window; with `true`, a copy of it (a new
+    /// connection to its session) goes instead.
+    NewWindow(usize, bool),
+    /// Moves the tab to the main window.
+    ToMainWindow(usize),
+    /// Asks a password and locks the tab.
+    LockTab(usize),
 }
 
 struct PrzmApp {
@@ -493,7 +566,25 @@ struct PrzmApp {
     config_dir: Option<PathBuf>,
     sessions: SessionTree,
     tabs: Vec<Tab>,
+    /// The active tab of the window being drawn (see `cur_window`).
     active_tab: usize,
+    /// The window being drawn and acted on: 0 the main one.
+    cur_window: u32,
+    /// The other windows, each with tabs of its own.
+    windows: Vec<Win>,
+    next_window: u32,
+    /// Tab groups, by id.
+    groups: Vec<Group>,
+    next_group: u32,
+    /// The "Send to group" dialog: group, text, Enter after it.
+    group_send: Option<(u32, String, bool)>,
+    /// The "Rename group" dialog.
+    group_rename: Option<(u32, String)>,
+    /// The "Lock" dialog: tab id, password, again.
+    lock_dialog: Option<(u64, String, String)>,
+    /// The password typed on a locked tab, and whether the last one was
+    /// wrong.
+    unlock_text: (String, bool),
     title: String,
     quick_connect: String,
     quick_error: Option<String>,
@@ -659,6 +750,15 @@ impl PrzmApp {
             confirm_quit: false,
             confirm_close: None,
             tab_rename: None,
+            cur_window: 0,
+            windows: Vec::new(),
+            next_window: 1,
+            groups: Vec::new(),
+            next_group: 1,
+            group_send: None,
+            group_rename: None,
+            lock_dialog: None,
+            unlock_text: (String::new(), false),
             font_dialog: None,
             split_dialog: None,
             script_prompts: Default::default(),
@@ -806,6 +906,393 @@ impl PrzmApp {
     }
 
     fn apply(&mut self, action: Action, ctx: &egui::Context) {
+        if self.locked_target(&action) {
+            self.notice = Some("The tab is locked: unlock it first.".into());
+            return;
+        }
+        self.apply_inner(action, ctx);
+        self.settle_tabs();
+    }
+
+    /// Whether `action` would type into, close or reach the session of a
+    /// locked tab.
+    fn locked_target(&self, action: &Action) -> bool {
+        let locked = |t: usize| self.tabs.get(t).is_some_and(|tab| tab.lock.is_some());
+        let active = self.active_tab;
+        match action {
+            Action::Macro(_)
+            | Action::SendBreak
+            | Action::Reconnect
+            | Action::RequestClosePane
+            | Action::ClosePane
+            | Action::Split(_)
+            | Action::SplitWith { .. }
+            | Action::SeparatePane
+            | Action::NewTab
+            | Action::ToggleBroadcast => locked(active),
+            Action::CloseTab(t)
+            | Action::ReconnectTab(t)
+            | Action::DisconnectTab(t)
+            | Action::CloneTab(t)
+            | Action::SeparateAll(t)
+            | Action::SessionOptions(t)
+            | Action::RunScript(t)
+            | Action::StopScript(t)
+            | Action::OpenSftp(t)
+            | Action::OpenScp(t)
+            | Action::TransferDialog(t, _)
+            | Action::NewWindow(t, true) => locked(*t),
+            Action::RequestClose(tabs) => tabs.iter().any(|&t| locked(t)),
+            _ => false,
+        }
+    }
+
+    /// After tabs moved: new ones go in the current window, groups keep
+    /// their tabs together, and the current window's active tab is one of
+    /// its own (the main window always has one).
+    fn settle_tabs(&mut self) {
+        let window = self.cur_window;
+        for tab in &mut self.tabs {
+            if tab.window == UNPLACED {
+                tab.window = window;
+            }
+        }
+        let active = self.tabs.get(self.active_tab).map(|t| t.id);
+        // Each group's tabs right after its first one.
+        let mut order: Vec<Tab> = Vec::with_capacity(self.tabs.len());
+        for tab in std::mem::take(&mut self.tabs) {
+            match tab.group {
+                Some(g) => match order.iter().rposition(|t| t.group == Some(g)) {
+                    Some(last) => order.insert(last + 1, tab),
+                    None => order.push(tab),
+                },
+                None => order.push(tab),
+            }
+        }
+        self.tabs = order;
+        self.groups
+            .retain(|g| self.tabs.iter().any(|t| t.group == Some(g.id)));
+        let mine = |t: &Tab| t.window == window;
+        let found = active.and_then(|id| self.tabs.iter().position(|t| t.id == id && mine(t)));
+        self.active_tab = match found {
+            Some(i) => i,
+            None => {
+                // The nearest tab of this window, before the one that went.
+                let before = self.active_tab.min(self.tabs.len());
+                match self.tabs[..before]
+                    .iter()
+                    .rposition(mine)
+                    .or_else(|| self.tabs.iter().position(mine))
+                {
+                    Some(i) => i,
+                    None if window == 0 => {
+                        let mut tab = Tab::new(Pane::launcher());
+                        tab.window = 0;
+                        self.tabs.push(tab);
+                        self.tabs.len() - 1
+                    }
+                    // An emptied window closes; any tab will do meanwhile.
+                    None => 0,
+                }
+            }
+        };
+    }
+
+    /// Draws the other windows: each its tabs and its active tab's panes.
+    /// Dialogs open in the main window.
+    fn show_windows(&mut self, ctx: &egui::Context) {
+        let main = self.tabs.get(self.active_tab).map(|t| t.id);
+        let ids: Vec<u32> = self.windows.iter().map(|w| w.id).collect();
+        for id in ids {
+            let Some(w) = self.windows.iter().position(|w| w.id == id) else {
+                continue;
+            };
+            let active = self.windows[w].active;
+            let Some(index) = self
+                .tabs
+                .iter()
+                .position(|t| t.id == active && t.window == id)
+                .or_else(|| self.tabs.iter().position(|t| t.window == id))
+            else {
+                continue;
+            };
+            self.cur_window = id;
+            self.active_tab = index;
+            let title = format!("{} — PrzmTerm", self.tabs[index].title());
+            let mut actions = Vec::new();
+            let mut closing = false;
+            ctx.show_viewport_immediate(
+                egui::ViewportId::from_hash_of(("przm-window", id)),
+                egui::ViewportBuilder::default()
+                    .with_title(title)
+                    .with_inner_size([960.0, 600.0])
+                    .with_min_inner_size([420.0, 260.0]),
+                |ui, _| {
+                    let ctx = ui.ctx().clone();
+                    if ctx.input(|i| i.viewport().close_requested()) {
+                        // Its tabs close first (asking if connected).
+                        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                        closing = true;
+                    }
+                    actions.extend(self.shortcuts(&ctx));
+                    egui::Panel::top("tabs").show(ui, |ui| self.tab_bar(ui, &mut actions));
+                    self.terminal_area(ui, &mut actions);
+                },
+            );
+            if closing {
+                actions.push(Action::RequestClose(self.window_tabs()));
+                // The question shows in the main window.
+                ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
+            }
+            for action in actions {
+                self.apply(action, ctx);
+            }
+            if let Some(tab) = self.tabs.get(self.active_tab).filter(|t| t.window == id)
+                && let Some(win) = self.windows.iter_mut().find(|w| w.id == id)
+            {
+                win.active = tab.id;
+            }
+        }
+        // Back to the main window.
+        self.cur_window = 0;
+        self.windows
+            .retain(|w| self.tabs.iter().any(|t| t.window == w.id));
+        self.active_tab = main
+            .and_then(|id| self.tabs.iter().position(|t| t.id == id && t.window == 0))
+            .or_else(|| self.tabs.iter().position(|t| t.window == 0))
+            .unwrap_or(0);
+        self.settle_tabs();
+    }
+
+    /// The dialogs of tab groups and locking: naming a group, sending to
+    /// it, and the password that locks a tab.
+    fn group_dialogs(
+        &mut self,
+        ctx: &egui::Context,
+        center: egui::Pos2,
+        enter: bool,
+        escape: bool,
+    ) {
+        let window = |title: &'static str| {
+            egui::Window::new(title)
+                .pivot(egui::Align2::CENTER_CENTER)
+                .default_pos(center)
+                .collapsible(false)
+                .resizable(false)
+        };
+        let buttons = |ui: &mut egui::Ui, ok: &str, can: bool, answer: &mut Option<bool>| {
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.add_enabled(can, egui::Button::new(ok)).clicked() {
+                        *answer = Some(true);
+                    }
+                    if ui.button("Cancel").clicked() || escape {
+                        *answer = Some(false);
+                    }
+                });
+            });
+        };
+        if let Some((g, name)) = &mut self.group_rename {
+            let mut answer = None;
+            window("Group name").show(ctx, |ui| {
+                ui.add(egui::TextEdit::singleline(name).desired_width(240.0))
+                    .request_focus();
+                buttons(ui, "OK", true, &mut answer);
+            });
+            if enter {
+                answer = Some(true);
+            }
+            if let Some(yes) = answer {
+                let (g, name) = (*g, name.trim().to_string());
+                if yes
+                    && !name.is_empty()
+                    && let Some(group) = self.groups.iter_mut().find(|x| x.id == g)
+                {
+                    group.name = name;
+                }
+                self.group_rename = None;
+            }
+        }
+        if let Some((g, text, enter_after)) = &mut self.group_send {
+            let g = *g;
+            let name = self
+                .groups
+                .iter()
+                .find(|x| x.id == g)
+                .map(|x| x.name.clone())
+                .unwrap_or_default();
+            let targets: Vec<(usize, usize)> = self
+                .tabs
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| t.group == Some(g) && t.lock.is_none())
+                .flat_map(|(ti, t)| {
+                    t.panes
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, p)| p.origin.is_some() && !p.transport.is_closed())
+                        .map(move |(pi, _)| (ti, pi))
+                })
+                .collect();
+            let mut answer = None;
+            window("Send to group").show(ctx, |ui| {
+                ui.label(format!(
+                    "To {} connected session{} of {name}:",
+                    targets.len(),
+                    if targets.len() == 1 { "" } else { "s" }
+                ));
+                ui.add(
+                    egui::TextEdit::multiline(text)
+                        .font(egui::TextStyle::Monospace)
+                        .desired_rows(3)
+                        .desired_width(380.0)
+                        .hint_text("one command per line"),
+                )
+                .request_focus();
+                ui.checkbox(enter_after, "Press Enter after each line");
+                ui.weak("Locked tabs are left out.");
+                buttons(
+                    ui,
+                    "Send",
+                    !targets.is_empty() && !text.is_empty(),
+                    &mut answer,
+                );
+            });
+            if let Some(yes) = answer {
+                if yes {
+                    let mut bytes = Vec::new();
+                    if *enter_after {
+                        for line in text.lines() {
+                            bytes.extend_from_slice(line.as_bytes());
+                            bytes.push(b'\r');
+                        }
+                    } else {
+                        bytes.extend_from_slice(text.as_bytes());
+                    }
+                    for (t, p) in &targets {
+                        self.tabs[*t].panes[*p].send(&bytes);
+                    }
+                    self.notice = Some(format!("Sent to {} session(s) of {name}.", targets.len()));
+                }
+                self.group_send = None;
+            }
+        }
+        if let Some((id, first, again)) = &mut self.lock_dialog {
+            let mut answer = None;
+            let can = !first.is_empty() && first == again;
+            window("Lock tab").show(ctx, |ui| {
+                ui.set_max_width(300.0);
+                ui.label(
+                    "The tab hides its screen, and nothing is typed in it nor closes it \
+                     until this password is given again. It is not saved anywhere.",
+                );
+                ui.add_space(4.0);
+                let field = ui.add(
+                    egui::TextEdit::singleline(first)
+                        .password(true)
+                        .hint_text("Password")
+                        .desired_width(f32::INFINITY),
+                );
+                // Focus once, so Tab can move on to the second field.
+                if ui.memory(|m| m.focused().is_none()) {
+                    field.request_focus();
+                }
+                ui.add(
+                    egui::TextEdit::singleline(again)
+                        .password(true)
+                        .hint_text("Again")
+                        .desired_width(f32::INFINITY),
+                );
+                if !again.is_empty() && first != again {
+                    ui.colored_label(ui.visuals().warn_fg_color, "The two do not match.");
+                }
+                buttons(ui, "Lock", can, &mut answer);
+            });
+            if enter && can {
+                answer = Some(true);
+            }
+            if let Some(yes) = answer {
+                if yes {
+                    let id = *id;
+                    match przmterm_session::vault::Lock::new(first) {
+                        Ok(lock) => {
+                            if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) {
+                                tab.lock = Some(lock);
+                            }
+                            self.broadcast = false;
+                        }
+                        Err(e) => self.notice = Some(format!("Failed: {e}")),
+                    }
+                }
+                self.lock_dialog = None;
+            }
+        }
+    }
+
+    /// A locked tab: in place of its panes, the password that opens it.
+    fn locked_ui(&mut self, ui: &mut egui::Ui) {
+        let rect = ui.available_rect_before_wrap();
+        ui.painter()
+            .rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
+        let mut unlock = false;
+        let dialog = self.modal_open();
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space((rect.height() / 2.0 - 70.0).max(10.0));
+                let (icon, _) =
+                    ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover());
+                icons::draw_scaled(
+                    ui.painter(),
+                    icons::Icon::Lock,
+                    icon,
+                    ui.visuals().text_color(),
+                    2.2,
+                );
+                ui.add_space(6.0);
+                ui.strong("This tab is locked");
+                ui.add_space(6.0);
+                let (text, wrong) = &mut self.unlock_text;
+                let field = ui.add(
+                    egui::TextEdit::singleline(text)
+                        .password(true)
+                        .hint_text("Password")
+                        .desired_width(220.0),
+                );
+                if !dialog {
+                    field.request_focus();
+                }
+                if field.changed() {
+                    *wrong = false;
+                }
+                if *wrong {
+                    ui.colored_label(ui.visuals().error_fg_color, "Wrong password.");
+                }
+                ui.add_space(4.0);
+                unlock = ui.button("Unlock").clicked()
+                    || (field.has_focus() || field.lost_focus())
+                        && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            });
+        });
+        if unlock {
+            let tab = &mut self.tabs[self.active_tab];
+            let (text, wrong) = &mut self.unlock_text;
+            if tab.lock.as_ref().is_some_and(|l| l.opens(text)) {
+                tab.lock = None;
+            } else {
+                *wrong = true;
+            }
+            text.clear();
+        }
+    }
+
+    /// The tabs of the current window, in order.
+    fn window_tabs(&self) -> Vec<usize> {
+        (0..self.tabs.len())
+            .filter(|&i| self.tabs[i].window == self.cur_window)
+            .collect()
+    }
+
+    fn apply_inner(&mut self, action: Action, ctx: &egui::Context) {
         let ctx2 = ctx.clone();
         let waker: Waker = Arc::new(move || ctx2.request_repaint());
         let env = self.env();
@@ -855,6 +1342,7 @@ impl PrzmApp {
                 if self.tabs.is_empty() {
                     self.tabs.push(Tab::new(Pane::launcher()));
                 }
+                // The tab before it in the same window, as browsers do.
                 if self.active_tab >= index && self.active_tab > 0 {
                     self.active_tab -= 1;
                 }
@@ -934,6 +1422,87 @@ impl PrzmApp {
                 }
             }
             Action::ToggleSessions => self.sessions_hidden = !self.sessions_hidden,
+            Action::NewGroup(tabs) => {
+                let id = self.next_group;
+                self.next_group += 1;
+                let used: Vec<egui::Color32> = self.groups.iter().map(|g| g.color).collect();
+                let color = GROUP_COLORS
+                    .iter()
+                    .copied()
+                    .find(|c| !used.contains(c))
+                    .unwrap_or(GROUP_COLORS[id as usize % GROUP_COLORS.len()]);
+                self.groups.push(Group {
+                    id,
+                    name: format!("Group {id}"),
+                    color,
+                });
+                for t in tabs {
+                    if let Some(tab) = self.tabs.get_mut(t) {
+                        tab.group = Some(id);
+                    }
+                }
+                // Name it now.
+                self.group_rename = Some((id, format!("Group {id}")));
+            }
+            Action::SetGroup(t, group) => {
+                if let Some(tab) = self.tabs.get_mut(t) {
+                    tab.group = group;
+                }
+            }
+            Action::RenameGroup(g) => {
+                if let Some(group) = self.groups.iter().find(|x| x.id == g) {
+                    self.group_rename = Some((g, group.name.clone()));
+                }
+            }
+            Action::SendToGroup(g) => self.group_send = Some((g, String::new(), true)),
+            Action::CloseGroup(g) => {
+                let tabs = (0..self.tabs.len())
+                    .filter(|&t| self.tabs[t].group == Some(g))
+                    .collect();
+                self.apply_inner(Action::RequestClose(tabs), ctx);
+            }
+            Action::Ungroup(g) => {
+                for tab in &mut self.tabs {
+                    if tab.group == Some(g) {
+                        tab.group = None;
+                    }
+                }
+            }
+            Action::NewWindow(t, copy) => {
+                let id = self.next_window;
+                self.next_window += 1;
+                let tab_id = if copy {
+                    let source = &self.tabs[t];
+                    let pane = if source.pane().origin.is_some() {
+                        source.pane().clone_session(&env, waker)
+                    } else {
+                        Pane::launcher()
+                    };
+                    let mut tab = Tab::new(pane);
+                    tab.window = id;
+                    let tab_id = tab.id;
+                    self.tabs.push(tab);
+                    tab_id
+                } else {
+                    let tab = &mut self.tabs[t];
+                    tab.window = id;
+                    // A group stays in one window.
+                    tab.group = None;
+                    tab.id
+                };
+                self.windows.push(Win { id, active: tab_id });
+            }
+            Action::ToMainWindow(t) => {
+                if let Some(tab) = self.tabs.get_mut(t) {
+                    tab.window = 0;
+                    tab.group = None;
+                }
+            }
+            Action::LockTab(t) => {
+                if let Some(tab) = self.tabs.get(t) {
+                    self.lock_dialog = Some((tab.id, String::new(), String::new()));
+                }
+            }
             Action::RequestClose(mut tabs) => {
                 tabs.sort_unstable();
                 tabs.dedup();
@@ -1312,7 +1881,11 @@ impl PrzmApp {
         }
         let binding = self.shortcuts.take(ctx)?;
         let t = self.active_tab;
-        let n = self.tabs.len();
+        // Next and previous go round the tabs of this window.
+        let mine = self.window_tabs();
+        let at = mine.iter().position(|&i| i == t).unwrap_or(0);
+        let step = |by: usize| mine[(at + by) % mine.len()];
+        let n = mine.len().max(1);
         use przmterm_session::keymap::Does;
         Some(match binding.does().ok()? {
             Does::Command(id) => match id {
@@ -1320,8 +1893,8 @@ impl PrzmApp {
                 "new_shell_tab" => Action::NewShellTab,
                 "close_pane" => Action::RequestClosePane,
                 "close_tab" => Action::RequestClose(vec![t]),
-                "next_tab" => Action::SelectTab((t + 1) % n),
-                "previous_tab" => Action::SelectTab((t + n - 1) % n),
+                "next_tab" => Action::SelectTab(step(1)),
+                "previous_tab" => Action::SelectTab(step(n - 1)),
                 "split_grid" => Action::Split(Layout::Grid),
                 "split_columns" => Action::Split(Layout::Columns),
                 "split_rows" => Action::Split(Layout::Rows),
@@ -1558,6 +2131,9 @@ impl PrzmApp {
             || self.paste_confirm.is_some()
             || self.bundle_dialog.is_some()
             || self.folder_dialog.is_some()
+            || self.group_send.is_some()
+            || self.group_rename.is_some()
+            || self.lock_dialog.is_some()
             || self.vault.modal()
     }
 
@@ -1712,6 +2288,319 @@ impl PrzmApp {
         })
     }
 
+    /// The tabs of the current window, with + at the end.
+    fn tab_bar(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        ui.horizontal_wrapped(|ui| {
+            let mut last_group = None;
+            for (i, tab) in self.tabs.iter().enumerate() {
+                if tab.window != self.cur_window {
+                    continue;
+                }
+                // A group starts with its label.
+                if tab.group != last_group
+                    && let Some(group) = tab
+                        .group
+                        .and_then(|g| self.groups.iter().find(|x| x.id == g))
+                {
+                    group_label(ui, group, actions);
+                }
+                last_group = tab.group;
+                let mut title = tab.title();
+                if title.chars().count() > 28 {
+                    title = title.chars().take(27).collect::<String>() + "…";
+                }
+                if tab.pane().transport.is_closed() && tab.pane().origin.is_some() {
+                    title = format!("○ {title}");
+                } else if !tab.pane().transport.weak_algorithms().is_empty() {
+                    title = format!("⚠ {title}");
+                }
+                // The session and where it is connected; a split tab
+                // lists each of its sessions.
+                let describe = |p: &Pane| match pane_target(p) {
+                    Some(target) => format!("{}\n{target}", pane_name(p)),
+                    None => pane_name(p),
+                };
+                let hover = if tab.panes.len() > 1 {
+                    let names: Vec<String> = tab
+                        .panes
+                        .iter()
+                        .map(|p| format!("• {}", describe(p).replace('\n', "\n   ")))
+                        .collect();
+                    format!("{}\nRight-click for more", names.join("\n"))
+                } else {
+                    format!("{}\nRight-click for more", describe(tab.pane()))
+                };
+                let (tab_button, close) =
+                    tab_widget(ui, &title, i == self.active_tab, tab.lock.is_some());
+                if let Some(group) = tab
+                    .group
+                    .and_then(|g| self.groups.iter().find(|x| x.id == g))
+                {
+                    // Under the tab, the group's colour.
+                    let r = tab_button.rect;
+                    ui.painter().line_segment(
+                        [
+                            r.left_bottom() + egui::vec2(3.0, 1.0),
+                            r.right_bottom() + egui::vec2(-3.0, 1.0),
+                        ],
+                        egui::Stroke::new(2.5, group.color),
+                    );
+                }
+                let tab_button = tab_button.on_hover_text(hover);
+                if tab_button.clicked() {
+                    actions.push(Action::SelectTab(i));
+                }
+                if tab_button.middle_clicked() || close {
+                    actions.push(Action::RequestClose(vec![i]));
+                }
+                tab_button.context_menu(|ui| {
+                    tab_menu(
+                        ui,
+                        &self.tabs,
+                        &self.groups,
+                        i,
+                        self.active_tab,
+                        self.broadcast,
+                        actions,
+                    );
+                });
+            }
+            if icons::button(ui, icons::Icon::Plus, false)
+                .on_hover_text(format!(
+                    "New PrzmTerm tab{}\nAlso: double-click the empty bar",
+                    self.keys_hint("new_shell_tab")
+                ))
+                .clicked()
+            {
+                actions.push(Action::NewShellTab);
+            }
+            // A double click on the free part of the bar does the same.
+            let free = ui.available_rect_before_wrap();
+            if free.width() > 0.0
+                && ui
+                    .interact(free, egui::Id::unique("tab-bar-free"), egui::Sense::click())
+                    .double_clicked()
+            {
+                actions.push(Action::NewShellTab);
+            }
+        });
+    }
+
+    /// The current window's active tab: its panes, typing, pasting, and
+    /// "send to all".
+    fn terminal_area(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        let ctx = ui.ctx().clone();
+        if self.tab().lock.is_some() {
+            egui::CentralPanel::default().show(ui, |ui| self.locked_ui(ui));
+            return;
+        }
+        let modal = self.modal_open();
+        // What was typed in the active pane, for "send to all".
+        // Each pane draws in the font it asks for (loaded when first asked).
+        for pane in &mut self.tabs[self.active_tab].panes {
+            pane.view.family = self.fonts.family(&ctx, pane.view.font_name.as_deref());
+        }
+        let mut typed: Option<Vec<u8>> = None;
+        let mut pasted: Option<(usize, String)> = None;
+        let broadcast = self.broadcast;
+        egui::CentralPanel::no_frame().show(ui, |ui| {
+            let mark = broadcast_color(ui.visuals());
+            let tab = &mut self.tabs[self.active_tab];
+            let area = ui.available_rect_before_wrap();
+            let n = tab.panes.len();
+            let gap = 4.0;
+            // A pane dragged by its caption: (from, where the pointer is).
+            let mut dragging: Option<(usize, egui::Pos2)> = None;
+            let mut dropped: Option<usize> = None;
+            for (i, pane) in tab.panes.iter_mut().enumerate() {
+                let mut rect = tab.layout.rect(area, i, n, gap);
+                let active = i == tab.active;
+                // In a split tab each pane is captioned with its session.
+                if n > 1 {
+                    let caption =
+                        egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), PANE_CAPTION));
+                    let visuals = ui.visuals();
+                    let (fill, text) = if active {
+                        (
+                            egui::Color32::from_rgb(30, 70, 100),
+                            egui::Color32::from_rgb(220, 240, 255),
+                        )
+                    } else {
+                        (visuals.faint_bg_color, visuals.weak_text_color())
+                    };
+                    ui.painter().rect_filled(caption, 0.0, fill);
+                    let dot = if pane.origin.is_some() && pane.transport.is_closed() {
+                        "○ "
+                    } else {
+                        ""
+                    };
+                    ui.painter().with_clip_rect(caption).text(
+                        caption.left_center() + egui::vec2(6.0, 0.0),
+                        egui::Align2::LEFT_CENTER,
+                        format!("{dot}{}", pane_name(pane)),
+                        egui::FontId::proportional(12.0),
+                        text,
+                    );
+                    // Typing to all: every pane that gets the keys says so.
+                    if broadcast && !pane.transport.is_closed() {
+                        ui.painter().with_clip_rect(caption).text(
+                            caption.right_center() - egui::vec2(6.0, 0.0),
+                            egui::Align2::RIGHT_CENTER,
+                            "⇶ typing to all",
+                            egui::FontId::proportional(11.0),
+                            mark,
+                        );
+                    }
+                    let grip = ui
+                        .interact(
+                            caption,
+                            ui.make_persistent_id(("pane-caption", i)),
+                            egui::Sense::click_and_drag(),
+                        )
+                        .on_hover_cursor(egui::CursorIcon::Grab)
+                        .on_hover_text("Drag onto another pane to swap them");
+                    if grip.clicked() && !active {
+                        actions.push(Action::FocusPane(i));
+                    }
+                    if grip.dragged()
+                        && let Some(at) = grip.interact_pointer_pos()
+                    {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                        dragging = Some((i, at));
+                    }
+                    if grip.drag_stopped() {
+                        dropped = Some(i);
+                    }
+                    grip.context_menu(|ui| {
+                        let earlier = if tab.layout == Layout::Rows {
+                            "Move Up"
+                        } else {
+                            "Move Left"
+                        };
+                        let later = if tab.layout == Layout::Rows {
+                            "Move Down"
+                        } else {
+                            "Move Right"
+                        };
+                        if ui.add_enabled(i > 0, egui::Button::new(earlier)).clicked() {
+                            actions.push(Action::SwapPanes(i, i - 1));
+                            ui.close();
+                        }
+                        if ui
+                            .add_enabled(i + 1 < n, egui::Button::new(later))
+                            .clicked()
+                        {
+                            actions.push(Action::SwapPanes(i, i + 1));
+                            ui.close();
+                        }
+                    });
+                    rect.min.y += PANE_CAPTION;
+                }
+                let out = ui
+                    .scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                        pane.view.show(ui, &mut pane.term, active && !modal)
+                    })
+                    .inner;
+                // The pane with the keyboard is framed in blue; with "send to
+                // all" every pane that gets the keys is.
+                if n > 1 && (active || (broadcast && !pane.transport.is_closed())) {
+                    ui.painter().rect_stroke(
+                        rect,
+                        egui::CornerRadius::ZERO,
+                        egui::Stroke::new(1.0, mark),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+                if out.clicked && !active {
+                    actions.push(Action::FocusPane(i));
+                }
+                if let Some(text) = out.paste {
+                    pasted = Some((i, text));
+                }
+                if out.send_break {
+                    if !active {
+                        actions.push(Action::FocusPane(i));
+                    }
+                    actions.push(Action::SendBreak);
+                }
+                if out.resized.is_some() {
+                    match pane.transport.resize(pane.size()) {
+                        Ok(()) | Err(TransportError::Closed) => {}
+                        Err(e) => tracing::warn!("resize failed: {e}"),
+                    }
+                }
+                if !out.input.is_empty() {
+                    if pane.transport.is_closed() {
+                        if active && out.input.contains(&b'\r') {
+                            actions.push(Action::Reconnect);
+                        } else if out.input.contains(&3) {
+                            pane.cancel_retry();
+                        }
+                    } else {
+                        pane.send(&out.input);
+                        if active {
+                            typed = Some(out.input.clone());
+                        }
+                    }
+                    ctx.request_repaint();
+                }
+            }
+            // While a pane is dragged, the pane under the pointer lights up;
+            // letting go there swaps the two.
+            let target_at =
+                |at: egui::Pos2| (0..n).find(|&j| tab.layout.rect(area, j, n, gap).contains(at));
+            if let Some((from, at)) = dragging {
+                if let Some(to) = target_at(at).filter(|&to| to != from) {
+                    let target = tab.layout.rect(area, to, n, gap);
+                    let blue = egui::Color32::from_rgb(110, 200, 255);
+                    ui.painter()
+                        .rect_filled(target, 0.0, blue.gamma_multiply(0.18));
+                    ui.painter().rect_stroke(
+                        target,
+                        0.0,
+                        egui::Stroke::new(2.0, blue),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+                let name = pane_name(&tab.panes[from]);
+                ui.painter().text(
+                    at + egui::vec2(14.0, 4.0),
+                    egui::Align2::LEFT_TOP,
+                    format!("⇄ {name}"),
+                    egui::FontId::proportional(13.0),
+                    ui.visuals().strong_text_color(),
+                );
+            }
+            if let Some(from) = dropped
+                && let Some(at) = ctx.pointer_latest_pos()
+                && let Some(to) = target_at(at)
+                && to != from
+            {
+                actions.push(Action::SwapPanes(from, to));
+            }
+        });
+
+        if let Some((pane, text)) = pasted {
+            self.paste_confirm = Some(PasteConfirm {
+                tab: self.active_tab,
+                pane,
+                text,
+            });
+        }
+
+        if self.broadcast
+            && let Some(bytes) = typed
+        {
+            let tab = self.tab_mut();
+            let source = tab.active;
+            for (i, pane) in tab.panes.iter_mut().enumerate() {
+                if i != source && !pane.transport.is_closed() {
+                    pane.send(&bytes);
+                }
+            }
+        }
+    }
+
     /// Panes with a live connection to a session.
     fn open_sessions(&self) -> usize {
         self.tabs
@@ -1843,6 +2732,7 @@ impl PrzmApp {
         let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
         let enter = ctx.input(|i| i.key_pressed(egui::Key::Enter));
         self.paste_dialog(ctx, center, escape);
+        self.group_dialogs(ctx, center, enter, escape);
         if let Some(request) = self.confirm_close.clone() {
             let (title, text) = match &request {
                 CloseRequest::Pane => (
@@ -2614,9 +3504,40 @@ impl PrzmApp {
 
 /// Draws the session tree, collecting what the user picked.
 /// The right-click menu of a tab.
+/// A group's label before its tabs: click or right-click for what the
+/// group can do.
+fn group_label(ui: &mut egui::Ui, group: &Group, actions: &mut Vec<Action>) {
+    let text = egui::RichText::new(&group.name)
+        .color(egui::Color32::from_gray(20))
+        .strong();
+    let response = ui
+        .add(
+            egui::Button::new(text)
+                .fill(group.color)
+                .corner_radius(9.0)
+                .min_size(egui::vec2(0.0, 20.0)),
+        )
+        .on_hover_text("Tab group: click for its commands");
+    let menu = |ui: &mut egui::Ui| {
+        let mut item = |ui: &mut egui::Ui, text: &str, action: Action| {
+            if ui.button(text).clicked() {
+                actions.push(action);
+                ui.close();
+            }
+        };
+        item(ui, "Send Command to Group…", Action::SendToGroup(group.id));
+        item(ui, "Rename Group…", Action::RenameGroup(group.id));
+        ui.separator();
+        item(ui, "Ungroup", Action::Ungroup(group.id));
+        item(ui, "Close Group", Action::CloseGroup(group.id));
+    };
+    egui::Popup::menu(&response).show(menu);
+}
+
 fn tab_menu(
     ui: &mut egui::Ui,
     tabs: &[Tab],
+    groups: &[Group],
     i: usize,
     active: usize,
     broadcast: bool,
@@ -2650,11 +3571,18 @@ fn tab_menu(
     );
     ui.separator();
     item(ui, true, "Close", Action::RequestClose(vec![i]));
-    let disconnected: Vec<usize> = tabs
+    // The other tabs are those of the same window.
+    let window = tab.window;
+    let same: Vec<usize> = (0..tabs.len())
+        .filter(|&n| tabs[n].window == window)
+        .collect();
+    let disconnected: Vec<usize> = same
         .iter()
-        .enumerate()
-        .filter(|(_, t)| t.panes.iter().any(|p| p.origin.is_some()) && t.connected() == 0)
-        .map(|(n, _)| n)
+        .copied()
+        .filter(|&n| {
+            let t = &tabs[n];
+            t.panes.iter().any(|p| p.origin.is_some()) && t.connected() == 0
+        })
         .collect();
     item(
         ui,
@@ -2662,14 +3590,14 @@ fn tab_menu(
         "Close Disconnected Tabs",
         Action::RequestClose(disconnected),
     );
-    let others: Vec<usize> = (0..tabs.len()).filter(|&n| n != i).collect();
+    let others: Vec<usize> = same.iter().copied().filter(|&n| n != i).collect();
     item(
         ui,
         !others.is_empty(),
         "Close Other Tabs",
         Action::RequestClose(others),
     );
-    let right: Vec<usize> = (i + 1..tabs.len()).collect();
+    let right: Vec<usize> = same.iter().copied().filter(|&n| n > i).collect();
     item(
         ui,
         !right.is_empty(),
@@ -2680,8 +3608,46 @@ fn tab_menu(
         ui,
         true,
         "Close All Tabs",
-        Action::RequestClose((0..tabs.len()).collect()),
+        Action::RequestClose(same.clone()),
     );
+    ui.separator();
+    // Groups: those of this window.
+    ui.menu_button("Group", |ui| {
+        item(ui, true, "New Group", Action::NewGroup(vec![i]));
+        for g in groups {
+            let here = same.iter().any(|&n| tabs[n].group == Some(g.id));
+            if here && tab.group != Some(g.id) {
+                item(
+                    ui,
+                    true,
+                    &format!("Add to {}", g.name),
+                    Action::SetGroup(i, Some(g.id)),
+                );
+            }
+        }
+        item(
+            ui,
+            tab.group.is_some(),
+            "Remove from Group",
+            Action::SetGroup(i, None),
+        );
+    });
+    ui.menu_button("Window", |ui| {
+        item(
+            ui,
+            same.len() > 1 || window != 0,
+            "Move to New Window",
+            Action::NewWindow(i, false),
+        );
+        item(ui, true, "Clone to New Window", Action::NewWindow(i, true));
+        item(
+            ui,
+            window != 0,
+            "Move to Main Window",
+            Action::ToMainWindow(i),
+        );
+    });
+    item(ui, tab.lock.is_none(), "Lock…", Action::LockTab(i));
     ui.separator();
     item(ui, has_session, "Clone Session", Action::CloneTab(i));
     item(
@@ -3710,73 +4676,7 @@ impl eframe::App for PrzmApp {
 
         // Added after the session list: the tabs and buttons span the
         // terminal only, and the session list reaches up to the toolbar.
-        egui::Panel::top("tabs").show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                for (i, tab) in self.tabs.iter().enumerate() {
-                    let mut title = tab.title();
-                    if title.chars().count() > 28 {
-                        title = title.chars().take(27).collect::<String>() + "…";
-                    }
-                    if tab.pane().transport.is_closed() && tab.pane().origin.is_some() {
-                        title = format!("○ {title}");
-                    } else if !tab.pane().transport.weak_algorithms().is_empty() {
-                        title = format!("⚠ {title}");
-                    }
-                    // The session and where it is connected; a split tab
-                    // lists each of its sessions.
-                    let describe = |p: &Pane| match pane_target(p) {
-                        Some(target) => format!("{}\n{target}", pane_name(p)),
-                        None => pane_name(p),
-                    };
-                    let hover = if tab.panes.len() > 1 {
-                        let names: Vec<String> = tab
-                            .panes
-                            .iter()
-                            .map(|p| format!("• {}", describe(p).replace('\n', "\n   ")))
-                            .collect();
-                        format!("{}\nRight-click for more", names.join("\n"))
-                    } else {
-                        format!("{}\nRight-click for more", describe(tab.pane()))
-                    };
-                    let (tab_button, close) = tab_widget(ui, &title, i == self.active_tab);
-                    let tab_button = tab_button.on_hover_text(hover);
-                    if tab_button.clicked() {
-                        actions.push(Action::SelectTab(i));
-                    }
-                    if tab_button.middle_clicked() || close {
-                        actions.push(Action::RequestClose(vec![i]));
-                    }
-                    tab_button.context_menu(|ui| {
-                        tab_menu(
-                            ui,
-                            &self.tabs,
-                            i,
-                            self.active_tab,
-                            self.broadcast,
-                            &mut actions,
-                        );
-                    });
-                }
-                if icons::button(ui, icons::Icon::Plus, false)
-                    .on_hover_text(format!(
-                        "New PrzmTerm tab{}\nAlso: double-click the empty bar",
-                        self.keys_hint("new_shell_tab")
-                    ))
-                    .clicked()
-                {
-                    actions.push(Action::NewShellTab);
-                }
-                // A double click on the free part of the bar does the same.
-                let free = ui.available_rect_before_wrap();
-                if free.width() > 0.0
-                    && ui
-                        .interact(free, egui::Id::unique("tab-bar-free"), egui::Sense::click())
-                        .double_clicked()
-                {
-                    actions.push(Action::NewShellTab);
-                }
-            });
-        });
+        egui::Panel::top("tabs").show(ui, |ui| self.tab_bar(ui, &mut actions));
 
         if self.buttons.visible {
             egui::Panel::bottom("buttons").show(ui, |ui| {
@@ -3789,210 +4689,7 @@ impl eframe::App for PrzmApp {
             });
         }
         let modal = self.modal_open();
-        // What was typed in the active pane, for "send to all".
-        // Each pane draws in the font it asks for (loaded when first asked).
-        for pane in &mut self.tabs[self.active_tab].panes {
-            pane.view.family = self.fonts.family(&ctx, pane.view.font_name.as_deref());
-        }
-        let mut typed: Option<Vec<u8>> = None;
-        let mut pasted: Option<(usize, String)> = None;
-        let broadcast = self.broadcast;
-        egui::CentralPanel::no_frame().show(ui, |ui| {
-            let mark = broadcast_color(ui.visuals());
-            let tab = &mut self.tabs[self.active_tab];
-            let area = ui.available_rect_before_wrap();
-            let n = tab.panes.len();
-            let gap = 4.0;
-            // A pane dragged by its caption: (from, where the pointer is).
-            let mut dragging: Option<(usize, egui::Pos2)> = None;
-            let mut dropped: Option<usize> = None;
-            for (i, pane) in tab.panes.iter_mut().enumerate() {
-                let mut rect = tab.layout.rect(area, i, n, gap);
-                let active = i == tab.active;
-                // In a split tab each pane is captioned with its session.
-                if n > 1 {
-                    let caption =
-                        egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), PANE_CAPTION));
-                    let visuals = ui.visuals();
-                    let (fill, text) = if active {
-                        (
-                            egui::Color32::from_rgb(30, 70, 100),
-                            egui::Color32::from_rgb(220, 240, 255),
-                        )
-                    } else {
-                        (visuals.faint_bg_color, visuals.weak_text_color())
-                    };
-                    ui.painter().rect_filled(caption, 0.0, fill);
-                    let dot = if pane.origin.is_some() && pane.transport.is_closed() {
-                        "○ "
-                    } else {
-                        ""
-                    };
-                    ui.painter().with_clip_rect(caption).text(
-                        caption.left_center() + egui::vec2(6.0, 0.0),
-                        egui::Align2::LEFT_CENTER,
-                        format!("{dot}{}", pane_name(pane)),
-                        egui::FontId::proportional(12.0),
-                        text,
-                    );
-                    // Typing to all: every pane that gets the keys says so.
-                    if broadcast && !pane.transport.is_closed() {
-                        ui.painter().with_clip_rect(caption).text(
-                            caption.right_center() - egui::vec2(6.0, 0.0),
-                            egui::Align2::RIGHT_CENTER,
-                            "⇶ typing to all",
-                            egui::FontId::proportional(11.0),
-                            mark,
-                        );
-                    }
-                    let grip = ui
-                        .interact(
-                            caption,
-                            ui.make_persistent_id(("pane-caption", i)),
-                            egui::Sense::click_and_drag(),
-                        )
-                        .on_hover_cursor(egui::CursorIcon::Grab)
-                        .on_hover_text("Drag onto another pane to swap them");
-                    if grip.clicked() && !active {
-                        actions.push(Action::FocusPane(i));
-                    }
-                    if grip.dragged()
-                        && let Some(at) = grip.interact_pointer_pos()
-                    {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                        dragging = Some((i, at));
-                    }
-                    if grip.drag_stopped() {
-                        dropped = Some(i);
-                    }
-                    grip.context_menu(|ui| {
-                        let earlier = if tab.layout == Layout::Rows {
-                            "Move Up"
-                        } else {
-                            "Move Left"
-                        };
-                        let later = if tab.layout == Layout::Rows {
-                            "Move Down"
-                        } else {
-                            "Move Right"
-                        };
-                        if ui.add_enabled(i > 0, egui::Button::new(earlier)).clicked() {
-                            actions.push(Action::SwapPanes(i, i - 1));
-                            ui.close();
-                        }
-                        if ui
-                            .add_enabled(i + 1 < n, egui::Button::new(later))
-                            .clicked()
-                        {
-                            actions.push(Action::SwapPanes(i, i + 1));
-                            ui.close();
-                        }
-                    });
-                    rect.min.y += PANE_CAPTION;
-                }
-                let out = ui
-                    .scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-                        pane.view.show(ui, &mut pane.term, active && !modal)
-                    })
-                    .inner;
-                // The pane with the keyboard is framed in blue; with "send to
-                // all" every pane that gets the keys is.
-                if n > 1 && (active || (broadcast && !pane.transport.is_closed())) {
-                    ui.painter().rect_stroke(
-                        rect,
-                        egui::CornerRadius::ZERO,
-                        egui::Stroke::new(1.0, mark),
-                        egui::StrokeKind::Inside,
-                    );
-                }
-                if out.clicked && !active {
-                    actions.push(Action::FocusPane(i));
-                }
-                if let Some(text) = out.paste {
-                    pasted = Some((i, text));
-                }
-                if out.send_break {
-                    if !active {
-                        actions.push(Action::FocusPane(i));
-                    }
-                    actions.push(Action::SendBreak);
-                }
-                if out.resized.is_some() {
-                    match pane.transport.resize(pane.size()) {
-                        Ok(()) | Err(TransportError::Closed) => {}
-                        Err(e) => tracing::warn!("resize failed: {e}"),
-                    }
-                }
-                if !out.input.is_empty() {
-                    if pane.transport.is_closed() {
-                        if active && out.input.contains(&b'\r') {
-                            actions.push(Action::Reconnect);
-                        } else if out.input.contains(&3) {
-                            pane.cancel_retry();
-                        }
-                    } else {
-                        pane.send(&out.input);
-                        if active {
-                            typed = Some(out.input.clone());
-                        }
-                    }
-                    ctx.request_repaint();
-                }
-            }
-            // While a pane is dragged, the pane under the pointer lights up;
-            // letting go there swaps the two.
-            let target_at =
-                |at: egui::Pos2| (0..n).find(|&j| tab.layout.rect(area, j, n, gap).contains(at));
-            if let Some((from, at)) = dragging {
-                if let Some(to) = target_at(at).filter(|&to| to != from) {
-                    let target = tab.layout.rect(area, to, n, gap);
-                    let blue = egui::Color32::from_rgb(110, 200, 255);
-                    ui.painter()
-                        .rect_filled(target, 0.0, blue.gamma_multiply(0.18));
-                    ui.painter().rect_stroke(
-                        target,
-                        0.0,
-                        egui::Stroke::new(2.0, blue),
-                        egui::StrokeKind::Inside,
-                    );
-                }
-                let name = pane_name(&tab.panes[from]);
-                ui.painter().text(
-                    at + egui::vec2(14.0, 4.0),
-                    egui::Align2::LEFT_TOP,
-                    format!("⇄ {name}"),
-                    egui::FontId::proportional(13.0),
-                    ui.visuals().strong_text_color(),
-                );
-            }
-            if let Some(from) = dropped
-                && let Some(at) = ctx.pointer_latest_pos()
-                && let Some(to) = target_at(at)
-                && to != from
-            {
-                actions.push(Action::SwapPanes(from, to));
-            }
-        });
-
-        if let Some((pane, text)) = pasted {
-            self.paste_confirm = Some(PasteConfirm {
-                tab: self.active_tab,
-                pane,
-                text,
-            });
-        }
-
-        if self.broadcast
-            && let Some(bytes) = typed
-        {
-            let tab = self.tab_mut();
-            let source = tab.active;
-            for (i, pane) in tab.panes.iter_mut().enumerate() {
-                if i != source && !pane.transport.is_closed() {
-                    pane.send(&bytes);
-                }
-            }
-        }
+        self.terminal_area(ui, &mut actions);
 
         self.dialogs(&ctx);
         self.buttons.dialogs(&ctx, self.config_dir.as_deref());
@@ -4014,6 +4711,7 @@ impl eframe::App for PrzmApp {
         for action in actions {
             self.apply(action, &ctx);
         }
+        self.show_windows(&ctx);
         // A message set this frame shows on the next one.
         if self.notice.is_some() {
             ctx.request_repaint();

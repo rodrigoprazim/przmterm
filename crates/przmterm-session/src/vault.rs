@@ -157,6 +157,46 @@ impl std::fmt::Debug for Vault {
     }
 }
 
+/// A password kept only in memory, to check it again later (a locked tab):
+/// its Argon2id key with a random salt, never the password itself.
+pub struct Lock {
+    salt: [u8; SALT_LEN],
+    key: Zeroizing<[u8; 32]>,
+}
+
+impl Lock {
+    /// Lighter than the vault's: the key never leaves the process.
+    const COST: KdfCost = KdfCost {
+        memory: 19 * 1024,
+        iterations: 2,
+        parallelism: 1,
+    };
+
+    pub fn new(password: &str) -> Result<Lock, String> {
+        let salt = <[u8; SALT_LEN]>::generate();
+        let key = derive(password, &salt, Self::COST)?;
+        Ok(Lock { salt, key })
+    }
+
+    /// Whether `password` is the one it was made with.
+    pub fn opens(&self, password: &str) -> bool {
+        let Ok(key) = derive(password, &self.salt, Self::COST) else {
+            return false;
+        };
+        // Every byte compared, whatever the first difference.
+        key.iter()
+            .zip(self.key.iter())
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+            == 0
+    }
+}
+
+impl std::fmt::Debug for Lock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Lock")
+    }
+}
+
 /// Where the vault lives.
 pub fn vault_path(config_dir: &Path) -> PathBuf {
     config_dir.join(VAULT_FILE)
@@ -413,6 +453,14 @@ pub fn rename_references(config_dir: &Path, old: &str, new: &str) -> Result<usiz
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_lock_opens_with_its_password_only() {
+        let lock = Lock::new("tab secret").unwrap();
+        assert!(lock.opens("tab secret"));
+        assert!(!lock.opens("tab secreT"));
+        assert!(!lock.opens(""));
+    }
 
     fn entry(name: &str, user: &str, password: &str) -> VaultEntry {
         VaultEntry {
