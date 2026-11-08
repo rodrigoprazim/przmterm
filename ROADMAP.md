@@ -192,7 +192,6 @@ and, when a device is at hand, a serial console (Xmodem or Ymodem).
 - SignPath Foundation approval for the Windows signing (applied for on
   2026-11-08)
 - Release candidates `1.0.0-rc.N`
-
 - Configuration format declared stable (compatibility promise for 1.x)
 - Signed binaries: Windows through the SignPath Foundation, macOS
   (universal) ad-hoc signed, checksums signed with GPG
