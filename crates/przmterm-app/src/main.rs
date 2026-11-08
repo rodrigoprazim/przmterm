@@ -48,7 +48,7 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| {
             let fonts = fonts::TermFonts::new(&cc.egui_ctx);
-            let app = PrzmApp::new(fonts);
+            let mut app = PrzmApp::new(fonts);
             app.share_sessions();
             Ok(Box::new(app))
         }),
@@ -142,6 +142,7 @@ fn tab_widget(
     title: &str,
     active: bool,
     locked: bool,
+    group: Option<egui::Color32>,
 ) -> (egui::Response, bool) {
     let font = egui::TextStyle::Button.resolve(ui.style());
     let visuals = ui.visuals().clone();
@@ -176,6 +177,19 @@ fn tab_widget(
         };
         let radius: u8 = 5;
         painter.rect_filled(rect, radius, fill);
+        // A tab of a group starts with a bar in the group's colour.
+        if let Some(color) = group {
+            painter.rect_filled(
+                rect.with_max_x(rect.left() + 4.0),
+                egui::CornerRadius {
+                    nw: radius,
+                    sw: radius,
+                    ne: 0,
+                    se: 0,
+                },
+                color,
+            );
+        }
         // The segment lights up as a whole when the pointer is on it.
         if close.hovered() {
             painter.rect_filled(
@@ -792,8 +806,23 @@ impl PrzmApp {
         self.share_sessions();
     }
 
-    /// Tells the PrzmTerm shells which sessions there are.
-    fn share_sessions(&self) {
+    /// Tells the PrzmTerm shells which sessions there are, and gives them the
+    /// font and cursor of the global settings.
+    fn share_sessions(&mut self) {
+        let mut defaults = self.sessions.root.inherited.clone();
+        defaults.host = Some("localhost".into());
+        if let Ok(session) = Session::resolve("PrzmTerm", Vec::new(), "", &defaults) {
+            let look = view::TerminalView::for_session(&session).look();
+            // Shells already open take a changed look too.
+            if pane::shell_look().as_ref() != Some(&look) {
+                pane::set_shell_look(look.clone());
+                for pane in self.tabs.iter_mut().flat_map(|t| &mut t.panes) {
+                    if pane.is_launcher() {
+                        pane.view.set_look(&look);
+                    }
+                }
+            }
+        }
         launcher::set_catalog(
             self.sessions
                 .root
@@ -1249,6 +1278,19 @@ impl PrzmApp {
         }
     }
 
+    /// "Group N" with the lowest N no open group is called.
+    fn free_group_name(&self) -> String {
+        (1..)
+            .map(|n| format!("Group {n}"))
+            .find(|name| {
+                !self
+                    .groups
+                    .iter()
+                    .any(|g| g.name.eq_ignore_ascii_case(name))
+            })
+            .unwrap_or_default()
+    }
+
     /// A group of the tabs `tabs` (by id) called `name`.
     fn new_group(&mut self, tabs: &[u64], name: String) {
         let id = self.next_group;
@@ -1262,7 +1304,7 @@ impl PrzmApp {
         self.groups.push(Group {
             id,
             name: if name.is_empty() {
-                format!("Group {id}")
+                self.free_group_name()
             } else {
                 name
             },
@@ -1477,7 +1519,7 @@ impl PrzmApp {
                         .iter()
                         .filter_map(|&t| self.tabs.get(t).map(|tab| tab.id))
                         .collect(),
-                    name: format!("Group {}", self.next_group),
+                    name: self.free_group_name(),
                 });
             }
             Action::SetGroup(t, group) => {
@@ -2370,22 +2412,12 @@ impl PrzmApp {
                 } else {
                     format!("{}\nRight-click for more", describe(tab.pane()))
                 };
-                let (tab_button, close) =
-                    tab_widget(ui, &title, i == self.active_tab, tab.lock.is_some());
-                if let Some(group) = tab
+                let color = tab
                     .group
                     .and_then(|g| self.groups.iter().find(|x| x.id == g))
-                {
-                    // Under the tab, the group's colour.
-                    let r = tab_button.rect;
-                    ui.painter().line_segment(
-                        [
-                            r.left_bottom() + egui::vec2(3.0, 1.0),
-                            r.right_bottom() + egui::vec2(-3.0, 1.0),
-                        ],
-                        egui::Stroke::new(2.5, group.color),
-                    );
-                }
+                    .map(|g| g.color);
+                let (tab_button, close) =
+                    tab_widget(ui, &title, i == self.active_tab, tab.lock.is_some(), color);
                 let tab_button = tab_button.on_hover_text(hover);
                 if tab_button.clicked() {
                     actions.push(Action::SelectTab(i));

@@ -177,7 +177,7 @@ In a split tab, **⇶ Send to all** in the status bar sends what you type to
 every pane of the tab (after a warning) until you turn it off.
 
 **Tab groups.** *Group › New Group* in a tab's menu starts a group: its tabs
-sit together under a coloured label and *Group › Add to …* puts more tabs in
+sit together after a coloured label, each with a bar of its colour, and *Group › Add to …* puts more tabs in
 it. Clicking the label offers *Send Command to Group…* (one or more commands,
 to every connected session of the group, with Enter after each line),
 *Rename Group…*, *Ungroup* and *Close Group*.

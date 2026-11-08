@@ -10,7 +10,9 @@ All notable changes to PrzmTerm are recorded here. The format follows
 ### Added
 
 - Tab groups: *Group* in the tab menu starts a group or adds a tab to one;
-  the group's tabs sit together under a coloured label, which offers *Send
+  the group's tabs sit together after a coloured label, each starting with a
+  bar of the group's colour; new groups take the lowest free "Group N". The
+  label offers *Send
   Command to Group…*, *Rename Group…*, *Ungroup* and *Close Group*.
 - Several windows: *Window › Move to New Window* (with its live connection),
   *Clone to New Window* and *Move to Main Window* in the tab menu. Each
@@ -99,6 +101,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Fixed
 
+- The PrzmTerm shell tab uses the font and cursor of the global settings
+  (and follows them when they change).
 - Session list: with the padlock open, folders can be dragged too (into
   another folder or to the top level), and the grip and folder icons are
   drawn, so they line up with the names.

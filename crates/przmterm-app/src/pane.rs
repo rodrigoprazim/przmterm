@@ -20,6 +20,20 @@ use crate::view::TerminalView;
 pub use przmterm_connect::{Env, vault_entries_used};
 use przmterm_connect::{connect, message};
 
+/// The font and cursor of the global settings, for the PrzmTerm shell
+/// (which has no session of its own); set when the settings load.
+static SHELL_LOOK: std::sync::RwLock<Option<crate::view::Look>> = std::sync::RwLock::new(None);
+
+pub fn set_shell_look(look: crate::view::Look) {
+    if let Ok(mut l) = SHELL_LOOK.write() {
+        *l = Some(look);
+    }
+}
+
+pub fn shell_look() -> Option<crate::view::Look> {
+    SHELL_LOOK.read().ok().and_then(|l| l.clone())
+}
+
 /// A plain-text log of everything a pane receives.
 pub struct SessionLog {
     file: BufWriter<File>,
@@ -535,10 +549,14 @@ impl Pane {
     /// A pane with the PrzmTerm shell, which opens sessions.
     pub fn launcher() -> Self {
         let requests = Requests::default();
+        let mut view = TerminalView::default();
+        if let Some(look) = shell_look() {
+            view.set_look(&look);
+        }
         let mut pane = Self::with(
             Terminal::new(80, 24),
             Box::new(Launcher::new(requests.clone())),
-            TerminalView::default(),
+            view,
             "PrzmTerm".into(),
             None,
         );
