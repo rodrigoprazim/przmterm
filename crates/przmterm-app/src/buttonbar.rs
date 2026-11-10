@@ -165,7 +165,7 @@ impl ButtonBarUi {
                 crate::theme::sunken_combos(ui);
                 egui::ComboBox::from_id_salt("button-groups")
                     .selected_text(egui::RichText::new(&self.bar.tabs[self.active].name).strong())
-                    .width(150.0)
+                    .width(75.0)
                     .height(400.0)
                     .show_ui(ui, |ui| {
                         crate::theme::menu(ui);
