@@ -59,8 +59,19 @@ enum Target {
 /// The confirmation shown before changing the global defaults.
 struct Confirm {
     keys: Vec<&'static str>,
-    /// Let existing sessions that use the default follow the new value.
-    apply_existing: bool,
+    /// Which existing sessions take the new values.
+    scope: Scope,
+}
+
+/// Which existing sessions a change to the global settings reaches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Scope {
+    /// Only new sessions; existing ones get the old value written in.
+    NewOnly,
+    /// Sessions that use the default; their own values stay.
+    Inheriting,
+    /// Every session and folder: their own values for these fields go.
+    All,
 }
 
 /// The pages of the editor's side menu.
@@ -618,17 +629,17 @@ impl Editor {
             if !keys.is_empty() {
                 self.confirm = Some(Confirm {
                     keys,
-                    apply_existing: true,
+                    scope: Scope::Inheriting,
                 });
                 return Ok(None);
             }
         }
-        self.save(config_dir, true).map(Some)
+        self.save(config_dir, Scope::Inheriting).map(Some)
     }
 
     /// Writes the file. For the global defaults, `apply_existing == false`
     /// first keeps the old values in the sessions that use them.
-    fn save(&self, config_dir: &Path, apply_existing: bool) -> Result<String, String> {
+    fn save(&self, config_dir: &Path, scope: Scope) -> Result<String, String> {
         let settings = self.settings()?;
         match &self.target {
             Target::Session { original, trail } => {
@@ -654,8 +665,15 @@ impl Editor {
             }
             Target::Global => {
                 let mut note = String::new();
-                if !apply_existing {
-                    let keys = self.original.changed_fields(&settings);
+                let keys = self.original.changed_fields(&settings);
+                if scope == Scope::All {
+                    let cleared = przmterm_session::clear_overrides(config_dir, &keys)
+                        .map_err(|e| e.to_string())?;
+                    if cleared > 0 {
+                        note = format!(" {cleared} session(s) or folder(s) now follow it.");
+                    }
+                }
+                if scope == Scope::NewOnly {
                     let (kept, skipped) =
                         przmterm_session::keep_old_defaults(config_dir, &self.original, &keys)
                             .map_err(|e| e.to_string())?;
@@ -729,15 +747,37 @@ impl Editor {
                     let names: Vec<&str> = confirm.keys.iter().map(|k| field_label(k)).collect();
                     ui.label(format!("Changed: {}.", names.join(", ")));
                     ui.add_space(6.0);
-                    crate::theme::checkbox(ui,
-                        &mut confirm.apply_existing,
-                        "Apply the new values to existing sessions that use the default",
-                    );
-                    ui.weak(if confirm.apply_existing {
-                        "Sessions and folders with their own value keep it."
-                    } else {
-                        "Existing sessions keep their current value; only new sessions use the new one."
-                    });
+                    ui.label("Apply the new values to:");
+                    ui.add_space(2.0);
+                    for (scope, text, hint) in [
+                        (
+                            Scope::Inheriting,
+                            "Sessions that use the default",
+                            "Sessions and folders with their own value keep it.",
+                        ),
+                        (
+                            Scope::All,
+                            "All sessions, including customized ones",
+                            "Their own values for these fields are removed.",
+                        ),
+                        (
+                            Scope::NewOnly,
+                            "New sessions only",
+                            "Existing sessions keep their current value.",
+                        ),
+                    ] {
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 0.0;
+                            if crate::theme::radio(ui, confirm.scope == scope, text).clicked() {
+                                confirm.scope = scope;
+                            }
+                            ui.horizontal(|ui| {
+                                ui.add_space(22.0);
+                                ui.weak(hint);
+                            });
+                        });
+                        ui.add_space(2.0);
+                    }
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -746,8 +786,8 @@ impl Editor {
                         });
                     });
                     if go {
-                        let apply = confirm.apply_existing;
-                        match self.save(config_dir, apply) {
+                        let scope = confirm.scope;
+                        match self.save(config_dir, scope) {
                             Ok(msg) => result = EditorResult::Saved(msg),
                             Err(e) => {
                                 self.error = Some(e);
@@ -761,7 +801,9 @@ impl Editor {
                 }
 
                 ui.weak(match self.target {
-                    Target::Global => "Defaults for every session. Folders and sessions can set their own.",
+                    Target::Global => {
+                        "Defaults for every session. Folders and sessions can set their own."
+                    }
                     Target::Folder { .. } => "Defaults for the sessions in this folder.",
                     Target::Session { .. } => "Empty fields use the value shown in grey.",
                 });
@@ -807,10 +849,7 @@ impl Editor {
                                 .show(ui, |ui| {
                                     ui.label(
                                         egui::RichText::new(self.page.label())
-                                            .font(egui::FontId::new(
-                                                17.0,
-                                                crate::theme::semibold(),
-                                            ))
+                                            .font(egui::FontId::new(17.0, crate::theme::semibold()))
                                             .color(crate::theme::TEXT_STRONG),
                                     );
                                     ui.add_space(6.0);
@@ -1699,7 +1738,6 @@ impl Editor {
                     }
                 }
             });
-            reset(ui, &mut self.cursor, &cx.hint("terminal.cursor"));
         });
         ui.end_row();
         ui.label("Color");
@@ -1713,14 +1751,6 @@ impl Editor {
             let mut color = effective.unwrap_or(default_cursor());
             if ui.color_edit_button_srgb(&mut color).changed() {
                 self.cursor_color = Some(przmterm_session::color_text(color));
-            }
-            if effective.is_some()
-                && ui
-                    .button("Default")
-                    .on_hover_text("The usual light blue")
-                    .clicked()
-            {
-                self.cursor_color = Some(String::new());
             }
             reset(
                 ui,
@@ -1752,18 +1782,21 @@ impl Editor {
         if std::mem::take(&mut self.scroll_to_log) {
             row.scroll_to_me(Some(egui::Align::Center));
         }
-        bool_pick(
-            ui,
-            &mut self.log,
-            cx.inherited.log.enabled.unwrap_or(false),
-            ["yes", "no"],
-            None,
-            &cx.hint("log.enabled"),
-        );
+        ui.horizontal(|ui| {
+            let mut on = self
+                .log
+                .unwrap_or(cx.inherited.log.enabled.unwrap_or(false));
+            let chosen = Some(if on { 0 } else { 1 });
+            if let Some(i) = crate::theme::segmented(ui, chosen, &["yes", "no"]) {
+                on = i == 0;
+                self.log = Some(on);
+            }
+        });
         ui.end_row();
 
         ui.label("Folder");
-        ui.horizontal(|ui| {
+        // The file name's field reaches as far as Browse… does here.
+        let row = ui.horizontal(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.log_dir)
                     .hint_text(cx.hint("log.dir"))
@@ -1777,6 +1810,7 @@ impl Editor {
                 self.log_dir = tilde(&dir);
             }
         });
+        let full_width = row.response.rect.width();
         ui.end_row();
 
         ui.label("File name");
@@ -1784,7 +1818,7 @@ impl Editor {
             ui.add(
                 egui::TextEdit::singleline(&mut self.log_path)
                     .hint_text(cx.hint("log.path"))
-                    .desired_width(200.0),
+                    .desired_width(full_width),
             );
             if ui
                 .selectable_label(self.show_log_help, " ? ")
@@ -2047,7 +2081,7 @@ mod tests {
         e.baud_rate = "115200".into();
         e.parity = Some(Parity::Even);
         e.flow_control = Some(FlowControl::Software);
-        e.save(tmp.path(), true).unwrap();
+        e.save(tmp.path(), Scope::Inheriting).unwrap();
 
         let tree = przmterm_session::SessionTree::load(tmp.path());
         let console = tree.root.all_sessions()[0];
@@ -2055,7 +2089,7 @@ mod tests {
         // Editing something else keeps the line settings.
         let mut e = Editor::edit(console);
         e.scrollback = "500".into();
-        e.save(tmp.path(), true).unwrap();
+        e.save(tmp.path(), Scope::Inheriting).unwrap();
         let toml = std::fs::read_to_string(tmp.path().join("sessions/console.toml")).unwrap();
         assert!(toml.contains("parity = \"even\""), "{toml}");
         assert!(toml.contains("flow_control = \"software\""), "{toml}");
@@ -2080,10 +2114,10 @@ mod tests {
             },
             Forward::default(),
         ]);
-        let err = e.save(tmp.path(), true).unwrap_err();
+        let err = e.save(tmp.path(), Scope::Inheriting).unwrap_err();
         assert!(err.contains("Tunnel 1"), "{err}");
         e.forwards.as_mut().unwrap()[0].target = "localhost:5432".into();
-        e.save(tmp.path(), true).unwrap();
+        e.save(tmp.path(), Scope::Inheriting).unwrap();
         let toml = std::fs::read_to_string(tmp.path().join("sessions/db.toml")).unwrap();
         assert!(toml.contains("jump_host = \"bastion\""), "{toml}");
         assert_eq!(
@@ -2104,7 +2138,7 @@ mod tests {
         e.host = "10.0.0.1".into();
         e.term_type = Some("vt220".into());
         e.log_dir = "/var/log/przm".into();
-        e.save(tmp.path(), true).unwrap();
+        e.save(tmp.path(), Scope::Inheriting).unwrap();
         assert!(sessions.join("Lab/sw1.toml").exists());
 
         let tree = przmterm_session::SessionTree::load(tmp.path());
@@ -2113,7 +2147,7 @@ mod tests {
         f.port = "2222".into();
         f.name = "Lab2".into();
         f.host = "ignored for folders".into();
-        f.save(tmp.path(), true).unwrap();
+        f.save(tmp.path(), Scope::Inheriting).unwrap();
         let folder_toml = std::fs::read_to_string(sessions.join("Lab2/folder.toml")).unwrap();
         assert_eq!(folder_toml, "port = 2222\n");
 
@@ -2129,7 +2163,7 @@ mod tests {
             original: Some(sw1.path.clone()),
             trail: vec![],
         };
-        e.save(tmp.path(), true).unwrap();
+        e.save(tmp.path(), Scope::Inheriting).unwrap();
         assert!(sessions.join("sw1.toml").exists());
         assert!(
             !sessions.join("Lab2/sw1.toml").exists(),
@@ -2139,7 +2173,11 @@ mod tests {
         let mut bad = Editor::new_session(&[]);
         bad.name = "x".into();
         bad.port = "abc".into();
-        assert!(bad.save(tmp.path(), true).unwrap_err().contains("Port"));
+        assert!(
+            bad.save(tmp.path(), Scope::Inheriting)
+                .unwrap_err()
+                .contains("Port")
+        );
     }
 
     #[test]
@@ -2161,7 +2199,7 @@ mod tests {
         assert_eq!(confirm.keys, vec!["terminal.scrollback"]);
 
         // Keep old values: the session gets the old (built-in) value written in.
-        let msg = g.save(tmp.path(), false).unwrap();
+        let msg = g.save(tmp.path(), Scope::NewOnly).unwrap();
         assert!(msg.contains("1 session(s) kept"), "{msg}");
         let a = std::fs::read_to_string(sessions.join("a.toml")).unwrap();
         assert!(a.contains("scrollback = 10000"), "{a}");
@@ -2171,6 +2209,15 @@ mod tests {
         let tree = przmterm_session::SessionTree::load(tmp.path());
         let b = tree.root.sessions.iter().find(|s| s.name == "b").unwrap();
         assert_eq!(b.scrollback, 50000);
+
+        // All sessions: the value a.toml kept goes away.
+        let mut g = Editor::global(tmp.path());
+        g.scrollback = "20000".into();
+        assert!(g.save_or_confirm(tmp.path()).unwrap().is_none());
+        let msg = g.save(tmp.path(), Scope::All).unwrap();
+        assert!(msg.contains("1 session(s) or folder(s)"), "{msg}");
+        let a = std::fs::read_to_string(sessions.join("a.toml")).unwrap();
+        assert!(!a.contains("scrollback"), "{a}");
     }
 
     #[test]

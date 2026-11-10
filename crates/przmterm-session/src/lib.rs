@@ -1419,6 +1419,51 @@ pub fn keep_old_defaults(
     Ok(counts)
 }
 
+/// Drops `keys` from every folder's and session's own settings, so they all
+/// follow the global value. The session's address (`protocol`, `host`) is
+/// never touched. Returns how many files changed.
+pub fn clear_overrides(config_dir: &Path, keys: &[&str]) -> Result<usize, SessionError> {
+    fn walk(folder: &Folder, keys: &[&str], changed: &mut usize) -> Result<(), SessionError> {
+        let unset = SessionSettings::default();
+        let clear = |own: &mut SessionSettings| {
+            let mut any = false;
+            for key in keys {
+                if matches!(*key, "protocol" | "host") || own.field_text(key).is_none() {
+                    continue;
+                }
+                own.copy_field(&unset, key);
+                any = true;
+            }
+            any
+        };
+        if !folder.trail.is_empty() {
+            let mut own = folder.own.clone();
+            if clear(&mut own) {
+                write_folder_settings(&folder.dir, &own)?;
+                *changed += 1;
+            }
+        }
+        for session in &folder.sessions {
+            let mut own = read_session_settings(&session.path)?;
+            if clear(&mut own) {
+                fs::write(&session.path, own.to_toml()).map_err(|source| SessionError::Io {
+                    path: session.path.clone(),
+                    source,
+                })?;
+                *changed += 1;
+            }
+        }
+        for f in &folder.folders {
+            walk(f, keys, changed)?;
+        }
+        Ok(())
+    }
+    let tree = SessionTree::load(config_dir);
+    let mut changed = 0;
+    walk(&tree.root, keys, &mut changed)?;
+    Ok(changed)
+}
+
 /// Moves a session file into `folder_dir` and returns its new path.
 pub fn move_session(path: &Path, folder_dir: &Path) -> Result<PathBuf, SessionError> {
     let file_name = path.file_name().ok_or_else(|| SessionError::Invalid {
@@ -1883,6 +1928,39 @@ mod tests {
         );
         assert_eq!(target("b"), "ops@b:9");
         assert_eq!(target("c"), "ops@c:2222");
+    }
+
+    #[test]
+    fn clear_overrides_makes_every_session_follow_global() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write(dir, "defaults.toml", "port = 2200");
+        write(dir, "sessions/a.toml", "host = 'a'");
+        write(
+            dir,
+            "sessions/b.toml",
+            "host = 'b'\nport = 9\nusername = 'me'",
+        );
+        write(dir, "sessions/Lab/folder.toml", "port = 2222");
+        write(dir, "sessions/Lab/c.toml", "host = 'c'");
+
+        let new = SessionSettings::from_toml("port = 22").unwrap();
+        assert_eq!(clear_overrides(dir, &["port", "host"]).unwrap(), 2);
+        write_defaults(dir, &new).unwrap();
+        assert!(!dir.join("sessions/Lab").join(FOLDER_FILE).exists());
+
+        let tree = SessionTree::load(dir);
+        let target = |n: &str| {
+            tree.root
+                .all_sessions()
+                .into_iter()
+                .find(|s| s.name == n)
+                .unwrap()
+                .display_target()
+        };
+        assert_eq!(target("a"), "a:22");
+        assert_eq!(target("b"), "me@b:22", "keeps its host and user");
+        assert_eq!(target("c"), "c:22");
     }
 
     #[test]

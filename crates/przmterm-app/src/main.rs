@@ -3395,14 +3395,6 @@ impl PrzmApp {
                                     if ui.color_edit_button_srgb(&mut rgb).changed() {
                                         color = Some(rgb);
                                     }
-                                    if color.is_some()
-                                        && ui
-                                            .button("Default")
-                                            .on_hover_text("The usual light blue")
-                                            .clicked()
-                                    {
-                                        color = None;
-                                    }
                                 });
                                 ui.end_row();
                                 ui.label("");

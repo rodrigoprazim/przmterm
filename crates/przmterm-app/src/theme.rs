@@ -332,12 +332,13 @@ pub fn apply(ctx: &egui::Context) {
         spacing.item_spacing = egui::vec2(8.0, 6.0);
         spacing.button_padding = egui::vec2(10.0, 4.0);
         spacing.interact_size = egui::vec2(36.0, 24.0);
-        // The title bar takes the top and bottom: kept low.
+        // The title bar takes the top and bottom: kept low. Inter's capitals
+        // sit above the middle of its line, so the top gets a little more.
         spacing.window_margin = Margin {
             left: 14,
             right: 14,
-            top: 7,
-            bottom: 10,
+            top: 9,
+            bottom: 8,
         };
         spacing.menu_margin = Margin::same(5);
         spacing.indent = 16.0;

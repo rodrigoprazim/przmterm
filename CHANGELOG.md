@@ -23,11 +23,17 @@ All notable changes to PrzmTerm are recorded here. The format follows
   them, and Save/OK are blue. Check boxes and radio buttons are filled with
   the blue when on; the cursor's shape is a list of radio buttons and its
   blinking a check box. Window titles sit in the middle of their bar.
+  The cursor colour has no separate "Default" button, and Log to file is
+  just yes/no; the log's file name field is as wide as the folder row.
 - *Split Right* and *Split Down* are icons at the top right, with **⋯** for
   the grid and the arrangements, instead of the "◫ Split ▾" menu.
 
 ### Added
 
+- Changing the global settings can now apply the new values to *all*
+  sessions, including those with their own value: their own values for the
+  changed fields are removed (the address is never touched). The other
+  choices stay: sessions that use the default, or new sessions only.
 - macOS: PrzmTerm's own menu bar. The app menu says PrzmTerm (not
   "przmterm") and has *About PrzmTerm*, *Settings…* (⌘,), *Keyboard
   Shortcuts…*, *Password Vault…*, *Keyword Sets…* and *Settings Folder…*;
