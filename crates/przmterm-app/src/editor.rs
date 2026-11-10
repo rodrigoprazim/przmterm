@@ -140,6 +140,8 @@ pub struct Editor {
     cursor_blink: Option<bool>,
     /// `#rrggbb`; `Some("")` is the default colour (over an inherited one).
     cursor_color: Option<String>,
+    background: Option<String>,
+    foreground: Option<String>,
     /// The installed monospace fonts, given by the app once read.
     pub font_families: Option<crate::fonts::FontList>,
     log: Option<bool>,
@@ -237,6 +239,8 @@ fn field_label(key: &str) -> &'static str {
         "terminal.cursor" => "cursor",
         "terminal.cursor_blink" => "cursor blink",
         "terminal.cursor_color" => "cursor color",
+        "terminal.background" => "background color",
+        "terminal.foreground" => "text color",
         "log.enabled" => "log to file",
         "log.path" => "log file",
         "log.dir" => "log folder",
@@ -297,6 +301,8 @@ impl Context<'_> {
             "terminal.cursor" => "block".into(),
             "terminal.cursor_blink" => "no".into(),
             "terminal.cursor_color" => "default".into(),
+            "terminal.background" => "default".into(),
+            "terminal.foreground" => "default".into(),
             "log.enabled" => "no".into(),
             "log.path" => przmterm_session::DEFAULT_LOG_TEMPLATE.into(),
             "log.dir" => self.logs_dir.clone(),
@@ -453,6 +459,8 @@ impl Editor {
             cursor: s.terminal.cursor,
             cursor_blink: s.terminal.cursor_blink,
             cursor_color: s.terminal.cursor_color.clone(),
+            background: s.terminal.background.clone(),
+            foreground: s.terminal.foreground.clone(),
             font_families: None,
             log: s.log.enabled,
             log_path: text(&s.log.path),
@@ -592,6 +600,8 @@ impl Editor {
                 cursor: self.cursor,
                 cursor_blink: self.cursor_blink,
                 cursor_color: self.cursor_color.clone(),
+                background: self.background.clone(),
+                foreground: self.foreground.clone(),
             },
             log: LogSettings {
                 enabled: self.log,
@@ -850,7 +860,7 @@ impl Editor {
                                     ui.label(
                                         egui::RichText::new(self.page.label())
                                             .font(egui::FontId::new(17.0, crate::theme::semibold()))
-                                            .color(crate::theme::TEXT_STRONG),
+                                            .color(crate::theme::p().text_strong),
                                     );
                                     ui.add_space(6.0);
                                     self.form(ui, &cx, root)
@@ -1004,6 +1014,8 @@ impl Editor {
                 grid(ui, "editor-terminal", |ui| self.terminal_fields(ui, cx));
                 section(ui, "Font", "");
                 grid(ui, "editor-font", |ui| self.font_fields(ui, cx));
+                section(ui, "Colors", "");
+                grid(ui, "editor-colors", |ui| self.color_fields(ui, cx));
                 section(ui, "Cursor", "");
                 grid(ui, "editor-cursor", |ui| self.cursor_fields(ui, cx));
             }
@@ -1726,6 +1738,40 @@ impl Editor {
     }
 
     /// The cursor's shape, colour and blinking.
+    /// The terminal's background and text colours, with a sample.
+    fn color_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
+        // The colour in effect: set here, else inherited, else default.
+        let effective = |own: &Option<String>, inherited: &Option<String>, default: [u8; 3]| {
+            own.clone()
+                .or_else(|| inherited.clone())
+                .and_then(|c| przmterm_session::parse_color(&c))
+                .unwrap_or(default)
+        };
+        let mut bg = effective(
+            &self.background,
+            &cx.inherited.terminal.background,
+            przmterm_session::DEFAULT_BACKGROUND,
+        );
+        let mut fg = effective(
+            &self.foreground,
+            &cx.inherited.terminal.foreground,
+            przmterm_session::DEFAULT_FOREGROUND,
+        );
+        ui.label("Background");
+        if ui.color_edit_button_srgb(&mut bg).changed() {
+            self.background = Some(przmterm_session::color_text(bg));
+        }
+        ui.end_row();
+        ui.label("Text");
+        if ui.color_edit_button_srgb(&mut fg).changed() {
+            self.foreground = Some(przmterm_session::color_text(fg));
+        }
+        ui.end_row();
+        ui.label("");
+        color_sample(ui, bg, fg);
+        ui.end_row();
+    }
+
     fn cursor_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
         ui.label("Shape");
         ui.horizontal_top(|ui| {
@@ -2012,6 +2058,23 @@ fn reset<T>(ui: &mut egui::Ui, value: &mut Option<T>, inherited: &str) {
     {
         *value = None;
     }
+}
+
+/// A line of terminal text in `fg` on `bg`, as wide as a field.
+pub fn color_sample(ui: &mut egui::Ui, bg: [u8; 3], fg: [u8; 3]) {
+    egui::Frame::new()
+        .fill(crate::view::rgb(bg))
+        .stroke(egui::Stroke::new(1.0, crate::theme::p().control_border))
+        .corner_radius(4)
+        .inner_margin(egui::Margin::symmetric(8, 5))
+        .show(ui, |ui| {
+            ui.set_width(crate::theme::FIELD_WIDTH - 16.0);
+            ui.label(
+                egui::RichText::new("user@host:~$ ls -l")
+                    .monospace()
+                    .color(crate::view::rgb(fg)),
+            );
+        });
 }
 
 /// Yes/no buttons with the effective value selected. `note` says where an

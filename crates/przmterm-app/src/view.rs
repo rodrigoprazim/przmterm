@@ -14,8 +14,25 @@ use przmterm_term::{Cell, Screen, Style, Terminal};
 
 use crate::input::{encode_key, encode_paste};
 
-pub const DEFAULT_FG: [u8; 3] = [216, 222, 233];
-pub const DEFAULT_BG: [u8; 3] = [24, 26, 31];
+pub const DEFAULT_FG: [u8; 3] = przmterm_session::DEFAULT_FOREGROUND;
+pub const DEFAULT_BG: [u8; 3] = przmterm_session::DEFAULT_BACKGROUND;
+
+/// The colours of plain text and of the background, for cells with no
+/// colour of their own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Ink {
+    pub fg: [u8; 3],
+    pub bg: [u8; 3],
+}
+
+impl Default for Ink {
+    fn default() -> Self {
+        Self {
+            fg: DEFAULT_FG,
+            bg: DEFAULT_BG,
+        }
+    }
+}
 /// The cursor colour when none is chosen.
 pub const CURSOR: Color32 = Color32::from_rgb(110, 200, 255);
 const SELECTION: Color32 = Color32::from_rgb(58, 92, 140);
@@ -57,15 +74,15 @@ fn resolve(color: przmterm_term::Color, default: [u8; 3]) -> [u8; 3] {
 }
 
 /// Foreground and background after bold-brightening and reverse video.
-fn colors(style: &Style) -> (Color32, Color32) {
+fn colors(style: &Style, ink: Ink) -> (Color32, Color32) {
     let mut fg = style.fg;
     if style.bold
         && let przmterm_term::Color::Indexed(i @ 0..=7) = fg
     {
         fg = przmterm_term::Color::Indexed(i + 8);
     }
-    let mut fg = resolve(fg, DEFAULT_FG);
-    let mut bg = resolve(style.bg, DEFAULT_BG);
+    let mut fg = resolve(fg, ink.fg);
+    let mut bg = resolve(style.bg, ink.bg);
     if style.reverse {
         std::mem::swap(&mut fg, &mut bg);
     }
@@ -190,6 +207,8 @@ pub struct Look {
     pub cursor: CursorShape,
     pub cursor_blink: bool,
     pub cursor_color: Option<[u8; 3]>,
+    pub background: Option<[u8; 3]>,
+    pub foreground: Option<[u8; 3]>,
 }
 
 pub struct TerminalView {
@@ -202,6 +221,10 @@ pub struct TerminalView {
     pub cursor_blink: bool,
     /// `None`: the default cursor colour.
     pub cursor_color: Option<[u8; 3]>,
+    /// The background; `None`: the default one.
+    pub background: Option<[u8; 3]>,
+    /// Plain text; `None`: the default colour.
+    pub foreground: Option<[u8; 3]>,
     /// When the cursor last moved or a key was typed: blinking restarts
     /// from "on" so the cursor is seen.
     blink_from: std::time::Instant,
@@ -228,6 +251,8 @@ impl Default for TerminalView {
             cursor: CursorShape::Block,
             cursor_blink: false,
             cursor_color: None,
+            background: None,
+            foreground: None,
             blink_from: std::time::Instant::now(),
             offer_break: false,
             highlighter: None,
@@ -257,6 +282,8 @@ impl TerminalView {
         view.cursor = session.cursor;
         view.cursor_blink = session.cursor_blink;
         view.cursor_color = session.cursor_color;
+        view.background = session.background;
+        view.foreground = session.foreground;
         view
     }
 
@@ -273,6 +300,8 @@ impl TerminalView {
             cursor: self.cursor,
             cursor_blink: self.cursor_blink,
             cursor_color: self.cursor_color,
+            background: self.background,
+            foreground: self.foreground,
         }
     }
 
@@ -282,6 +311,16 @@ impl TerminalView {
         self.cursor = look.cursor;
         self.cursor_blink = look.cursor_blink;
         self.cursor_color = look.cursor_color;
+        self.background = look.background;
+        self.foreground = look.foreground;
+    }
+
+    /// The colours of plain text and the background.
+    pub fn ink(&self) -> Ink {
+        Ink {
+            fg: self.foreground.unwrap_or(DEFAULT_FG),
+            bg: self.background.unwrap_or(DEFAULT_BG),
+        }
     }
 
     /// The colour the cursor is drawn in.
@@ -332,11 +371,13 @@ impl TerminalView {
 
         let screen = term.screen();
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, CornerRadius::ZERO, rgb(DEFAULT_BG));
+        let ink = self.ink();
+        painter.rect_filled(rect, CornerRadius::ZERO, rgb(ink.bg));
         let span = self.selection.and_then(|s| s.span(screen));
         let mut grid = crate::grid::enabled().then(|| GridFrame {
             ppp: ui.ctx().pixels_per_point(),
             ascent: crate::grid::atlas().ascent(&self.family, self.font_size),
+            ink,
             ..GridFrame::default()
         });
         for row in 0..screen.rows() {
@@ -362,6 +403,7 @@ impl TerminalView {
                     (cell_w, cell_h),
                     &font_id,
                     selected,
+                    ink,
                 ),
             }
         }
@@ -452,7 +494,7 @@ impl TerminalView {
         if focused && !self.preedit.is_empty() {
             let galley = painter.layout_no_wrap(self.preedit.clone(), font_id.clone(), CURSOR);
             let at = Rect::from_min_size(cursor_cell.min, galley.size().max(cursor_cell.size()));
-            painter.rect_filled(at, CornerRadius::ZERO, rgb(DEFAULT_BG));
+            painter.rect_filled(at, CornerRadius::ZERO, rgb(self.ink().bg));
             painter.galley(at.min, galley, CURSOR);
             painter.line_segment(
                 [at.left_bottom(), at.right_bottom()],
@@ -784,6 +826,7 @@ struct GridFrame {
     ppp: f32,
     /// Points from a row's top to the baseline.
     ascent: f32,
+    ink: Ink,
     /// Cell backgrounds and underlines, drawn under all the glyphs.
     backgrounds: Vec<crate::grid::Quad>,
     glyphs: Vec<crate::grid::Quad>,
@@ -820,12 +863,12 @@ impl GridFrame {
                 continue;
             }
             let width = if cell.is_wide() { 2 } else { 1 };
-            let (fg, mut bg) = colors(&cell.style);
+            let (fg, mut bg) = colors(&cell.style, self.ink);
             if is_selected(col) {
                 bg = SELECTION;
             }
             let (left, right) = (x_at(col).round(), x_at(col + width).round());
-            if bg != rgb(DEFAULT_BG) {
+            if bg != rgb(self.ink.bg) {
                 self.backgrounds
                     .push(Quad::solid([left, top], [right - left, bottom - top], bg));
             }
@@ -872,6 +915,7 @@ fn paint_row(
     (cell_w, cell_h): (f32, f32),
     font_id: &FontId,
     selected: Option<(usize, usize)>,
+    ink: Ink,
 ) {
     let is_selected = |col: usize| selected.is_some_and(|(a, b)| col >= a && col <= b);
     let mut col = 0;
@@ -899,12 +943,12 @@ fn paint_row(
             }
         }
         let width = (col.min(cells.len()) - start) as f32 * cell_w;
-        let (fg, mut bg) = colors(&cell.style);
+        let (fg, mut bg) = colors(&cell.style, ink);
         if sel {
             bg = SELECTION;
         }
         let x = origin.x + start as f32 * cell_w;
-        if bg != rgb(DEFAULT_BG) {
+        if bg != rgb(ink.bg) {
             painter.rect_filled(
                 Rect::from_min_size(Pos2::new(x, origin.y), Vec2::new(width, cell_h)),
                 CornerRadius::ZERO,
@@ -1013,13 +1057,25 @@ mod tests {
             bold: true,
             ..Style::default()
         };
-        assert_eq!(colors(&bold_red).0, rgb(ANSI_16[9]));
+        assert_eq!(colors(&bold_red, Ink::default()).0, rgb(ANSI_16[9]));
 
         let rev = Style {
             reverse: true,
             ..Style::default()
         };
-        assert_eq!(colors(&rev), (rgb(DEFAULT_BG), rgb(DEFAULT_FG)));
+        assert_eq!(
+            colors(&rev, Ink::default()),
+            (rgb(DEFAULT_BG), rgb(DEFAULT_FG))
+        );
+        // Plain text takes the session's colours.
+        let ink = Ink {
+            fg: [0, 0, 0],
+            bg: [255, 255, 255],
+        };
+        assert_eq!(
+            colors(&Style::default(), ink),
+            (rgb([0, 0, 0]), rgb([255, 255, 255]))
+        );
     }
 
     fn select(

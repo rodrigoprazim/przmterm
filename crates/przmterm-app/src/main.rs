@@ -61,7 +61,8 @@ fn main() -> eframe::Result {
             }
             let fonts = fonts::TermFonts::new(&cc.egui_ctx);
             let mut app = PrzmApp::new(fonts);
-            theme::apply(&cc.egui_ctx);
+            theme::apply(&cc.egui_ctx, app.prefs.look);
+            app.look_shown = app.prefs.look;
             app.menu_bar = appmenu::install(&cc.egui_ctx);
             if app.prefs.check_for_updates {
                 app.update = Some(update::Check::start(&cc.egui_ctx));
@@ -161,12 +162,14 @@ fn tab_widget(
     active: bool,
     locked: bool,
     group: Option<egui::Color32>,
+    ink: view::Ink,
 ) -> (egui::Response, bool) {
     let font = egui::TextStyle::Button.resolve(ui.style());
+    // The active tab wears the terminal's colours.
     let text_color = if active {
-        theme::TEXT_STRONG
+        view::rgb(ink.fg)
     } else {
-        theme::TEXT_WEAK
+        theme::p().text_weak
     };
     let galley = ui
         .painter()
@@ -193,9 +196,9 @@ fn tab_widget(
         // The active tab in the terminal's colour, the one under the pointer
         // a shade lighter than the strip: both shaped as a tab.
         if active {
-            painter.rect_filled(rect, top, view::rgb(view::DEFAULT_BG));
+            painter.rect_filled(rect, top, view::rgb(ink.bg));
         } else if hovered {
-            painter.rect_filled(rect, top, theme::TAB_HOVER);
+            painter.rect_filled(rect, top, theme::p().tab_hover);
         }
         // A tab of a group starts with a bar in the group's colour.
         if let Some(color) = group {
@@ -221,10 +224,10 @@ fn tab_widget(
         );
         if active || hovered {
             if close.hovered() {
-                painter.rect_filled(close_rect, 4, theme::PRESSED);
+                painter.rect_filled(close_rect, 4, theme::p().pressed);
             }
-            let mark = if close.hovered() {
-                theme::TEXT_STRONG
+            let mark = if close.hovered() && !active {
+                theme::p().text_strong
             } else {
                 text_color
             };
@@ -673,6 +676,10 @@ struct PrzmApp {
     /// (a check at startup only shows in the status bar).
     update: Option<update::Check>,
     update_window: bool,
+    /// The Appearance window is open.
+    appearance_window: bool,
+    /// The interface look last set, to follow `prefs.look`.
+    look_shown: przmterm_session::preferences::Look,
     /// Questions from scripts, asked one at a time.
     script_prompts: std::collections::VecDeque<ScriptPrompt>,
     /// A backup or export being restored or imported, and the folder name
@@ -804,6 +811,8 @@ impl PrzmApp {
             prefs,
             update: None,
             update_window: false,
+            appearance_window: false,
+            look_shown: przmterm_session::preferences::Look::Dark,
             transfer_dialog: None,
             paste_confirm: None,
             fonts,
@@ -2278,6 +2287,9 @@ impl PrzmApp {
                 self.update = Some(update::Check::start(ctx));
                 self.update_window = true;
             }
+            AppCommand::Appearance => {
+                self.appearance_window = true;
+            }
             AppCommand::Settings => {
                 if let Some(dir) = &self.config_dir {
                     self.editor = Some(Editor::global(dir));
@@ -2309,6 +2321,51 @@ impl PrzmApp {
             AppCommand::Quit => {
                 ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
             }
+        }
+    }
+
+    /// The Appearance window: the interface's look.
+    fn appearance_ui(&mut self, ctx: &egui::Context) {
+        use przmterm_session::preferences::Look;
+        if !self.appearance_window {
+            return;
+        }
+        let mut open = true;
+        let mut look = self.prefs.look;
+        egui::Window::new(crate::theme::window_title(ctx, "Appearance"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .auto_sized()
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.set_max_width(340.0);
+                ui.horizontal(|ui| {
+                    ui.label("Interface");
+                    ui.add_space(8.0);
+                    let labels = Look::ALL.map(Look::label);
+                    let chosen = Look::ALL.iter().position(|l| *l == look);
+                    if let Some(i) = theme::segmented(ui, chosen, &labels) {
+                        look = Look::ALL[i];
+                    }
+                });
+                ui.add_space(6.0);
+                ui.weak(
+                    "System follows the computer's dark or light mode. The terminal's \
+                     background and text colors are in Settings → Terminal (for every \
+                     session) and in Font, Colors and Cursor (for one tab).",
+                );
+            });
+        if look != self.prefs.look {
+            self.prefs.look = look;
+            if let Some(dir) = &self.config_dir
+                && let Err(e) = self.prefs.save(dir)
+            {
+                self.notice = Some(format!("Preferences not saved: {e}"));
+            }
+        }
+        if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.appearance_window = false;
         }
     }
 
@@ -2596,8 +2653,14 @@ impl PrzmApp {
                     .group
                     .and_then(|g| self.groups.iter().find(|x| x.id == g))
                     .map(|g| g.color);
-                let (tab_button, close) =
-                    tab_widget(ui, &title, i == self.active_tab, tab.lock.is_some(), color);
+                let (tab_button, close) = tab_widget(
+                    ui,
+                    &title,
+                    i == self.active_tab,
+                    tab.lock.is_some(),
+                    color,
+                    tab.pane().view.ink(),
+                );
                 let tab_button = tab_button.on_hover_text(hover);
                 if tab_button.clicked() {
                     actions.push(Action::SelectTab(i));
@@ -3166,6 +3229,7 @@ impl PrzmApp {
         self.folder_dialog_ui(ctx, center, escape);
         self.about_ui(ctx);
         self.update_ui(ctx);
+        self.appearance_ui(ctx);
         if let Some(dialog) = &mut self.split_dialog {
             let tabs = &self.tabs;
             dialog
@@ -3342,13 +3406,15 @@ impl PrzmApp {
                     view.cursor_blink,
                     view.cursor_color,
                 );
+                let (mut background, mut foreground) = (view.background, view.foreground);
+                let mut ink = view.ink();
                 let saved_to = tab
                     .pane()
                     .origin
                     .as_ref()
                     .filter(|s| s.path.is_file())
                     .map(|s| s.name.clone());
-                egui::Window::new("Font and cursor")
+                egui::Window::new("Font, colors and cursor")
                     .pivot(egui::Align2::CENTER_CENTER)
                     .default_pos(center)
                     .collapsible(false)
@@ -3370,6 +3436,26 @@ impl PrzmApp {
                                         .suffix(" pt"),
                                 );
                                 size = f32::from(points);
+                                ui.end_row();
+                            });
+                        theme::section_title(ui, "Colors");
+                        egui::Grid::new("font-dialog-colors")
+                            .num_columns(2)
+                            .min_col_width(60.0)
+                            .spacing([12.0, 8.0])
+                            .show(ui, |ui| {
+                                ui.label("Background");
+                                if ui.color_edit_button_srgb(&mut ink.bg).changed() {
+                                    background = Some(ink.bg);
+                                }
+                                ui.end_row();
+                                ui.label("Text");
+                                if ui.color_edit_button_srgb(&mut ink.fg).changed() {
+                                    foreground = Some(ink.fg);
+                                }
+                                ui.end_row();
+                                ui.label("");
+                                editor::color_sample(ui, ink.bg, ink.fg);
                                 ui.end_row();
                             });
                         theme::section_title(ui, "Cursor");
@@ -3450,6 +3536,8 @@ impl PrzmApp {
                         pane.view.cursor = cursor;
                         pane.view.cursor_blink = blink;
                         pane.view.cursor_color = color;
+                        pane.view.background = background;
+                        pane.view.foreground = foreground;
                     }
                 }
                 if save && let Some(session) = tab.pane_mut().origin.as_mut() {
@@ -3460,6 +3548,8 @@ impl PrzmApp {
                         s.terminal.cursor_blink = Some(blink);
                         s.terminal.cursor_color =
                             Some(color.map(przmterm_session::color_text).unwrap_or_default());
+                        s.terminal.background = background.map(przmterm_session::color_text);
+                        s.terminal.foreground = foreground.map(przmterm_session::color_text);
                     });
                     match result {
                         Ok(()) => {
@@ -3468,8 +3558,12 @@ impl PrzmApp {
                             session.cursor = cursor;
                             session.cursor_blink = blink;
                             session.cursor_color = color;
-                            self.notice =
-                                Some(format!("Font and cursor saved for {}.", session.name));
+                            session.background = background;
+                            session.foreground = foreground;
+                            self.notice = Some(format!(
+                                "Font, colors and cursor saved for {}.",
+                                session.name
+                            ));
                             reload = true;
                         }
                         Err(e) => self.notice = Some(format!("Could not save: {e}")),
@@ -3926,7 +4020,7 @@ fn tab_menu(
         },
         Action::SessionOptions(i),
     );
-    item(ui, true, "Font and Cursor…", Action::FontTab(i));
+    item(ui, true, "Font, Colors and Cursor…", Action::FontTab(i));
     ui.separator();
     match tab.pane().script_name() {
         Some(name) => item(
@@ -4318,6 +4412,11 @@ impl eframe::App for PrzmApp {
         // A glyph atlas that filled up last frame starts over.
         grid::atlas().begin_frame();
         let ctx = ui.ctx().clone();
+        if self.prefs.look != self.look_shown {
+            self.look_shown = self.prefs.look;
+            theme::set_look(&ctx, self.look_shown);
+        }
+        theme::sync(&ctx);
         for command in appmenu::take() {
             self.app_command(&ctx, command);
         }
@@ -4581,7 +4680,7 @@ impl eframe::App for PrzmApp {
                         let arrow = if t.sending { "↑" } else { "↓" };
                         ui.label(
                             egui::RichText::new(format!("{arrow} {} {} {amount}", t.label, p.file))
-                                .color(egui::Color32::from_rgb(110, 200, 255)),
+                                .color(theme::p().accent_text),
                         );
                     }
                     if let Some(name) = pane.script_name() {
@@ -4593,8 +4692,7 @@ impl eframe::App for PrzmApp {
                             actions.push(Action::StopScript(self.active_tab));
                         }
                         ui.label(
-                            egui::RichText::new(format!("▶ {name}"))
-                                .color(egui::Color32::from_rgb(110, 200, 255)),
+                            egui::RichText::new(format!("▶ {name}")).color(theme::p().accent_text),
                         );
                     }
                     if pane.view.offer_break
@@ -4614,8 +4712,7 @@ impl eframe::App for PrzmApp {
                         // on hover.
                         ui.add(
                             egui::Label::new(
-                                egui::RichText::new(text)
-                                    .color(egui::Color32::from_rgb(140, 200, 255)),
+                                egui::RichText::new(text).color(theme::p().accent_text),
                             )
                             .truncate(),
                         );
@@ -4807,6 +4904,10 @@ impl eframe::App for PrzmApp {
                                 }
                             }
                             ui.separator();
+                            if ui.button("Appearance…").clicked() {
+                                menu_command = Some(appmenu::AppCommand::Appearance);
+                                ui.close();
+                            }
                             if ui.button("Check for Updates…").clicked() {
                                 menu_command = Some(appmenu::AppCommand::CheckUpdates);
                                 ui.close();

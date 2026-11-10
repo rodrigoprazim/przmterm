@@ -1,8 +1,10 @@
 //! PrzmTerm's look: the colours, sizes and fonts of the interface, in the
-//! spirit of today's dark editors (flat surfaces, thin borders, one blue
-//! accent). The terminal's own colours belong to the sessions.
+//! spirit of today's editors (flat surfaces, thin borders, one blue
+//! accent), dark or light. The terminal's own colours belong to the
+//! sessions.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use eframe::egui::{
     self, Color32, CornerRadius, FontFamily, FontId, IntoAtoms as _, Margin, Shadow, Stroke,
@@ -12,28 +14,106 @@ const fn rgb(r: u8, g: u8, b: u8) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
 
-/// The window's own surfaces: the side panel, the bars.
-pub const CHROME: Color32 = rgb(25, 26, 27);
-/// The tab strip, dialogs and menus.
-pub const RAISED: Color32 = rgb(32, 33, 34);
-/// Text fields and lists inside dialogs.
-pub const SUNKEN: Color32 = rgb(18, 19, 20);
-/// Lines between areas.
-pub const BORDER: Color32 = rgb(43, 44, 45);
-/// Borders of controls (fields, buttons), a little lighter.
-pub const CONTROL_BORDER: Color32 = rgb(58, 59, 61);
-pub const HOVER: Color32 = rgb(45, 46, 48);
-/// A tab under the pointer, a shade above the tab strip.
-pub const TAB_HOVER: Color32 = rgb(39, 40, 42);
-pub const PRESSED: Color32 = rgb(55, 56, 58);
-pub const TEXT: Color32 = rgb(204, 204, 204);
-pub const TEXT_STRONG: Color32 = rgb(240, 240, 240);
-pub const TEXT_WEAK: Color32 = rgb(140, 141, 143);
-/// The accent: focus, selection, links.
-pub const ACCENT: Color32 = rgb(0, 120, 212);
-pub const ACCENT_TEXT: Color32 = rgb(55, 148, 255);
-/// A selected row or item.
-pub const SELECTED: Color32 = rgb(4, 57, 94);
+/// The interface's colours, one set for the dark look and one for the light.
+pub struct Palette {
+    /// The window's own surfaces: the side panel, the bars.
+    pub chrome: Color32,
+    /// The tab strip, dialogs and menus.
+    pub raised: Color32,
+    /// Text fields and lists inside dialogs.
+    pub sunken: Color32,
+    /// Lines between areas.
+    pub border: Color32,
+    /// Borders of controls (fields, buttons), a little stronger.
+    pub control_border: Color32,
+    /// The border of a control under the pointer.
+    pub hover_border: Color32,
+    /// A button's own fill.
+    pub button: Color32,
+    pub hover: Color32,
+    /// A tab under the pointer, a shade off the tab strip.
+    pub tab_hover: Color32,
+    pub pressed: Color32,
+    pub text: Color32,
+    pub text_strong: Color32,
+    pub text_weak: Color32,
+    /// The accent: focus, selection, links.
+    pub accent: Color32,
+    pub accent_text: Color32,
+    /// A selected row or item.
+    pub selected: Color32,
+    /// How dark the shadows under windows and menus are.
+    pub shadow: u8,
+}
+
+pub const DARK: Palette = Palette {
+    chrome: rgb(25, 26, 27),
+    raised: rgb(32, 33, 34),
+    sunken: rgb(18, 19, 20),
+    border: rgb(43, 44, 45),
+    control_border: rgb(58, 59, 61),
+    hover_border: rgb(78, 79, 82),
+    button: rgb(42, 43, 45),
+    hover: rgb(45, 46, 48),
+    tab_hover: rgb(39, 40, 42),
+    pressed: rgb(55, 56, 58),
+    text: rgb(204, 204, 204),
+    text_strong: rgb(240, 240, 240),
+    text_weak: rgb(140, 141, 143),
+    accent: rgb(0, 120, 212),
+    accent_text: rgb(55, 148, 255),
+    selected: rgb(4, 57, 94),
+    shadow: 140,
+};
+
+pub const LIGHT: Palette = Palette {
+    chrome: rgb(243, 243, 243),
+    raised: rgb(250, 250, 250),
+    sunken: rgb(255, 255, 255),
+    border: rgb(225, 225, 225),
+    control_border: rgb(204, 204, 204),
+    hover_border: rgb(165, 165, 165),
+    button: rgb(236, 236, 236),
+    hover: rgb(228, 228, 228),
+    tab_hover: rgb(236, 236, 236),
+    pressed: rgb(214, 214, 214),
+    text: rgb(51, 51, 51),
+    text_strong: rgb(15, 15, 15),
+    text_weak: rgb(112, 112, 112),
+    accent: rgb(0, 120, 212),
+    accent_text: rgb(0, 95, 184),
+    selected: rgb(204, 228, 247),
+    shadow: 45,
+};
+
+/// Whether the light look is the one shown (kept by [`sync`]).
+static LIGHT_SHOWN: AtomicBool = AtomicBool::new(false);
+
+/// The colours of the look shown now.
+pub fn p() -> &'static Palette {
+    if LIGHT_SHOWN.load(Ordering::Relaxed) {
+        &LIGHT
+    } else {
+        &DARK
+    }
+}
+
+/// Notes which look egui shows (it follows the system when asked to);
+/// called every frame before drawing.
+pub fn sync(ctx: &egui::Context) {
+    LIGHT_SHOWN.store(ctx.theme() == egui::Theme::Light, Ordering::Relaxed);
+}
+
+/// Dark, light or as the system is.
+pub fn set_look(ctx: &egui::Context, look: przmterm_session::preferences::Look) {
+    use przmterm_session::preferences::Look;
+    ctx.set_theme(match look {
+        Look::Dark => egui::ThemePreference::Dark,
+        Look::Light => egui::ThemePreference::Light,
+        Look::System => egui::ThemePreference::System,
+    });
+    sync(ctx);
+}
 
 /// The family of the semibold interface font (titles).
 pub fn semibold() -> FontFamily {
@@ -68,7 +148,7 @@ pub fn add_fonts(fonts: &mut egui::FontDefinitions) {
 /// The strip the session tabs sit on: the tabs reach its bottom edge, so
 /// the active one joins the terminal below.
 pub fn tab_strip() -> egui::Frame {
-    egui::Frame::new().fill(RAISED).inner_margin(Margin {
+    egui::Frame::new().fill(p().raised).inner_margin(Margin {
         left: 6,
         right: 6,
         top: 4,
@@ -90,8 +170,8 @@ pub fn combo_width(_ui: &egui::Ui) -> f32 {
 /// not like buttons; call it in the row that holds the combo box.
 pub fn sunken_combos(ui: &mut egui::Ui) {
     let w = &mut ui.visuals_mut().widgets;
-    w.inactive.weak_bg_fill = SUNKEN;
-    w.open.weak_bg_fill = SUNKEN;
+    w.inactive.weak_bg_fill = p().sunken;
+    w.open.weak_bg_fill = p().sunken;
 }
 
 /// The button of a window's main action (Save, OK…), in the accent.
@@ -99,7 +179,7 @@ pub fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     ui.scope(|ui| {
         let w = &mut ui.visuals_mut().widgets;
         for (state, fill) in [
-            (&mut w.inactive, ACCENT),
+            (&mut w.inactive, p().accent),
             (&mut w.hovered, rgb(26, 137, 224)),
             (&mut w.active, rgb(0, 100, 180)),
         ] {
@@ -122,7 +202,7 @@ pub fn segmented(ui: &mut egui::Ui, selected: Option<usize>, options: &[&str]) -
         .iter()
         .map(|text| {
             ui.painter()
-                .layout_no_wrap(text.to_string(), font.clone(), TEXT)
+                .layout_no_wrap(text.to_string(), font.clone(), Color32::PLACEHOLDER)
         })
         .collect();
     let widths: Vec<f32> = galleys.iter().map(|g| g.size().x + 2.0 * pad).collect();
@@ -132,7 +212,7 @@ pub fn segmented(ui: &mut egui::Ui, selected: Option<usize>, options: &[&str]) -
     );
     let mut clicked = None;
     let painter = ui.painter().clone();
-    painter.rect_filled(rect, 4, SUNKEN);
+    painter.rect_filled(rect, 4, p().sunken);
     let mut x = rect.left();
     for (i, (galley, w)) in galleys.into_iter().zip(&widths).enumerate() {
         let cell = egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(*w, height));
@@ -141,14 +221,16 @@ pub fn segmented(ui: &mut egui::Ui, selected: Option<usize>, options: &[&str]) -
             .on_hover_cursor(egui::CursorIcon::PointingHand);
         let chosen = selected == Some(i);
         if chosen {
-            painter.rect_filled(cell.shrink(2.0), 3, ACCENT);
+            painter.rect_filled(cell.shrink(2.0), 3, p().accent);
         } else if response.hovered() {
-            painter.rect_filled(cell.shrink(2.0), 3, HOVER);
+            painter.rect_filled(cell.shrink(2.0), 3, p().hover);
         }
-        let color = if chosen || response.hovered() {
+        let color = if chosen {
             Color32::WHITE
+        } else if response.hovered() {
+            p().text_strong
         } else {
-            TEXT
+            p().text
         };
         painter.galley(cell.center() - galley.size() / 2.0, galley, color);
         if response.clicked() {
@@ -159,7 +241,7 @@ pub fn segmented(ui: &mut egui::Ui, selected: Option<usize>, options: &[&str]) -
     painter.rect_stroke(
         rect,
         4,
-        Stroke::new(1.0, CONTROL_BORDER),
+        Stroke::new(1.0, p().control_border),
         egui::StrokeKind::Inside,
     );
     clicked
@@ -178,7 +260,7 @@ pub fn section_header(ui: &mut egui::Ui, title: &str, after: impl FnOnce(&mut eg
         ui.label(
             egui::RichText::new(title)
                 .font(FontId::new(14.5, semibold()))
-                .color(TEXT_STRONG),
+                .color(p().text_strong),
         );
         after(ui);
     });
@@ -188,7 +270,7 @@ pub fn section_header(ui: &mut egui::Ui, title: &str, after: impl FnOnce(&mut eg
     ui.painter().hline(
         rect.left()..=rect.right(),
         rect.top() + 1.0,
-        Stroke::new(1.0, BORDER),
+        Stroke::new(1.0, p().border),
     );
     ui.add_space(8.0);
 }
@@ -231,7 +313,7 @@ pub fn checkbox(
         |painter, rect, on, hovered| {
             let square = egui::Rect::from_center_size(rect.center(), egui::vec2(15.0, 15.0));
             if on {
-                painter.rect_filled(square, 3, ACCENT);
+                painter.rect_filled(square, 3, p().accent);
                 painter.add(egui::Shape::line(
                     vec![
                         square.lerp_inside(egui::vec2(0.22, 0.52)),
@@ -241,8 +323,12 @@ pub fn checkbox(
                     Stroke::new(1.8, Color32::WHITE),
                 ));
             } else {
-                painter.rect_filled(square, 3, SUNKEN);
-                let border = if hovered { TEXT_WEAK } else { CONTROL_BORDER };
+                painter.rect_filled(square, 3, p().sunken);
+                let border = if hovered {
+                    p().text_weak
+                } else {
+                    p().control_border
+                };
                 painter.rect_stroke(
                     square,
                     3,
@@ -270,11 +356,15 @@ pub fn radio(ui: &mut egui::Ui, chosen: bool, text: impl Into<egui::WidgetText>)
         |painter, rect, on, hovered| {
             let c = rect.center();
             if on {
-                painter.circle_filled(c, 7.5, ACCENT);
+                painter.circle_filled(c, 7.5, p().accent);
                 painter.circle_filled(c, 3.0, Color32::WHITE);
             } else {
-                painter.circle_filled(c, 7.5, SUNKEN);
-                let border = if hovered { TEXT_WEAK } else { CONTROL_BORDER };
+                painter.circle_filled(c, 7.5, p().sunken);
+                let border = if hovered {
+                    p().text_weak
+                } else {
+                    p().control_border
+                };
                 painter.circle_stroke(c, 7.0, Stroke::new(1.0, border));
             }
         },
@@ -308,9 +398,9 @@ fn mark_and_text(
         );
         paint(ui.painter(), mark_rect, on, response.hovered());
         let color = if response.hovered() {
-            TEXT_STRONG
+            p().text_strong
         } else {
-            TEXT
+            p().text
         };
         ui.painter().galley(
             egui::pos2(
@@ -324,10 +414,16 @@ fn mark_and_text(
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// Sets the interface's colours, sizes and spacing.
-pub fn apply(ctx: &egui::Context) {
-    ctx.set_theme(egui::ThemePreference::Dark);
-    ctx.style_mut_of(egui::Theme::Dark, |style| {
+/// Sets the interface's colours, sizes and spacing, for both looks, and
+/// shows `look`.
+pub fn apply(ctx: &egui::Context, look: przmterm_session::preferences::Look) {
+    ctx.style_mut_of(egui::Theme::Dark, |style| style_with(style, &DARK, true));
+    ctx.style_mut_of(egui::Theme::Light, |style| style_with(style, &LIGHT, false));
+    set_look(ctx, look);
+}
+
+fn style_with(style: &mut egui::Style, pal: &Palette, dark: bool) {
+    {
         use egui::TextStyle;
         style.text_styles = [
             (TextStyle::Small, FontId::proportional(11.0)),
@@ -356,69 +452,69 @@ pub fn apply(ctx: &egui::Context) {
         spacing.icon_width_inner = 8.0;
 
         let v = &mut style.visuals;
-        v.dark_mode = true;
+        v.dark_mode = dark;
         v.override_text_color = None;
-        v.panel_fill = CHROME;
-        v.window_fill = RAISED;
-        v.window_stroke = Stroke::new(1.0, CONTROL_BORDER);
+        v.panel_fill = pal.chrome;
+        v.window_fill = pal.raised;
+        v.window_stroke = Stroke::new(1.0, pal.control_border);
         v.window_corner_radius = CornerRadius::same(8);
         v.window_shadow = Shadow {
             offset: [0, 8],
             blur: 28,
             spread: 0,
-            color: Color32::from_black_alpha(140),
+            color: Color32::from_black_alpha(pal.shadow),
         };
         v.popup_shadow = Shadow {
             offset: [0, 4],
             blur: 14,
             spread: 0,
-            color: Color32::from_black_alpha(120),
+            color: Color32::from_black_alpha(pal.shadow.saturating_sub(20)),
         };
         v.menu_corner_radius = CornerRadius::same(6);
-        v.extreme_bg_color = SUNKEN;
-        v.text_edit_bg_color = Some(SUNKEN);
-        v.faint_bg_color = RAISED;
-        v.code_bg_color = SUNKEN;
-        v.hyperlink_color = ACCENT_TEXT;
-        v.selection.bg_fill = SELECTED;
-        v.selection.stroke = Stroke::new(1.0, ACCENT_TEXT);
+        v.extreme_bg_color = pal.sunken;
+        v.text_edit_bg_color = Some(pal.sunken);
+        v.faint_bg_color = pal.raised;
+        v.code_bg_color = pal.sunken;
+        v.hyperlink_color = pal.accent_text;
+        v.selection.bg_fill = pal.selected;
+        v.selection.stroke = Stroke::new(1.0, pal.accent_text);
         v.striped = false;
         v.indent_has_left_vline = false;
         v.collapsing_header_frame = false;
 
         let radius = CornerRadius::same(4);
         let w = &mut v.widgets;
-        w.noninteractive.bg_fill = CHROME;
-        w.noninteractive.weak_bg_fill = CHROME;
-        w.noninteractive.bg_stroke = Stroke::new(1.0, BORDER);
-        w.noninteractive.fg_stroke = Stroke::new(1.0, TEXT);
+        w.noninteractive.bg_fill = pal.chrome;
+        w.noninteractive.weak_bg_fill = pal.chrome;
+        w.noninteractive.bg_stroke = Stroke::new(1.0, pal.border);
+        w.noninteractive.fg_stroke = Stroke::new(1.0, pal.text);
         w.noninteractive.corner_radius = radius;
 
-        w.inactive.bg_fill = SUNKEN;
-        w.inactive.weak_bg_fill = rgb(42, 43, 45);
-        w.inactive.bg_stroke = Stroke::new(1.0, CONTROL_BORDER);
-        w.inactive.fg_stroke = Stroke::new(1.0, TEXT);
+        w.inactive.bg_fill = pal.sunken;
+        w.inactive.weak_bg_fill = pal.button;
+        w.inactive.bg_stroke = Stroke::new(1.0, pal.control_border);
+        w.inactive.fg_stroke = Stroke::new(1.0, pal.text);
         w.inactive.corner_radius = radius;
         w.inactive.expansion = 0.0;
 
-        w.hovered.bg_fill = HOVER;
-        w.hovered.weak_bg_fill = HOVER;
-        w.hovered.bg_stroke = Stroke::new(1.0, rgb(78, 79, 82));
-        w.hovered.fg_stroke = Stroke::new(1.5, TEXT_STRONG);
+        w.hovered.bg_fill = pal.hover;
+        w.hovered.weak_bg_fill = pal.hover;
+        w.hovered.bg_stroke = Stroke::new(1.0, pal.hover_border);
+        w.hovered.fg_stroke = Stroke::new(1.5, pal.text_strong);
         w.hovered.corner_radius = radius;
         w.hovered.expansion = 0.0;
 
-        w.active.bg_fill = PRESSED;
-        w.active.weak_bg_fill = PRESSED;
-        w.active.bg_stroke = Stroke::new(1.0, ACCENT);
-        w.active.fg_stroke = Stroke::new(1.5, TEXT_STRONG);
+        w.active.bg_fill = pal.pressed;
+        w.active.weak_bg_fill = pal.pressed;
+        w.active.bg_stroke = Stroke::new(1.0, pal.accent);
+        w.active.fg_stroke = Stroke::new(1.5, pal.text_strong);
         w.active.corner_radius = radius;
         w.active.expansion = 0.0;
 
-        w.open.bg_fill = HOVER;
-        w.open.weak_bg_fill = HOVER;
-        w.open.bg_stroke = Stroke::new(1.0, CONTROL_BORDER);
-        w.open.fg_stroke = Stroke::new(1.0, TEXT_STRONG);
+        w.open.bg_fill = pal.hover;
+        w.open.weak_bg_fill = pal.hover;
+        w.open.bg_stroke = Stroke::new(1.0, pal.control_border);
+        w.open.fg_stroke = Stroke::new(1.0, pal.text_strong);
         w.open.corner_radius = radius;
-    });
+    }
 }

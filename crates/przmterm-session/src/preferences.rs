@@ -15,12 +15,38 @@ pub const PREFERENCES_FILE: &str = "preferences.toml";
 pub struct Preferences {
     /// Look for a newer release on GitHub when the app starts.
     pub check_for_updates: bool,
+    /// The interface's look (not the terminal's colours, which are the
+    /// sessions').
+    pub look: Look,
+}
+
+/// Dark, light, or as the system is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Look {
+    #[default]
+    Dark,
+    Light,
+    System,
+}
+
+impl Look {
+    pub const ALL: [Look; 3] = [Look::Dark, Look::Light, Look::System];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Look::Dark => "Dark",
+            Look::Light => "Light",
+            Look::System => "System",
+        }
+    }
 }
 
 impl Default for Preferences {
     fn default() -> Self {
         Self {
             check_for_updates: true,
+            look: Look::Dark,
         }
     }
 }
@@ -56,7 +82,13 @@ mod tests {
         assert!(Preferences::load(tmp.path()).check_for_updates);
         let off = Preferences {
             check_for_updates: false,
+            look: Look::Light,
         };
+        assert_eq!(
+            Preferences::load(tmp.path()).look,
+            Look::Dark,
+            "dark when nothing is chosen"
+        );
         off.save(tmp.path()).unwrap();
         assert_eq!(Preferences::load(tmp.path()), off);
         fs::write(tmp.path().join(PREFERENCES_FILE), "nonsense = [").unwrap();

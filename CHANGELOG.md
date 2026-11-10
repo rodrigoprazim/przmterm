@@ -25,6 +25,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
   blinking a check box. Window titles sit in the middle of their bar.
   The cursor rows have no "Default" or reset buttons, and Log to file is
   just yes/no; the log's file name field is as wide as the folder row.
+- The button bar's groups are a drop-down list with **⋯** beside it to
+  rename, add or delete them, so many groups no longer fill the bar.
 - Menus (right-click and drop-down) have their entries closer together and
   are wider, so longer entries fit on one line.
 - *Split Right* and *Split Down* are icons at the top right, with **⋯** for
@@ -32,6 +34,12 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Added
 
+- *Appearance…* (**+** menu, and the PrzmTerm menu on macOS): the interface
+  in dark or light, or following the system's mode.
+- The terminal's background and text colours can be chosen: in the
+  settings (*Terminal* › *Colors*, for every session, a folder or one
+  session, with a sample) and per tab in *Font, Colors and Cursor…*. The
+  active tab wears the terminal's colours.
 - Changing the global settings can now apply the new values to *all*
   sessions, including those with their own value: their own values for the
   changed fields are removed (the address is never touched). The other

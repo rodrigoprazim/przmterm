@@ -116,7 +116,18 @@ pub struct TerminalSettings {
     /// Cursor colour as `#rrggbb`; `""` is the default one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor_color: Option<String>,
+    /// The terminal's background as `#rrggbb`; `""` is the default one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    /// The colour of plain text as `#rrggbb`; `""` is the default one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub foreground: Option<String>,
 }
+
+/// The terminal's background when none is chosen.
+pub const DEFAULT_BACKGROUND: [u8; 3] = [24, 26, 31];
+/// The colour of plain text when none is chosen.
+pub const DEFAULT_FOREGROUND: [u8; 3] = [216, 222, 233];
 
 /// `#rrggbb` (or `rrggbb`) as red, green and blue.
 pub fn parse_color(text: &str) -> Option<[u8; 3]> {
@@ -323,7 +334,7 @@ pub struct SessionSettings {
 }
 
 /// Keys of the individual settings, used to compare and copy them.
-pub const FIELDS: [&str; 38] = [
+pub const FIELDS: [&str; 40] = [
     "protocol",
     "host",
     "port",
@@ -357,6 +368,8 @@ pub const FIELDS: [&str; 38] = [
     "terminal.cursor",
     "terminal.cursor_blink",
     "terminal.cursor_color",
+    "terminal.background",
+    "terminal.foreground",
     "log.enabled",
     "log.path",
     "log.dir",
@@ -403,6 +416,8 @@ impl SessionSettings {
             "terminal.cursor_color" => {
                 self.terminal.cursor_color = from.terminal.cursor_color.clone();
             }
+            "terminal.background" => self.terminal.background = from.terminal.background.clone(),
+            "terminal.foreground" => self.terminal.foreground = from.terminal.foreground.clone(),
             "log.enabled" => self.log.enabled = from.log.enabled,
             "log.path" => self.log.path = from.log.path.clone(),
             "log.dir" => self.log.dir = from.log.dir.clone(),
@@ -467,6 +482,8 @@ impl SessionSettings {
             "terminal.cursor" => self.terminal.cursor.map(|c| c.name().to_string()),
             "terminal.cursor_blink" => self.terminal.cursor_blink.map(yes_no),
             "terminal.cursor_color" => self.terminal.cursor_color.clone(),
+            "terminal.background" => self.terminal.background.clone(),
+            "terminal.foreground" => self.terminal.foreground.clone(),
             "log.enabled" => self.log.enabled.map(yes_no),
             "log.path" => self.log.path.clone(),
             "log.dir" => self.log.dir.clone(),
@@ -546,6 +563,8 @@ impl SessionSettings {
                 cursor: pick(&self.terminal.cursor, &over.terminal.cursor),
                 cursor_blink: pick(&self.terminal.cursor_blink, &over.terminal.cursor_blink),
                 cursor_color: pick(&self.terminal.cursor_color, &over.terminal.cursor_color),
+                background: pick(&self.terminal.background, &over.terminal.background),
+                foreground: pick(&self.terminal.foreground, &over.terminal.foreground),
             },
             log: LogSettings {
                 enabled: pick(&self.log.enabled, &over.log.enabled),
@@ -577,6 +596,8 @@ impl SessionSettings {
             "terminal.font_size" => s.terminal.font_size = Some(DEFAULT_FONT_SIZE),
             "terminal.cursor" => s.terminal.cursor = Some(CursorShape::Block),
             "terminal.cursor_blink" => s.terminal.cursor_blink = Some(false),
+            "terminal.background" => s.terminal.background = Some(color_text(DEFAULT_BACKGROUND)),
+            "terminal.foreground" => s.terminal.foreground = Some(color_text(DEFAULT_FOREGROUND)),
             "log.enabled" => s.log.enabled = Some(false),
             "debug" => s.debug = Some(false),
             "keepalive" => s.keepalive = Some(DEFAULT_KEEPALIVE),
@@ -657,6 +678,10 @@ pub struct Session {
     pub cursor_blink: bool,
     /// `None`: the default colour.
     pub cursor_color: Option<[u8; 3]>,
+    /// The terminal's background; `None`: the default one.
+    pub background: Option<[u8; 3]>,
+    /// The colour of plain text; `None`: the default one.
+    pub foreground: Option<[u8; 3]>,
     pub log_enabled: bool,
     pub log_path: Option<String>,
     /// Folder for relative log file names, with `~` expanded.
@@ -788,6 +813,16 @@ impl Session {
             cursor_color: settings
                 .terminal
                 .cursor_color
+                .as_deref()
+                .and_then(parse_color),
+            background: settings
+                .terminal
+                .background
+                .as_deref()
+                .and_then(parse_color),
+            foreground: settings
+                .terminal
+                .foreground
                 .as_deref()
                 .and_then(parse_color),
             log_enabled: settings.log.enabled.unwrap_or(false),
@@ -1928,6 +1963,32 @@ mod tests {
         );
         assert_eq!(target("b"), "ops@b:9");
         assert_eq!(target("c"), "ops@c:2222");
+    }
+
+    #[test]
+    fn terminal_colors_come_from_defaults_folders_and_sessions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write(dir, "defaults.toml", "[terminal]\nbackground = '#ffffff'");
+        write(dir, "sessions/a.toml", "host = 'a'");
+        write(
+            dir,
+            "sessions/b.toml",
+            "host = 'b'\n[terminal]\nbackground = '#000000'\nforeground = '#00ff00'",
+        );
+        let tree = SessionTree::load(dir);
+        let find = |n: &str| {
+            tree.root
+                .all_sessions()
+                .into_iter()
+                .find(|s| s.name == n)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(find("a").background, Some([255, 255, 255]));
+        assert_eq!(find("a").foreground, None);
+        assert_eq!(find("b").background, Some([0, 0, 0]));
+        assert_eq!(find("b").foreground, Some([0, 255, 0]));
     }
 
     #[test]
