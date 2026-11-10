@@ -27,11 +27,9 @@ PrzmTerm, delete what you installed, and the settings folder if you no
 longer want your sessions (see [Sessions](#sessions)).
 
 - **Windows:** unpack the `.zip` and run `przmterm.exe` (the desktop app)
-  or `przm.exe` (the command line). The executables are signed through the
-  [SignPath Foundation](https://signpath.org) (see
-  [Code signing policy](#code-signing-policy)). A release made before the
-  signing was set up shows *Windows protected your PC*: choose *More info ›
-  Run anyway*.
+  or `przm.exe` (the command line). The executables are not signed yet (see
+  [Code signing policy](#code-signing-policy)), so the first time Windows
+  shows *Windows protected your PC*: choose *More info › Run anyway*.
 - **macOS:** open the `.dmg` and drag PrzmTerm to Applications. The app is
   universal (Apple Silicon and Intel) but not notarised, which needs a paid
   Apple account, so the first time macOS refuses to open it: go to
@@ -617,11 +615,13 @@ A sample tree is in [examples/config](examples/config). Try it with
 
 ## Code signing policy
 
-Windows releases are signed with free code signing provided by
-[SignPath.io](https://about.signpath.io), certificate by
-[SignPath Foundation](https://signpath.org). They are built from this
-repository's source by the [release workflow](.github/workflows/release.yml)
-on GitHub Actions, and each signing is approved by hand.
+Releases are built from this repository's source by the
+[release workflow](.github/workflows/release.yml) on GitHub Actions. Their
+checksums are signed with the release key (see [Install](#install)). Windows
+executables are not signed yet: the free code signing of the
+[SignPath Foundation](https://signpath.org) is for projects with a wider
+following, and PrzmTerm will apply again once it has one. The workflow is
+ready to sign through SignPath, each signing approved by hand.
 
 | Role | Who |
 | --- | --- |

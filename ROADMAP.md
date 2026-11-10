@@ -189,12 +189,14 @@ and, when a device is at hand, a serial console (Xmodem or Ymodem).
 
 ## 1.0.0 — Stable
 
-- SignPath Foundation approval for the Windows signing (applied for on
-  2026-11-08)
+- Windows signing: the SignPath Foundation turned the first application
+  down (2026-11-09) for lack of public adoption; apply again once the
+  project has a following. Not required for 1.0: until then the executables
+  are unsigned and the README explains SmartScreen
 - Release candidates `1.0.0-rc.N`
 - Configuration format declared stable (compatibility promise for 1.x)
-- Signed binaries: Windows through the SignPath Foundation, macOS
-  (universal) ad-hoc signed, checksums signed with GPG
+- Signed releases: checksums signed with GPG, macOS (universal) ad-hoc
+  signed; Windows signed when SignPath (or another free route) is in place
 - User guide and scripting reference
 
 **Gate:** the maintainer's own automation scripts in daily use and no open

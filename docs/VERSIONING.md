@@ -44,7 +44,7 @@ when its secret is set, so a release still builds without them:
 
 | What | How | Secrets and variables (repository settings) |
 | --- | --- | --- |
-| Windows `.exe` | Authenticode through the [SignPath Foundation](https://signpath.org) (free for open source); the job waits until the request is approved on SignPath | secret `SIGNPATH_API_TOKEN`; variable `SIGNPATH_ORGANIZATION_ID`; optional `SIGNPATH_PROJECT_SLUG` (default `przmterm`) and `SIGNPATH_POLICY_SLUG` (default `release-signing`) |
+| Windows `.exe` | Authenticode through the [SignPath Foundation](https://signpath.org) (free for open source; not approved yet, so releases are unsigned); the job waits until the request is approved on SignPath | secret `SIGNPATH_API_TOKEN`; variable `SIGNPATH_ORGANIZATION_ID`; optional `SIGNPATH_PROJECT_SLUG` (default `przmterm`) and `SIGNPATH_POLICY_SLUG` (default `release-signing`) |
 | macOS app | `PrzmTerm.app` on a disk image, made by `scripts/macos-app.sh`, with an ad-hoc signature (`codesign -s -`); not notarised, which needs a paid Apple Developer account | none |
 | `SHA256SUMS.txt` | detached GPG signature `SHA256SUMS.txt.asc`, covering every archive | secrets `RELEASE_GPG_KEY` (armoured private key) and `RELEASE_GPG_PASSPHRASE` |
 
