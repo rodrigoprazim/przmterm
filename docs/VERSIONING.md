@@ -47,6 +47,20 @@ Every user-visible change adds a line under `## [Unreleased]` in
    Versions before 1.0.0 and release candidates are marked as pre-releases.
 5. Bump `main` to the next `-dev` version: `scripts/release.sh --next 0.(Y+1).0`.
 
+## Updates in the app
+
+*Check for Updates…* lists the GitHub releases and shows the newest one's
+notes (the release body, taken from CHANGELOG.md). *Install and Restart*
+downloads `SHA256SUMS.txt` and `SHA256SUMS.txt.asc`, checks the signature
+with the release key built into the app (`docs/release-key.asc`), then
+downloads the file for the system (`-macos-universal.dmg`,
+`-windows-x86_64.zip`, `-linux-x86_64.tar.gz`) and compares its checksum.
+Only then is it installed. So releases must keep these asset names and be
+signed: an unsigned release can be downloaded by hand but not installed
+from the app. Only binaries built by the release workflow (which sets
+`PRZMTERM_RELEASE_BUILD`) replace themselves; copies built with
+`cargo build` only download.
+
 ## Signing
 
 The release workflow signs what it can with free services, each step only

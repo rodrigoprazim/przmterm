@@ -12,6 +12,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Marks the binaries as a release: only these update themselves in place
+  # (crates/przmterm-app/src/update.rs).
+  PRZMTERM_RELEASE_BUILD: "1"
 
 jobs:
   verify:

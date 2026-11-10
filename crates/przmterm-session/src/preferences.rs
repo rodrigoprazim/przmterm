@@ -18,6 +18,9 @@ pub struct Preferences {
     /// The interface's look (not the terminal's colours, which are the
     /// sessions').
     pub look: Look,
+    /// A release the user chose to skip: not announced at startup.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped_version: Option<String>,
 }
 
 /// Dark, light, or as the system is.
@@ -47,6 +50,7 @@ impl Default for Preferences {
         Self {
             check_for_updates: true,
             look: Look::Dark,
+            skipped_version: None,
         }
     }
 }
@@ -83,6 +87,7 @@ mod tests {
         let off = Preferences {
             check_for_updates: false,
             look: Look::Light,
+            skipped_version: Some("1.0.0-rc.2".into()),
         };
         assert_eq!(
             Preferences::load(tmp.path()).look,

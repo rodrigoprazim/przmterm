@@ -401,12 +401,14 @@ The app's own settings, not those of sessions.
 ```toml
 check_for_updates = true
 look = "dark"
+skipped_version = "1.0.0-rc.2"
 ```
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `check_for_updates` | `true` or `false` | `true` | Look for a newer release on GitHub when PrzmTerm starts. |
 | `look` | `"dark"`, `"light"` or `"system"` | `"dark"` | The interface's look (*Appearance…*). `system` follows the computer's mode. |
+| `skipped_version` | text | none | A release chosen with *Skip This Version*: PrzmTerm does not announce it when it starts. *Check for Updates…* still shows it. |
 
 A broken file is read as the defaults: preferences never stop PrzmTerm from
 starting.

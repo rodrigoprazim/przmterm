@@ -9,6 +9,8 @@
 
 fn main() {
     println!("cargo:rerun-if-changed=../../assets/icon.ico");
+    // Release builds update themselves (src/update.rs).
+    println!("cargo:rerun-if-env-changed=PRZMTERM_RELEASE_BUILD");
     match std::env::var("CARGO_CFG_TARGET_OS").as_deref() {
         Ok("macos") => return embed_info_plist(),
         Ok("windows") => {}
