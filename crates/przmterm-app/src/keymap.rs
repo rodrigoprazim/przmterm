@@ -156,6 +156,7 @@ pub fn defaults() -> Keymap {
                 })
             })
             .collect(),
+        ..Keymap::default()
     }
 }
 
@@ -275,7 +276,18 @@ pub struct Shortcuts {
 impl Shortcuts {
     pub fn load(config_dir: Option<&Path>) -> Shortcuts {
         let (keymap, mut errors) = match config_dir.map(read_keymap) {
-            Some(Ok(Some(k))) => (k, Vec::new()),
+            Some(Ok(Some(k))) => {
+                let notes = (!k.unknown.is_empty())
+                    .then(|| {
+                        format!(
+                            "keymap.toml: unknown setting(s) ignored: {}",
+                            k.unknown.join(", ")
+                        )
+                    })
+                    .into_iter()
+                    .collect();
+                (k, notes)
+            }
             Some(Err(e)) => (defaults(), vec![e]),
             _ => (defaults(), Vec::new()),
         };
@@ -378,12 +390,55 @@ struct Edit {
     error: Option<String>,
 }
 
+/// Shift, Control, Alt and Command (or Windows) keys themselves.
+fn is_modifier(key: Key) -> bool {
+    matches!(
+        key,
+        Key::ShiftLeft
+            | Key::ShiftRight
+            | Key::ControlLeft
+            | Key::ControlRight
+            | Key::AltLeft
+            | Key::AltRight
+            | Key::SuperLeft
+            | Key::SuperRight
+    )
+}
+
+/// The modifiers held, as a shortcut shows them, while recording.
+fn held_label(mods: Modifiers) -> String {
+    if cfg!(target_os = "macos") {
+        [
+            (mods.ctrl, "⌃"),
+            (mods.alt, "⌥"),
+            (mods.shift, "⇧"),
+            (mods.mac_cmd, "⌘"),
+        ]
+        .iter()
+        .filter(|(on, _)| *on)
+        .map(|(_, s)| *s)
+        .collect()
+    } else {
+        [
+            (mods.ctrl, "Ctrl+"),
+            (mods.alt, "Alt+"),
+            (mods.shift, "Shift+"),
+        ]
+        .iter()
+        .filter(|(on, _)| *on)
+        .map(|(_, s)| *s)
+        .collect()
+    }
+}
+
 /// The "Keyboard shortcuts" window.
 pub struct KeymapEditor {
     rows: Vec<(Keys, Binding)>,
     edit: Option<Edit>,
     changed: bool,
     error: Option<String>,
+    /// The Vault menu asked for the vault to be unlocked.
+    pub unlock_request: bool,
 }
 
 pub enum KeymapResult {
@@ -399,6 +454,7 @@ impl KeymapEditor {
             edit: None,
             changed: false,
             error: (!shortcuts.errors.is_empty()).then(|| shortcuts.errors.join("\n")),
+            unlock_request: false,
         }
     }
 
@@ -417,6 +473,7 @@ impl KeymapEditor {
         ctx: &egui::Context,
         config_dir: &Path,
         buttons: &[String],
+        vault: Option<&[String]>,
     ) -> KeymapResult {
         let mut open = true;
         let mut close = false;
@@ -551,7 +608,7 @@ impl KeymapEditor {
                 });
                 ui.weak("Copy and paste (⌘C/⌘V, Ctrl+Shift+C/V) cannot be changed.");
             });
-        self.edit_dialog(ctx, config_dir, buttons);
+        self.edit_dialog(ctx, config_dir, buttons, vault);
         if self.changed {
             self.changed = false;
             let defaults = compile(&defaults()).0;
@@ -577,6 +634,7 @@ impl KeymapEditor {
                                 ..b.clone()
                             })
                             .collect(),
+                        ..Keymap::default()
                     },
                 )
             };
@@ -589,13 +647,22 @@ impl KeymapEditor {
         }
     }
 
-    fn edit_dialog(&mut self, ctx: &egui::Context, config_dir: &Path, buttons: &[String]) {
+    fn edit_dialog(
+        &mut self,
+        ctx: &egui::Context,
+        config_dir: &Path,
+        buttons: &[String],
+        vault: Option<&[String]>,
+    ) {
+        let unlock_request = &mut self.unlock_request;
         let Some(edit) = &mut self.edit else { return };
-        // Recording: the next key pressed with its modifiers.
+        // Recording: the next key pressed with its modifiers. The modifiers
+        // arrive as keys of their own first: they are held, not recorded.
         if edit.recording {
             let pressed = ctx.input_mut(|i| {
                 let found = i.events.iter().position(|e| {
-                    matches!(e, egui::Event::Key { pressed: true, key, .. } if *key != Key::Escape)
+                    matches!(e, egui::Event::Key { pressed: true, key, .. }
+                        if *key != Key::Escape && !is_modifier(*key))
                 });
                 let n = found?;
                 let egui::Event::Key { key, modifiers, .. } = i.events.remove(n) else {
@@ -623,6 +690,7 @@ impl KeymapEditor {
         }
         let escape = !edit.recording && ctx.input(|i| i.key_pressed(Key::Escape));
         let mut done = None;
+        let held = ctx.input(|i| i.modifiers);
         egui::Window::new(if edit.index.is_some() {
             "Change shortcut"
         } else {
@@ -633,24 +701,48 @@ impl KeymapEditor {
         .collapsible(false)
         .resizable(false)
         .show(ctx, |ui| {
+            // One width for the window; every field reaches its right edge.
+            const WIDTH: f32 = 470.0;
+            const LABEL: f32 = 56.0;
+            const GAP: f32 = 12.0;
+            let field = WIDTH - LABEL - GAP;
+            ui.set_width(WIDTH);
+            let row_h = ui.spacing().interact_size.y;
             egui::Grid::new("keymap-edit")
                 .num_columns(2)
-                .spacing([12.0, 8.0])
+                .min_col_width(LABEL)
+                .spacing([GAP, 10.0])
                 .show(ui, |ui| {
                     ui.label("Keys");
-                    ui.horizontal(|ui| {
-                        let text = if edit.recording {
-                            egui::RichText::new("Press the keys…").italics()
-                        } else {
-                            egui::RichText::new(edit.keys.map_or("none".to_string(), |k| k.label()))
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(field, row_h),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.set_min_width(field);
+                            let text = if edit.recording {
+                                egui::RichText::new(format!("{}…", held_label(held)))
+                                    .monospace()
+                                    .italics()
+                            } else {
+                                egui::RichText::new(
+                                    edit.keys.map_or("none".to_string(), |k| k.label()),
+                                )
                                 .monospace()
                                 .strong()
-                        };
-                        ui.label(text);
-                        if !edit.recording && ui.button("Record").clicked() {
-                            edit.recording = true;
-                        }
-                    });
+                            };
+                            ui.label(text);
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if edit.recording {
+                                        ui.weak("Press the keys, Esc to stop");
+                                    } else if ui.button("Record").clicked() {
+                                        edit.recording = true;
+                                    }
+                                },
+                            );
+                        },
+                    );
                     ui.end_row();
                     if let Some(w) = edit.keys.and_then(|k| k.warning()) {
                         ui.label("");
@@ -658,21 +750,26 @@ impl KeymapEditor {
                         ui.end_row();
                     }
                     ui.label("Does");
-                    ui.horizontal(|ui| {
-                        ui.selectable_value(&mut edit.kind, Kind::Send, "Send text");
-                        ui.selectable_value(&mut edit.kind, Kind::Command, "App command");
-                        ui.selectable_value(&mut edit.kind, Kind::Script, "Run script");
-                        ui.selectable_value(&mut edit.kind, Kind::Button, "Press button");
-                    });
+                    let kinds = [Kind::Send, Kind::Command, Kind::Script, Kind::Button];
+                    let chosen = kinds.iter().position(|k| *k == edit.kind);
+                    if let Some(i) = crate::theme::segmented(
+                        ui,
+                        chosen,
+                        &["Send text", "App command", "Run script", "Press button"],
+                    ) {
+                        edit.kind = kinds[i];
+                    }
                     ui.end_row();
                     ui.label("");
                     match edit.kind {
                         Kind::Command => {
                             let label = command(edit.command).map_or("", |c| c.label);
+                            crate::theme::sunken_combos(ui);
                             egui::ComboBox::from_id_salt("keymap-command")
-                                .width(280.0)
+                                .width(field)
                                 .selected_text(label)
                                 .show_ui(ui, |ui| {
+                                    crate::theme::menu(ui);
                                     for c in &COMMANDS {
                                         ui.selectable_value(&mut edit.command, c.id, c.label);
                                     }
@@ -681,38 +778,62 @@ impl KeymapEditor {
                         Kind::Send => {
                             ui.vertical(|ui| {
                                 ui.add(
-                                    egui::TextEdit::singleline(&mut edit.text)
+                                    egui::TextEdit::multiline(&mut edit.text)
                                         .hint_text("show ip interface brief\\r")
                                         .font(egui::TextStyle::Monospace)
-                                        .desired_width(300.0),
+                                        .desired_rows(5)
+                                        .desired_width(field),
                                 );
-                                ui.weak("\\r Enter   \\t Tab   \\e Esc   \\p pause 1 s");
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(field, row_h),
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        ui.set_min_width(field);
+                                        ui.weak("\\r Enter   \\t Tab   \\e Esc   \\p pause 1 s");
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                *unlock_request |= crate::buttonbar::vault_menu(
+                                                    ui,
+                                                    &mut edit.text,
+                                                    vault,
+                                                );
+                                            },
+                                        );
+                                    },
+                                );
                             });
                         }
                         Kind::Script => {
-                            ui.horizontal(|ui| {
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut edit.text)
-                                        .hint_text("script name")
-                                        .desired_width(220.0),
-                                );
-                                if ui.button("Browse…").clicked()
-                                    && let Some(name) =
-                                        crate::buttonbar::pick_script(Some(config_dir))
-                                {
-                                    edit.text = name;
-                                }
-                            });
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(field, row_h),
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui.button("Browse…").clicked()
+                                        && let Some(name) =
+                                            crate::buttonbar::pick_script(Some(config_dir))
+                                    {
+                                        edit.text = name;
+                                    }
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut edit.text)
+                                            .hint_text("script name")
+                                            .desired_width(ui.available_width()),
+                                    );
+                                },
+                            );
                         }
                         Kind::Button => {
+                            crate::theme::sunken_combos(ui);
                             egui::ComboBox::from_id_salt("keymap-button")
-                                .width(280.0)
+                                .width(field)
                                 .selected_text(if edit.text.is_empty() {
                                     "choose a button"
                                 } else {
                                     edit.text.as_str()
                                 })
                                 .show_ui(ui, |ui| {
+                                    crate::theme::menu(ui);
                                     if buttons.is_empty() {
                                         ui.weak("No buttons yet");
                                     }
@@ -725,8 +846,11 @@ impl KeymapEditor {
                     ui.end_row();
                 });
             if let Some(e) = &edit.error {
+                ui.add_space(4.0);
                 ui.colored_label(ui.visuals().error_fg_color, e);
             }
+            // Room between the form and its buttons.
+            ui.add_space(14.0);
             ui.horizontal(|ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if crate::theme::primary_button(ui, "Save").clicked() {
@@ -847,6 +971,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            ..Keymap::default()
         };
         let (rows, errors) = compile(&keymap);
         assert_eq!(rows.len(), 1);

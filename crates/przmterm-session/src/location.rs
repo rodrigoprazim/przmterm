@@ -17,7 +17,6 @@ use crate::SessionError;
 pub const LOCATION_FILE: &str = "location.toml";
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Location {
     path: PathBuf,
 }

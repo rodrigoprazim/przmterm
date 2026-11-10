@@ -26,19 +26,22 @@ fn is_false(b: &bool) -> bool {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct KeywordSet {
     /// `Down` and `down` differ only when true.
     #[serde(skip_serializing_if = "is_false")]
     pub match_case: bool,
     #[serde(rename = "rule")]
     pub rules: Vec<Keyword>,
+    /// Keys in the file this version does not know (left out).
+    #[serde(skip)]
+    pub unknown: Vec<String>,
 }
 
 /// One rule: a word (`text`) or a regular expression (`regex`), and how
 /// matching text is drawn.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Keyword {
     /// Matched as a whole word: `up` colours "up" and "link-up", not "backup".
     #[serde(skip_serializing_if = "String::is_empty")]

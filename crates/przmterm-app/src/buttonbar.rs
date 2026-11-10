@@ -41,12 +41,23 @@ pub struct ButtonBarUi {
     /// A tab waiting for "really delete?".
     delete_tab: Option<usize>,
     pub error: Option<String>,
+    /// The Vault menu asked for the vault to be unlocked.
+    pub unlock_request: bool,
 }
 
 impl ButtonBarUi {
     pub fn load(config_dir: Option<&Path>) -> Self {
         let (bar, error) = match config_dir.map(read_buttons) {
-            Some(Ok(bar)) => (bar, None),
+            Some(Ok(bar)) => {
+                let note = (!bar.unknown.is_empty()).then(|| {
+                    format!(
+                        "{}: unknown setting(s) ignored: {}",
+                        przmterm_session::buttons::BUTTONS_FILE,
+                        bar.unknown.join(", ")
+                    )
+                });
+                (bar, note)
+            }
             Some(Err(e)) => (ButtonBar::default(), Some(e.to_string())),
             None => (ButtonBar::default(), None),
         };
@@ -59,6 +70,7 @@ impl ButtonBarUi {
             tab_edit: None,
             delete_tab: None,
             error,
+            unlock_request: false,
         }
     }
 
@@ -279,7 +291,14 @@ impl ButtonBarUi {
     }
 
     /// The button and tab dialogs.
-    pub fn dialogs(&mut self, ctx: &egui::Context, config_dir: Option<&Path>) {
+    /// `vault`: the vault's entry names while it is open, for the Vault
+    /// menu.
+    pub fn dialogs(
+        &mut self,
+        ctx: &egui::Context,
+        config_dir: Option<&Path>,
+        vault: Option<&[String]>,
+    ) {
         let (enter, escape) = ctx.input(|i| {
             (
                 i.key_pressed(egui::Key::Enter) && !i.modifiers.shift,
@@ -325,23 +344,38 @@ impl ButtonBarUi {
                         );
                         ui.end_row();
                         ui.label("");
-                        ui.weak("\\r Enter   \\n line feed   \\t Tab   \\e Esc   \\p pause 1 s");
+                        ui.horizontal(|ui| {
+                            ui.set_width(320.0);
+                            ui.weak("\\r Enter   \\t Tab   \\e Esc   \\p pause 1 s");
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    self.unlock_request |=
+                                        vault_menu(ui, &mut edit.button.send, vault);
+                                },
+                            );
+                        });
                         ui.end_row();
                         ui.label("Script").on_hover_text(
                             "A Rhai script to run instead of sending the text above",
                         );
-                        ui.horizontal(|ui| {
-                            ui.add(
-                                egui::TextEdit::singleline(&mut edit.button.script)
-                                    .hint_text("none: the button sends the text")
-                                    .desired_width(240.0),
-                            );
-                            if ui.button("Browse…").clicked()
-                                && let Some(name) = pick_script(config_dir)
-                            {
-                                edit.button.script = name;
-                            }
-                        });
+                        // The field and Browse… together as wide as the others.
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(320.0, ui.spacing().interact_size.y),
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                if ui.button("Browse…").clicked()
+                                    && let Some(name) = pick_script(config_dir)
+                                {
+                                    edit.button.script = name;
+                                }
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut edit.button.script)
+                                        .hint_text("none: the button sends the text")
+                                        .desired_width(ui.available_width()),
+                                );
+                            },
+                        );
                         ui.end_row();
                         ui.label("Description");
                         ui.add(
@@ -360,6 +394,7 @@ impl ButtonBarUi {
                 if let Some(err) = &edit.error {
                     ui.colored_label(ui.visuals().error_fg_color, err);
                 }
+                ui.add_space(14.0);
                 // Cancel and Clear on the left, Save on the right.
                 ui.horizontal(|ui| {
                     if ui
@@ -497,6 +532,53 @@ impl ButtonBarUi {
 
 /// Picks a script file: a file in `<config>/scripts` is kept by name, any
 /// other by its full path.
+/// A Vault ▾ menu that adds a `{vault:…}` reference to `text`: the entry's
+/// password, user name or key passphrase is typed when the button or
+/// shortcut is used, and only the entry's name is kept. Returns whether
+/// the vault should be unlocked to list its entries.
+pub fn vault_menu(ui: &mut egui::Ui, text: &mut String, names: Option<&[String]>) -> bool {
+    use przmterm_session::buttons::{VaultField, vault_reference};
+    let mut unlock = false;
+    ui.menu_button("Vault ▾", |ui| {
+        crate::theme::menu(ui);
+        match names {
+            None => {
+                ui.weak("The vault is locked.");
+                if ui.button("Unlock the vault…").clicked() {
+                    unlock = true;
+                    ui.close();
+                }
+            }
+            Some([]) => {
+                ui.weak("The vault has no entries yet.");
+            }
+            Some(names) => {
+                for name in names {
+                    ui.menu_button(name, |ui| {
+                        crate::theme::menu(ui);
+                        for (label, field) in [
+                            ("Password", VaultField::Password),
+                            ("User name", VaultField::Username),
+                            ("Key passphrase", VaultField::Passphrase),
+                        ] {
+                            if ui.button(label).clicked() {
+                                text.push_str(&vault_reference(name, field));
+                                ui.close();
+                            }
+                        }
+                    });
+                }
+            }
+        }
+    })
+    .response
+    .on_hover_text(
+        "Type a password or user name from the vault. Only the entry's name is \
+         kept here; the secret stays in the encrypted vault.",
+    );
+    unlock
+}
+
 pub fn pick_script(config_dir: Option<&Path>) -> Option<String> {
     let mut picker = rfd::FileDialog::new()
         .set_title("Choose a script")

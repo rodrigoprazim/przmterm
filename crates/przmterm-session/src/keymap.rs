@@ -29,16 +29,17 @@ use serde::{Deserialize, Serialize};
 pub const KEYMAP_FILE: &str = "keymap.toml";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Keymap {
     #[serde(default, rename = "key")]
     pub bindings: Vec<Binding>,
+    /// Keys in the file this version does not know (left out).
+    #[serde(skip)]
+    pub unknown: Vec<String>,
 }
 
 /// One shortcut and what it does: exactly one of `command`, `send`,
 /// `script` and `button`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Binding {
     pub keys: String,
     /// An app command, e.g. `new_tab`.
@@ -50,7 +51,7 @@ pub struct Binding {
     /// A script to run (see [`crate::script_path`]).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub script: String,
-    /// A button to press: `Tab/Label`.
+    /// A button to press: `Group/Label`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub button: String,
 }
@@ -154,8 +155,11 @@ impl Chord {
 pub fn read_keymap(config_dir: &Path) -> Result<Option<Keymap>, String> {
     let path = config_dir.join(KEYMAP_FILE);
     match std::fs::read_to_string(&path) {
-        Ok(text) => toml::from_str(&text)
-            .map(Some)
+        Ok(text) => crate::from_toml_lenient::<Keymap>(&text)
+            .map(|(mut keymap, unknown)| {
+                keymap.unknown = unknown;
+                Some(keymap)
+            })
             .map_err(|e| format!("{KEYMAP_FILE}: {}", e.message())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(format!("{KEYMAP_FILE}: {e}")),
@@ -217,6 +221,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            ..Keymap::default()
         };
         write_keymap(dir.path(), &keymap).unwrap();
         let text = std::fs::read_to_string(dir.path().join(KEYMAP_FILE)).unwrap();

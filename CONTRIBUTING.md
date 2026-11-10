@@ -30,6 +30,9 @@ apply needs an entry with the reason.
 - **Commits.** Short imperative subject with a type prefix:
   `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `ci:`, `chore:`, `release:`.
 - **Versions.** See [docs/VERSIONING.md](docs/VERSIONING.md).
+- **Configuration files.** New keys only; never rename, remove or change the
+  meaning of one in 1.x. Update [docs/CONFIG.md](docs/CONFIG.md) with the
+  change.
 
 ## Clean-room rule
 

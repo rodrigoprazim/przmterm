@@ -193,11 +193,14 @@ and, when a device is at hand, a serial console (Xmodem or Ymodem).
   down (2026-11-09) for lack of public adoption; apply again once the
   project has a following. Not required for 1.0: until then the executables
   are unsigned and the README explains SmartScreen
-- Release candidates `1.0.0-rc.N`
-- Configuration format declared stable (compatibility promise for 1.x)
-- Signed releases: checksums signed with GPG, macOS (universal) ad-hoc
+- [ ] Release candidates `1.0.0-rc.N`
+- [x] Configuration format declared stable (compatibility promise for 1.x):
+  every file and key in [docs/CONFIG.md](docs/CONFIG.md); unknown keys are
+  left out with a note instead of refusing the file; button groups are
+  `[[group]]` in `buttons.toml`
+- [ ] Signed releases: checksums signed with GPG, macOS (universal) ad-hoc
   signed; Windows signed when SignPath (or another free route) is in place
-- User guide and scripting reference
+- [ ] User guide and scripting reference
 
 **Gate:** the maintainer's own automation scripts in daily use and no open
 critical bugs.

@@ -922,6 +922,11 @@ impl PrzmApp {
                 .filter_map(|p| p.origin.clone())
                 .collect()
         };
+        if let Action::Macro(press) = action {
+            let names = przmterm_session::buttons::vault_entries(&press.chunks);
+            return (!names.is_empty())
+                .then(|| format!("Typing from the vault entry {}.", names.join(" and ")));
+        }
         let sessions = match action {
             Action::Open(session) | Action::OpenHere(_, _, session) => vec![(**session).clone()],
             Action::Reconnect => closed_origins(std::slice::from_ref(self.tab().pane())),
@@ -1812,11 +1817,25 @@ impl PrzmApp {
                     .get_or_insert_with(scriptguide::ScriptGuide::new);
             }
             Action::Macro(press) => {
-                let pane = self.tab_mut().pane_mut();
-                if pane.transport.is_closed() {
-                    self.notice = Some("The session is closed.".into());
+                // `{vault:…}` pieces take the vault's values (it was opened
+                // first if it had to be).
+                let chunks = if przmterm_session::buttons::vault_entries(&press.chunks).is_empty() {
+                    Ok(press.chunks.clone())
                 } else {
-                    pane.enqueue(&press.chunks);
+                    match self.vault.credentials() {
+                        Some(entries) => {
+                            przmterm_session::buttons::resolve_vault(&press.chunks, &entries)
+                        }
+                        None => Err("there is no password vault to type from".into()),
+                    }
+                };
+                let pane = self.tab_mut().pane_mut();
+                match chunks {
+                    Err(e) => self.notice = Some(format!("Nothing sent: {e}.")),
+                    Ok(_) if pane.transport.is_closed() => {
+                        self.notice = Some("The session is closed.".into());
+                    }
+                    Ok(chunks) => pane.enqueue(&chunks),
                 }
                 self.run_queues(ctx);
             }
@@ -3308,7 +3327,13 @@ impl PrzmApp {
         }
         if let (Some(editor), Some(dir)) = (&mut self.keymap_editor, self.config_dir.clone()) {
             let buttons = self.buttons.ids();
-            if let keymap::KeymapResult::Closed = editor.show(ctx, &dir, &buttons) {
+            let vault_names = self.vault.names();
+            let result = editor.show(ctx, &dir, &buttons, vault_names.as_deref());
+            if std::mem::take(&mut editor.unlock_request) {
+                self.vault
+                    .ask_unlock("Unlock the vault to list its entries.".into());
+            }
+            if let keymap::KeymapResult::Closed = result {
                 self.keymap_editor = None;
                 self.shortcuts = keymap::Shortcuts::load(Some(&dir));
             }
@@ -5083,7 +5108,10 @@ impl eframe::App for PrzmApp {
                             ui.separator();
                             ui.colored_label(
                                 ui.visuals().warn_fg_color,
-                                format!("{} file(s) with errors", self.sessions.errors.len()),
+                                format!(
+                                    "{} settings file(s) with problems",
+                                    self.sessions.errors.len()
+                                ),
                             )
                             .on_hover_text(
                                 self.sessions
@@ -5118,7 +5146,13 @@ impl eframe::App for PrzmApp {
         self.terminal_area(ui, &mut actions);
 
         self.dialogs(&ctx);
-        self.buttons.dialogs(&ctx, self.config_dir.as_deref());
+        let vault_names = self.vault.names();
+        self.buttons
+            .dialogs(&ctx, self.config_dir.as_deref(), vault_names.as_deref());
+        if std::mem::take(&mut self.buttons.unlock_request) {
+            self.vault
+                .ask_unlock("Unlock the vault to list its entries.".into());
+        }
         if let Some(dir) = self.config_dir.clone() {
             match self.vault.show(&ctx, &dir) {
                 vault::VaultEvent::Unlocked => actions.extend(self.after_unlock.take()),

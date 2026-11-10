@@ -1,26 +1,31 @@
-//! The button bar: macro buttons grouped in tabs, saved in
+//! The button bar: macro buttons in groups, saved in
 //! `<config>/buttons.toml`:
 //!
 //! ```toml
-//! [[tab]]
+//! [[group]]
 //! name = "Cisco"
 //!
-//! [[tab.button]]
+//! [[group.button]]
 //! label = "Interfaces"
 //! send = 'show ip interface brief\r'
 //!
-//! [[tab.button]]
+//! [[group.button]]
 //! label = "Save"
 //! send = 'copy run start\r\p\r'   # \p waits a second
 //! description = "Saves the running configuration"
 //! ```
 //!
 //! A button sends to the session that has the keyboard. `tooltip = false`
-//! on a button stops its description from popping up.
+//! on a button stops its description from popping up. Files before 1.0
+//! say `[[tab]]` for a group; they are read the same.
 //!
 //! In `send`, `\r` is Enter, `\n` a line feed, `\t` Tab, `\e` Escape,
 //! `\p` a one-second pause and `\\` a backslash. Write `send` in single
 //! quotes so TOML keeps the backslashes for PrzmTerm.
+//!
+//! `{vault:NAME}` types the password of the vault entry NAME, and
+//! `{vault:NAME:username}` (or `:passphrase`) its other fields: the file
+//! names the entry, the secret stays in the encrypted vault.
 
 use std::path::Path;
 use std::time::Duration;
@@ -34,7 +39,6 @@ pub const BUTTONS_FILE: &str = "buttons.toml";
 pub const PAUSE: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct MacroButton {
     pub label: String,
     /// Text to send to the current session, with the escapes above.
@@ -70,7 +74,6 @@ impl Default for MacroButton {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ButtonTab {
     pub name: String,
     #[serde(default, rename = "button", skip_serializing_if = "Vec::is_empty")]
@@ -78,15 +81,18 @@ pub struct ButtonTab {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ButtonBar {
     /// The switch for every button's tooltip in files from 0.8.0: read
     /// into each button's `tooltip`, never written.
     #[doc(hidden)]
     #[serde(default = "yes", rename = "tooltips", skip_serializing)]
     pub legacy_tooltips: bool,
-    #[serde(default, rename = "tab")]
+    /// The groups (`[[group]]`, `[[tab]]` before 1.0).
+    #[serde(default, rename = "group", alias = "tab")]
     pub tabs: Vec<ButtonTab>,
+    /// Keys in the file this version does not know (left out).
+    #[serde(skip)]
+    pub unknown: Vec<String>,
 }
 
 impl Default for ButtonBar {
@@ -94,6 +100,7 @@ impl Default for ButtonBar {
         Self {
             legacy_tooltips: true,
             tabs: Vec::new(),
+            unknown: Vec::new(),
         }
     }
 }
@@ -111,14 +118,113 @@ fn is_true(b: &bool) -> bool {
 pub enum Chunk {
     Bytes(Vec<u8>),
     Pause(Duration),
+    /// A field of a vault entry, typed once the vault is open
+    /// ([`resolve_vault`]).
+    Vault {
+        entry: String,
+        field: VaultField,
+    },
 }
 
-/// Turns `send` into bytes and pauses. Unknown escapes are sent as typed.
+/// Which field of a vault entry `{vault:…}` types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VaultField {
+    Username,
+    Password,
+    Passphrase,
+}
+
+impl VaultField {
+    fn parse(name: &str) -> Option<VaultField> {
+        match name.trim() {
+            "username" | "user" => Some(VaultField::Username),
+            "password" => Some(VaultField::Password),
+            "passphrase" => Some(VaultField::Passphrase),
+            _ => None,
+        }
+    }
+}
+
+/// The text that types `field` of the vault entry `entry`.
+pub fn vault_reference(entry: &str, field: VaultField) -> String {
+    match field {
+        VaultField::Password => format!("{{vault:{entry}}}"),
+        VaultField::Username => format!("{{vault:{entry}:username}}"),
+        VaultField::Passphrase => format!("{{vault:{entry}:passphrase}}"),
+    }
+}
+
+/// The vault entries `chunks` type from.
+pub fn vault_entries(chunks: &[Chunk]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for chunk in chunks {
+        if let Chunk::Vault { entry, .. } = chunk
+            && !names.contains(entry)
+        {
+            names.push(entry.clone());
+        }
+    }
+    names
+}
+
+/// Puts the vault's values in place of the `{vault:…}` pieces. Fails,
+/// naming the entry, when one is not in `entries` or has no such field.
+pub fn resolve_vault(
+    chunks: &[Chunk],
+    entries: &[crate::vault::VaultEntry],
+) -> Result<Vec<Chunk>, String> {
+    chunks
+        .iter()
+        .map(|chunk| match chunk {
+            Chunk::Vault { entry, field } => {
+                let found = entries
+                    .iter()
+                    .find(|e| e.name == *entry)
+                    .ok_or_else(|| format!("the vault has no entry {entry}"))?;
+                let (value, what) = match field {
+                    VaultField::Username => (&found.username, "user name"),
+                    VaultField::Password => (&found.password, "password"),
+                    VaultField::Passphrase => (&found.passphrase, "key passphrase"),
+                };
+                if value.is_empty() {
+                    return Err(format!("the vault entry {entry} has no {what}"));
+                }
+                Ok(Chunk::Bytes(value.as_bytes().to_vec()))
+            }
+            other => Ok(other.clone()),
+        })
+        .collect()
+}
+
+/// Turns `send` into bytes, pauses and vault references. Unknown escapes
+/// are sent as typed, and so is a `{vault:` without its closing `}`.
 pub fn parse_send(text: &str) -> Vec<Chunk> {
     let mut chunks = Vec::new();
     let mut bytes = Vec::new();
     let mut chars = text.chars();
     while let Some(c) = chars.next() {
+        if c == '{'
+            && let Some(rest) = chars.as_str().strip_prefix("vault:")
+            && let Some(end) = rest.find('}')
+        {
+            let inner = &rest[..end];
+            let (entry, field) = match inner.rsplit_once(':') {
+                Some((name, field)) if VaultField::parse(field).is_some() => (
+                    name,
+                    VaultField::parse(field).unwrap_or(VaultField::Password),
+                ),
+                _ => (inner, VaultField::Password),
+            };
+            if !bytes.is_empty() {
+                chunks.push(Chunk::Bytes(std::mem::take(&mut bytes)));
+            }
+            chunks.push(Chunk::Vault {
+                entry: entry.trim().to_string(),
+                field,
+            });
+            chars = rest[end + 1..].chars();
+            continue;
+        }
         if c != '\\' {
             let mut buf = [0u8; 4];
             bytes.extend(c.encode_utf8(&mut buf).as_bytes());
@@ -155,8 +261,9 @@ pub fn read_buttons(config_dir: &Path) -> Result<ButtonBar, SessionError> {
     let path = config_dir.join(BUTTONS_FILE);
     match std::fs::read_to_string(&path) {
         Ok(text) => {
-            let mut bar: ButtonBar =
-                toml::from_str(&text).map_err(|source| SessionError::Parse { path, source })?;
+            let (mut bar, unknown) = crate::from_toml_lenient::<ButtonBar>(&text)
+                .map_err(|source| SessionError::Parse { path, source })?;
+            bar.unknown = unknown;
             if !bar.legacy_tooltips {
                 for button in bar.tabs.iter_mut().flat_map(|t| &mut t.buttons) {
                     button.tooltip = false;
@@ -206,6 +313,53 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)] // VaultEntry is Drop
+    fn vault_references_name_the_entry_and_are_filled_in() {
+        let chunks = parse_send("enable\\r\\p{vault:Core sw}\\r{vault:Lab:username}{vault:x");
+        assert_eq!(
+            chunks,
+            [
+                Chunk::Bytes(b"enable\r".to_vec()),
+                Chunk::Pause(PAUSE),
+                Chunk::Vault {
+                    entry: "Core sw".into(),
+                    field: VaultField::Password
+                },
+                Chunk::Bytes(b"\r".to_vec()),
+                Chunk::Vault {
+                    entry: "Lab".into(),
+                    field: VaultField::Username
+                },
+                Chunk::Bytes(b"{vault:x".to_vec()),
+            ]
+        );
+        assert_eq!(vault_entries(&chunks), ["Core sw", "Lab"]);
+        assert_eq!(
+            parse_send(&vault_reference("A:b", VaultField::Password)),
+            [Chunk::Vault {
+                entry: "A:b".into(),
+                field: VaultField::Password
+            }]
+        );
+
+        let entry = |name: &str, user: &str, password: &str| {
+            let mut e = crate::vault::VaultEntry::default();
+            e.name = name.into();
+            e.username = user.into();
+            e.password = password.into();
+            e
+        };
+        let vault = [entry("Core sw", "", "s3cret"), entry("Lab", "ops", "x")];
+        let typed = resolve_vault(&chunks[..5], &vault).unwrap();
+        assert_eq!(typed[2], Chunk::Bytes(b"s3cret".to_vec()));
+        assert_eq!(typed[4], Chunk::Bytes(b"ops".to_vec()));
+        let err = resolve_vault(&parse_send("{vault:Core sw:username}"), &vault).unwrap_err();
+        assert!(err.contains("no user name"), "{err}");
+        let err = resolve_vault(&parse_send("{vault:Gone}"), &vault).unwrap_err();
+        assert!(err.contains("no entry Gone"), "{err}");
+    }
+
+    #[test]
     fn round_trips_the_file() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(read_buttons(dir.path()).unwrap(), ButtonBar::default());
@@ -238,7 +392,17 @@ mod tests {
             text.contains("description = \"Saves the configuration\""),
             "{text}"
         );
+        assert!(text.starts_with("[[group]]"), "{text}");
         assert_eq!(read_buttons(dir.path()).unwrap(), bar);
+        // Unknown keys are left out and noted.
+        std::fs::write(
+            dir.path().join(BUTTONS_FILE),
+            "[[group]]\nname = 'x'\ncolor = 'red'\n[[group.button]]\nlabel = 'a'\n",
+        )
+        .unwrap();
+        let newer = read_buttons(dir.path()).unwrap();
+        assert_eq!(newer.tabs[0].buttons[0].label, "a");
+        assert_eq!(newer.unknown, ["group.0.color"]);
         // Files from before: `target` is accepted and dropped; tooltips on.
         std::fs::write(
             dir.path().join(BUTTONS_FILE),

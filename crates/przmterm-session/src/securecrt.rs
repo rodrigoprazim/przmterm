@@ -453,6 +453,7 @@ pub fn parse_keyword_ini(file_name: &str, text: &str) -> Option<(String, Keyword
         KeywordSet {
             match_case: number(&fields, "Match Case") == Some(1),
             rules,
+            ..KeywordSet::default()
         },
     ))
 }

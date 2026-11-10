@@ -21,6 +21,16 @@ Between releases, `main` carries the next version with a `-dev` suffix, for
 example `0.2.0-dev` right after 0.1.0 ships. Builds from `main` therefore
 never claim to be a release.
 
+## Configuration files
+
+From 1.0.0 the configuration files are covered by the compatibility promise
+in [CONFIG.md](CONFIG.md#compatibility): a 1.x release may add keys and
+values, never rename, remove or change the meaning of one. A change that
+needs to break a file waits for the next major version. Every change to a
+file's keys updates CONFIG.md in the same pull request (a test checks that
+its examples read without unknown keys and that every session setting has
+a row).
+
 ## Changelog
 
 Every user-visible change adds a line under `## [Unreleased]` in

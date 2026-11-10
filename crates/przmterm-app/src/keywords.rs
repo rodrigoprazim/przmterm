@@ -114,6 +114,7 @@ impl KeywordEditor {
                 color: Some("#ff4040".into()),
                 ..Keyword::default()
             }],
+            ..KeywordSet::default()
         };
         self.saved = KeywordSet::default();
         self.confirm_delete = false;
@@ -135,6 +136,7 @@ impl KeywordEditor {
         let set = KeywordSet {
             match_case: self.set.match_case,
             rules,
+            ..KeywordSet::default()
         };
         let (_, problems) = Highlighter::new(&set);
         if let Some(p) = problems.first() {
