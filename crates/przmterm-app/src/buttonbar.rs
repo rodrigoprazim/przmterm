@@ -180,8 +180,10 @@ impl ButtonBarUi {
                     .width(75.0)
                     .height(400.0)
                     .show_ui(ui, |ui| {
-                        crate::theme::menu(ui);
-                        ui.set_min_width(150.0);
+                        // Group names are short: the list is half a menu's
+                        // width, and grows for a longer name.
+                        ui.spacing_mut().item_spacing.y = 1.0;
+                        ui.set_min_width(crate::theme::MENU_WIDTH / 2.0);
                         for (i, group) in self.bar.tabs.iter().enumerate() {
                             ui.selectable_value(&mut chosen, i, &group.name);
                         }
