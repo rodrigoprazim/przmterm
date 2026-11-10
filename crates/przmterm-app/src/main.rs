@@ -190,10 +190,12 @@ fn tab_widget(
             sw: 0,
             se: 0,
         };
+        // The active tab in the terminal's colour, the one under the pointer
+        // a shade lighter than the strip: both shaped as a tab.
         if active {
             painter.rect_filled(rect, top, view::rgb(view::DEFAULT_BG));
         } else if hovered {
-            painter.rect_filled(rect.shrink2(egui::vec2(0.0, 3.0)), 5, theme::HOVER);
+            painter.rect_filled(rect, top, theme::TAB_HOVER);
         }
         // A tab of a group starts with a bar in the group's colour.
         if let Some(color) = group {
@@ -1117,6 +1119,7 @@ impl PrzmApp {
                     actions.extend(self.shortcuts(&ctx));
                     egui::Panel::top("tabs")
                         .frame(theme::tab_strip())
+                        .show_separator_line(false)
                         .show(ui, |ui| self.tab_bar(ui, &mut actions));
                     self.terminal_area(ui, &mut actions);
                 },
@@ -3053,7 +3056,7 @@ impl PrzmApp {
                     ui.weak("Only the tab changes; the session keeps its name.");
                     ui.horizontal(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("OK").clicked() || enter {
+                            if theme::primary_button(ui, "OK").clicked() || enter {
                                 answer = Some(true);
                             }
                             if ui.button("Cancel").clicked() || escape {
@@ -3301,7 +3304,7 @@ impl PrzmApp {
                     }
                     ui.horizontal(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("OK").clicked() {
+                            if theme::primary_button(ui, "OK").clicked() {
                                 answer = Some(true);
                             }
                             if ui
@@ -3628,7 +3631,7 @@ impl PrzmApp {
                             }
                         });
                     ui.add_space(4.0);
-                    close |= ui.button("OK").clicked();
+                    close |= theme::primary_button(ui, "OK").clicked();
                 });
             if close {
                 self.import_result = None;
@@ -3663,7 +3666,7 @@ impl PrzmApp {
                     }
                     ui.horizontal(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("OK").clicked() || enter {
+                            if theme::primary_button(ui, "OK").clicked() || enter {
                                 let result = if dialog.rename {
                                     przmterm_session::rename_folder(&dialog.dir, &dialog.value)
                                 } else {
@@ -4992,6 +4995,7 @@ impl eframe::App for PrzmApp {
         // terminal only, and the session list reaches up to the toolbar.
         egui::Panel::top("tabs")
             .frame(theme::tab_strip())
+            .show_separator_line(false)
             .show(ui, |ui| self.tab_bar(ui, &mut actions));
 
         if self.buttons.visible {

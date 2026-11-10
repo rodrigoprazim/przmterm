@@ -729,7 +729,7 @@ impl KeymapEditor {
             }
             ui.horizontal(|ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Save").clicked() {
+                    if crate::theme::primary_button(ui, "Save").clicked() {
                         done = Some(true);
                     }
                     if ui.button("Cancel").clicked() || escape {

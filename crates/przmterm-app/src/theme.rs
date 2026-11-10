@@ -21,6 +21,8 @@ pub const BORDER: Color32 = rgb(43, 44, 45);
 /// Borders of controls (fields, buttons), a little lighter.
 pub const CONTROL_BORDER: Color32 = rgb(58, 59, 61);
 pub const HOVER: Color32 = rgb(45, 46, 48);
+/// A tab under the pointer, a shade above the tab strip.
+pub const TAB_HOVER: Color32 = rgb(39, 40, 42);
 pub const PRESSED: Color32 = rgb(55, 56, 58);
 pub const TEXT: Color32 = rgb(204, 204, 204);
 pub const TEXT_STRONG: Color32 = rgb(240, 240, 240);
@@ -72,6 +74,113 @@ pub fn tab_strip() -> egui::Frame {
     })
 }
 
+/// The width of a text field or list in a form, so their right edges line
+/// up.
+pub const FIELD_WIDTH: f32 = 280.0;
+
+/// The width of a combo box matching a field of [`FIELD_WIDTH`] (both
+/// widths include the padding).
+pub fn combo_width(_ui: &egui::Ui) -> f32 {
+    FIELD_WIDTH
+}
+
+/// Combo boxes added to `ui` from now on look like text fields (sunken),
+/// not like buttons; call it in the row that holds the combo box.
+pub fn sunken_combos(ui: &mut egui::Ui) {
+    let w = &mut ui.visuals_mut().widgets;
+    w.inactive.weak_bg_fill = SUNKEN;
+    w.open.weak_bg_fill = SUNKEN;
+}
+
+/// The button of a window's main action (Save, OK…), in the accent.
+pub fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    ui.scope(|ui| {
+        let w = &mut ui.visuals_mut().widgets;
+        for (state, fill) in [
+            (&mut w.inactive, ACCENT),
+            (&mut w.hovered, rgb(26, 137, 224)),
+            (&mut w.active, rgb(0, 100, 180)),
+        ] {
+            state.weak_bg_fill = fill;
+            state.bg_stroke = Stroke::NONE;
+            state.fg_stroke = Stroke::new(1.0, Color32::WHITE);
+        }
+        ui.button(text)
+    })
+    .inner
+}
+
+/// One choice of several, as a row of joined segments (the chosen one in
+/// the accent). Returns the index clicked, if any.
+pub fn segmented(ui: &mut egui::Ui, selected: Option<usize>, options: &[&str]) -> Option<usize> {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let pad = 12.0;
+    let height = ui.spacing().interact_size.y;
+    let galleys: Vec<_> = options
+        .iter()
+        .map(|text| {
+            ui.painter()
+                .layout_no_wrap(text.to_string(), font.clone(), TEXT)
+        })
+        .collect();
+    let widths: Vec<f32> = galleys.iter().map(|g| g.size().x + 2.0 * pad).collect();
+    let (rect, whole) = ui.allocate_exact_size(
+        egui::vec2(widths.iter().sum(), height),
+        egui::Sense::hover(),
+    );
+    let mut clicked = None;
+    let painter = ui.painter().clone();
+    painter.rect_filled(rect, 4, SUNKEN);
+    let mut x = rect.left();
+    for (i, (galley, w)) in galleys.into_iter().zip(&widths).enumerate() {
+        let cell = egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(*w, height));
+        let response = ui
+            .interact(cell, whole.id.with(i), egui::Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        let chosen = selected == Some(i);
+        if chosen {
+            painter.rect_filled(cell.shrink(2.0), 3, ACCENT);
+        } else if response.hovered() {
+            painter.rect_filled(cell.shrink(2.0), 3, HOVER);
+        }
+        let color = if chosen || response.hovered() {
+            Color32::WHITE
+        } else {
+            TEXT
+        };
+        painter.galley(cell.center() - galley.size() / 2.0, galley, color);
+        if response.clicked() {
+            clicked = Some(i);
+        }
+        x += w;
+    }
+    painter.rect_stroke(
+        rect,
+        4,
+        Stroke::new(1.0, CONTROL_BORDER),
+        egui::StrokeKind::Inside,
+    );
+    clicked
+}
+
+/// A section's title in a form: larger and bolder than the labels, with a
+/// line under it.
+pub fn section_title(ui: &mut egui::Ui, title: &str) {
+    ui.add_space(14.0);
+    ui.label(
+        egui::RichText::new(title)
+            .font(FontId::new(14.5, semibold()))
+            .color(TEXT_STRONG),
+    );
+    let rect = ui.available_rect_before_wrap();
+    ui.painter().hline(
+        rect.left()..=rect.right(),
+        rect.top() + 1.0,
+        Stroke::new(1.0, BORDER),
+    );
+    ui.add_space(8.0);
+}
+
 /// Sets the interface's colours, sizes and spacing.
 pub fn apply(ctx: &egui::Context) {
     ctx.set_theme(egui::ThemePreference::Dark);
@@ -90,7 +199,13 @@ pub fn apply(ctx: &egui::Context) {
         spacing.item_spacing = egui::vec2(8.0, 6.0);
         spacing.button_padding = egui::vec2(10.0, 4.0);
         spacing.interact_size = egui::vec2(36.0, 24.0);
-        spacing.window_margin = Margin::same(14);
+        // The title bar takes the top and bottom: kept low.
+        spacing.window_margin = Margin {
+            left: 14,
+            right: 14,
+            top: 7,
+            bottom: 10,
+        };
         spacing.menu_margin = Margin::same(5);
         spacing.indent = 16.0;
         spacing.icon_width = 14.0;

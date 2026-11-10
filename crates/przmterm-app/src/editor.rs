@@ -741,7 +741,7 @@ impl Editor {
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            go = ui.button("Save").clicked() || enter;
+                            go = crate::theme::primary_button(ui, "Save").clicked() || enter;
                             back = ui.button("Back").clicked() || escape;
                         });
                     });
@@ -804,7 +804,18 @@ impl Editor {
                                 .id_salt(("editor-page", self.page))
                                 .max_height(max_height)
                                 .auto_shrink([false, true])
-                                .show(ui, |ui| self.form(ui, &cx, root));
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new(self.page.label())
+                                            .font(egui::FontId::new(
+                                                17.0,
+                                                crate::theme::semibold(),
+                                            ))
+                                            .color(crate::theme::TEXT_STRONG),
+                                    );
+                                    ui.add_space(6.0);
+                                    self.form(ui, &cx, root)
+                                });
                         },
                     );
                 });
@@ -825,7 +836,7 @@ impl Editor {
                 }
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Save").clicked() || (enter && !popup) {
+                        if crate::theme::primary_button(ui, "Save").clicked() || (enter && !popup) {
                             match self.save_or_confirm(config_dir) {
                                 Ok(Some(msg)) => result = EditorResult::Saved(msg),
                                 Ok(None) => {}
@@ -913,8 +924,9 @@ impl Editor {
 
                 ui.label("Protocol");
                 ui.horizontal(|ui| {
+                    crate::theme::sunken_combos(ui);
                     egui::ComboBox::from_id_salt("protocol")
-                        .width(250.0)
+                        .width(crate::theme::combo_width(ui))
                         .selected_text(shown(
                             self.protocol.map(|p| p.to_string()),
                             cx.hint("protocol"),
@@ -1256,6 +1268,7 @@ impl Editor {
             let mut add = false;
             for (i, f) in list.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
+                    crate::theme::sunken_combos(ui);
                     egui::ComboBox::from_id_salt(("tunnel-kind", i))
                         .width(80.0)
                         .selected_text(match f.kind {
@@ -1423,8 +1436,9 @@ impl Editor {
                     c.clone()
                 }
             });
+            crate::theme::sunken_combos(ui);
             egui::ComboBox::from_id_salt("credential")
-                .width(200.0)
+                .width(crate::theme::combo_width(ui) - 60.0)
                 .selected_text(shown(shown_name, cx.hint("credential")))
                 .show_ui(ui, |ui| {
                     // "" turns off an entry inherited from above.
@@ -1485,8 +1499,9 @@ impl Editor {
                     k.clone()
                 }
             });
+            crate::theme::sunken_combos(ui);
             egui::ComboBox::from_id_salt("keywords")
-                .width(250.0)
+                .width(crate::theme::combo_width(ui))
                 .selected_text(shown(shown_name, cx.hint("keywords")))
                 .show_ui(ui, |ui| {
                     // "" turns off a set inherited from above.
@@ -1603,8 +1618,9 @@ impl Editor {
     fn terminal_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
         ui.label("Terminal type");
         ui.horizontal(|ui| {
+            crate::theme::sunken_combos(ui);
             egui::ComboBox::from_id_salt("term-type")
-                .width(250.0)
+                .width(crate::theme::combo_width(ui))
                 .selected_text(shown(self.term_type.clone(), cx.hint("terminal.term_type")))
                 .show_ui(ui, |ui| {
                     for t in TERM_TYPES {
@@ -1639,8 +1655,9 @@ impl Editor {
                     f.clone()
                 }
             });
+            crate::theme::sunken_combos(ui);
             egui::ComboBox::from_id_salt("terminal-font")
-                .width(250.0)
+                .width(crate::theme::combo_width(ui))
                 .height(320.0)
                 .selected_text(shown(shown_name, cx.hint("terminal.font")))
                 .show_ui(ui, |ui| {
@@ -1805,31 +1822,31 @@ fn section_help(
     title: &'static str,
     about: &str,
 ) {
-    ui.add_space(10.0);
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(title).strong());
-        let shown = *open == Some(title);
-        if ui
-            .selectable_label(shown, " ? ")
-            .on_hover_text("What is this?")
-            .clicked()
-        {
-            *open = if shown { None } else { Some(title) };
-        }
-    });
+    let shown = *open == Some(title);
+    let toggle = ui
+        .horizontal(|ui| {
+            crate::theme::section_title(ui, title);
+            ui.add_space(-8.0);
+            ui.selectable_label(shown, " ? ")
+                .on_hover_text("What is this?")
+                .clicked()
+        })
+        .inner;
+    if toggle {
+        *open = if shown { None } else { Some(title) };
+    }
     if *open == Some(title) {
         ui.weak(about);
+        ui.add_space(4.0);
     }
-    ui.add_space(2.0);
 }
 
 fn section(ui: &mut egui::Ui, title: &str, about: &str) {
-    ui.add_space(10.0);
-    ui.label(egui::RichText::new(title).strong());
+    crate::theme::section_title(ui, title);
     if !about.is_empty() {
         ui.weak(about);
+        ui.add_space(4.0);
     }
-    ui.add_space(2.0);
 }
 
 fn grid(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui)) {
@@ -1851,10 +1868,10 @@ fn choice_pick<T: Copy + PartialEq>(
 ) {
     ui.horizontal(|ui| {
         let effective = value.unwrap_or(inherited);
-        for &(v, text) in options {
-            if ui.selectable_label(effective == v, text).clicked() {
-                *value = Some(v);
-            }
+        let labels: Vec<&str> = options.iter().map(|o| o.1).collect();
+        let chosen = options.iter().position(|o| o.0 == effective);
+        if let Some(i) = crate::theme::segmented(ui, chosen, &labels) {
+            *value = Some(options[i].0);
         }
         reset(ui, value, hint);
     });
@@ -1865,7 +1882,7 @@ fn field(ui: &mut egui::Ui, label: &str, value: &mut String, hint: &str) {
     ui.add(
         egui::TextEdit::singleline(value)
             .hint_text(hint)
-            .desired_width(280.0),
+            .desired_width(crate::theme::FIELD_WIDTH),
     );
     ui.end_row();
 }
@@ -1968,10 +1985,9 @@ fn bool_pick(
 ) {
     ui.horizontal(|ui| {
         let effective = value.unwrap_or(inherited);
-        for (text, v) in [(labels[0], true), (labels[1], false)] {
-            if ui.selectable_label(effective == v, text).clicked() {
-                *value = Some(v);
-            }
+        let chosen = Some(if effective { 0 } else { 1 });
+        if let Some(i) = crate::theme::segmented(ui, chosen, &labels) {
+            *value = Some(i == 0);
         }
         match (value.is_some(), note) {
             (true, _) => reset(ui, value, hint),
@@ -1992,14 +2008,10 @@ fn save_pick(
 ) {
     ui.horizontal(|ui| {
         let effective = value.or(inherited);
-        for (text, v) in [
-            ("ask", None),
-            ("always", Some(true)),
-            ("never", Some(false)),
-        ] {
-            if ui.selectable_label(effective == v, text).clicked() {
-                *value = v;
-            }
+        let options = [None, Some(true), Some(false)];
+        let chosen = options.iter().position(|o| *o == effective);
+        if let Some(i) = crate::theme::segmented(ui, chosen, &["ask", "always", "never"]) {
+            *value = options[i];
         }
         if value.is_none()
             && let Some(note) = note

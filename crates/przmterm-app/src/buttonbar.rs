@@ -348,7 +348,7 @@ impl ButtonBarUi {
                         edit.error = None;
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Save").clicked() {
+                        if crate::theme::primary_button(ui, "Save").clicked() {
                             done = Some(true);
                         }
                         if ui.button("Cancel").clicked() || escape {
@@ -400,7 +400,7 @@ impl ButtonBarUi {
                 }
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("OK").clicked() || enter {
+                        if crate::theme::primary_button(ui, "OK").clicked() || enter {
                             done = Some(true);
                         }
                         if ui.button("Cancel").clicked() || escape {
