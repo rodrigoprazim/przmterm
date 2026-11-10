@@ -42,7 +42,12 @@ allow = [
     "Zlib",
 ]
 confidence-threshold = 0.8
-exceptions = []
+exceptions = [
+    # Mozilla's list of root certificates, as data under a permissive
+    # licence: used by the update check's HTTPS client (ureq).
+    { allow = ["CDLA-Permissive-2.0"], crate = "webpki-roots" },
+    { allow = ["CDLA-Permissive-2.0"], crate = "webpki-root-certs" },
+]
 
 [bans]
 multiple-versions = "allow"

@@ -21,6 +21,7 @@ pub mod bundle;
 pub mod buttons;
 pub mod keymap;
 pub mod location;
+pub mod preferences;
 pub mod securecrt;
 pub mod vault;
 

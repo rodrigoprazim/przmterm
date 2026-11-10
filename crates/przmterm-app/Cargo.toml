@@ -34,6 +34,11 @@ fontdb = { version = "0.24", default-features = false, features = ["std", "fs", 
 # Tells monospace fonts and fonts that can draw (not bitmap-only) apart; egui
 # already uses it.
 skrifa = "0.44"
+# Checking for a newer release on GitHub (src/update.rs): the system's
+# certificates, so proxies with their own work.
+ureq = { version = "3.5", default-features = false, features = ["rustls", "platform-verifier", "json"] }
+semver = "1"
+serde = { workspace = true }
 # The terminal grid on the GPU (see src/grid.rs): glyphs filled on the CPU
 # as egui does it, quads uploaded as plain bytes.
 vello_cpu = { version = "0.2", default-features = false, features = ["std", "u8_pipeline"] }

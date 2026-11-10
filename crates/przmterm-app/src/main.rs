@@ -16,6 +16,7 @@ mod pane;
 mod scriptguide;
 mod sftp;
 mod transfer;
+mod update;
 mod vault;
 mod view;
 
@@ -60,6 +61,9 @@ fn main() -> eframe::Result {
             let fonts = fonts::TermFonts::new(&cc.egui_ctx);
             let mut app = PrzmApp::new(fonts);
             app.menu_bar = appmenu::install(&cc.egui_ctx);
+            if app.prefs.check_for_updates {
+                app.update = Some(update::Check::start(&cc.egui_ctx));
+            }
             app.share_sessions();
             Ok(Box::new(app))
         }),
@@ -678,6 +682,12 @@ struct PrzmApp {
     menu_bar: Option<appmenu::MenuBar>,
     /// The About window, with the icon once loaded.
     about: Option<Option<egui::TextureHandle>>,
+    /// The app's own preferences (`preferences.toml`).
+    prefs: przmterm_session::preferences::Preferences,
+    /// The last check for a newer release, and whether its window is open
+    /// (a check at startup only shows in the status bar).
+    update: Option<update::Check>,
+    update_window: bool,
     /// Questions from scripts, asked one at a time.
     script_prompts: std::collections::VecDeque<ScriptPrompt>,
     /// A backup or export being restored or imported, and the folder name
@@ -752,6 +762,10 @@ enum Deletion {
 impl PrzmApp {
     fn new(fonts: fonts::TermFonts) -> Self {
         let config_dir = przmterm_session::default_config_dir();
+        let prefs = config_dir
+            .as_deref()
+            .map(przmterm_session::preferences::Preferences::load)
+            .unwrap_or_default();
         let shortcuts = keymap::Shortcuts::load(config_dir.as_deref());
         let buttons = buttonbar::ButtonBarUi::load(config_dir.as_deref());
         let sessions = config_dir
@@ -802,6 +816,9 @@ impl PrzmApp {
             script_guide: None,
             menu_bar: None,
             about: None,
+            prefs,
+            update: None,
+            update_window: false,
             transfer_dialog: None,
             paste_confirm: None,
             fonts,
@@ -2269,6 +2286,10 @@ impl PrzmApp {
             AppCommand::About => {
                 self.about.get_or_insert(None);
             }
+            AppCommand::CheckUpdates => {
+                self.update = Some(update::Check::start(ctx));
+                self.update_window = true;
+            }
             AppCommand::Settings => {
                 if let Some(dir) = &self.config_dir {
                     self.editor = Some(Editor::global(dir));
@@ -2300,6 +2321,63 @@ impl PrzmApp {
             AppCommand::Quit => {
                 ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
             }
+        }
+    }
+
+    /// The "Check for Updates" window.
+    fn update_ui(&mut self, ctx: &egui::Context) {
+        if !self.update_window {
+            return;
+        }
+        let outcome = self.update.as_ref().and_then(update::Check::outcome);
+        let mut open = true;
+        let mut check_at_start = self.prefs.check_for_updates;
+        egui::Window::new("Check for Updates")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .auto_sized()
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.set_max_width(320.0);
+                match &outcome {
+                    None => {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label("Looking for a newer release…");
+                        });
+                    }
+                    Some(update::Outcome::UpToDate) => {
+                        ui.label(format!(
+                            "PrzmTerm {} is the newest version.",
+                            przmterm_core::VERSION
+                        ));
+                    }
+                    Some(update::Outcome::Newer(found)) => {
+                        ui.strong(format!("PrzmTerm {} is available.", found.version));
+                        ui.label(format!("You have {}.", przmterm_core::VERSION));
+                        if ui.button("Open the Download Page").clicked() {
+                            ctx.open_url(egui::OpenUrl::new_tab(&found.url));
+                        }
+                    }
+                    Some(update::Outcome::Failed(e)) => {
+                        ui.label("Could not reach GitHub to check:");
+                        ui.weak(e);
+                    }
+                }
+                ui.add_space(6.0);
+                ui.checkbox(&mut check_at_start, "Check when PrzmTerm starts");
+            });
+        if check_at_start != self.prefs.check_for_updates {
+            self.prefs.check_for_updates = check_at_start;
+            if let Some(dir) = &self.config_dir
+                && let Err(e) = self.prefs.save(dir)
+            {
+                self.notice = Some(format!("Preferences not saved: {e}"));
+            }
+        }
+        if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.update_window = false;
         }
     }
 
@@ -2475,6 +2553,7 @@ impl PrzmApp {
         self.vault.lock();
         self.editor = None;
         self.keyword_editor = None;
+        self.prefs = przmterm_session::preferences::Preferences::load(dir);
         Ok(if copied > 0 {
             format!("Settings folder changed; {copied} file(s) copied.")
         } else {
@@ -3095,6 +3174,7 @@ impl PrzmApp {
         }
         self.folder_dialog_ui(ctx, center, escape);
         self.about_ui(ctx);
+        self.update_ui(ctx);
         if let Some(dialog) = &mut self.split_dialog {
             let tabs = &self.tabs;
             dialog
@@ -4381,11 +4461,25 @@ impl eframe::App for PrzmApp {
             });
         });
 
+        // A newer release found at startup: a link in the status bar.
+        let newer = match self.update.as_ref().and_then(update::Check::outcome) {
+            Some(update::Outcome::Newer(found)) => Some(found.version),
+            _ => None,
+        };
+        let mut open_update = false;
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
                 let pane = self.tab().pane();
                 let s = pane.term.screen();
                 ui.label(format!("PrzmTerm {}", przmterm_core::VERSION));
+                if let Some(version) = &newer
+                    && ui
+                        .link(format!("{version} available"))
+                        .on_hover_text("A newer PrzmTerm: see what is new and download it")
+                        .clicked()
+                {
+                    open_update = true;
+                }
                 ui.separator();
                 ui.label(format!("{}×{}", s.cols(), s.rows()));
                 ui.separator();
@@ -4512,6 +4606,9 @@ impl eframe::App for PrzmApp {
                 });
             });
         });
+        if open_update {
+            self.update_window = true;
+        }
 
         if self.sessions_hidden {
             egui::Panel::left("sessions-folded")
@@ -4692,6 +4789,10 @@ impl eframe::App for PrzmApp {
                                 }
                             }
                             ui.separator();
+                            if ui.button("Check for Updates…").clicked() {
+                                menu_command = Some(appmenu::AppCommand::CheckUpdates);
+                                ui.close();
+                            }
                             if ui.button("About PrzmTerm…").clicked() {
                                 menu_command = Some(appmenu::AppCommand::About);
                                 ui.close();

@@ -16,6 +16,11 @@ All notable changes to PrzmTerm are recorded here. The format follows
   (⌘Q) asks first when sessions are open, as closing the window does.
 - *About PrzmTerm* (also at the end of the **+** menu): the version, the
   developer and links to the project.
+- *Check for Updates…* (PrzmTerm menu on macOS, **+** menu elsewhere): asks
+  GitHub for the releases and points to the download page of a newer one.
+  PrzmTerm also checks when it starts and shows a newer version in the
+  status bar; a checkbox in the window turns that off (`preferences.toml`).
+  Proxies set in `HTTPS_PROXY` and the system's certificates are used.
 - The file browser (SFTP and SCP) sorts by a column when its header is
   clicked (again to reverse; folders stay on top), and has lines between
   the columns and under the headers.

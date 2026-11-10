@@ -41,6 +41,11 @@ longer want your sessions (see [Sessions](#sessions)).
 - **Linux:** unpack the `.tar.gz`; x86_64, needs a desktop with OpenGL or
   Vulkan.
 
+*Check for Updates…* (the PrzmTerm menu on macOS, the **+** menu elsewhere)
+looks for a newer release on GitHub; PrzmTerm also looks when it starts and
+shows a newer version in the status bar. It only points to the download
+page: nothing is installed for you.
+
 `SHA256SUMS.txt` lists every file's checksum. When it comes with
 `SHA256SUMS.txt.asc`, that is signed with the release key in
 [docs/release-key.asc](docs/release-key.asc), fingerprint
@@ -629,8 +634,9 @@ ready to sign through SignPath, each signing approved by hand.
 | Approvers | [Rodrigo Prazim](https://github.com/rodrigoprazim) |
 
 **Privacy:** PrzmTerm does not send any information to other networked
-systems unless the user asks for it: it connects only to the hosts you open,
-and has no telemetry and no update check.
+systems unless the user asks for it: it connects to the hosts you open and,
+when it starts, asks GitHub for the list of PrzmTerm releases to tell you of
+a newer one (turn that off in *Check for Updates…*). No telemetry.
 
 ## Contributing
 
