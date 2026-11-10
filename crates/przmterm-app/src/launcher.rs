@@ -61,8 +61,10 @@ fn catalog() -> Vec<Entry> {
 pub enum Request {
     /// Open the saved session with this label (see [`Entry::label`]).
     Open(String),
-    /// Connect to a host that is not saved.
-    Connect(Box<Session>),
+    /// Connect to a host that is not saved: a quick-connect string
+    /// ([`Session::quick_connect`]), checked; the app adds the global
+    /// settings.
+    Connect(String),
 }
 
 pub type Requests = Arc<Mutex<Vec<Request>>>;
@@ -233,7 +235,7 @@ impl Launcher {
             quick.push_str(port);
         }
         match Session::quick_connect(&quick) {
-            Ok(session) => self.request(Request::Connect(Box::new(session))),
+            Ok(_) => self.request(Request::Connect(quick)),
             Err(e) => self.error(&format!("ssh: {e}")),
         }
     }
@@ -245,7 +247,7 @@ impl Launcher {
             _ => return self.error("usage: telnet host [port]"),
         };
         match Session::quick_connect(&target) {
-            Ok(session) => self.request(Request::Connect(Box::new(session))),
+            Ok(_) => self.request(Request::Connect(target)),
             Err(e) => self.error(&format!("telnet: {e}")),
         }
     }
@@ -775,7 +777,7 @@ mod tests {
         t.write(b"ssh -p 2222 -l admin 10.0.0.9\r").unwrap();
         let got = std::mem::take(&mut *requests.lock().unwrap());
         match &got[..] {
-            [Request::Connect(s)] => assert_eq!(s.display_target(), "admin@10.0.0.9:2222"),
+            [Request::Connect(s)] => assert_eq!(s, "admin@10.0.0.9:2222"),
             other => panic!("{other:?}"),
         }
         // Names with spaces, typed or completed.

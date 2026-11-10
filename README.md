@@ -144,6 +144,8 @@ logging in again. Double-click a folder to open it and a file to download
 it; *Download…* takes several files or whole folders. *Upload files…*,
 *Upload folder…* or dropping files on the window sends them to the folder
 shown. Transfers run in the background with a progress bar and *Cancel*.
+Click a column's header to sort by it (name, size, date or permissions),
+again to reverse; folders stay on top.
 
 ### Xmodem, Ymodem and Zmodem
 
@@ -441,7 +443,10 @@ Some devices close a session when nobody types, whatever the keepalives.
 **Anti-idle** (*Automation* page of the editor) sends a text after that many
 seconds without typing: one character, sent as it is with no Enter after it
 (`anti_idle = ' '`), with `anti_idle_interval = 60` (the default;
-0 turns it off). SecureCRT's "Send string" setting is imported.
+0 turns it off). It keeps going while the window is minimized or hidden,
+waits until an SSH login is over, and applies to quick connects when set in
+the global settings; a change reaches open sessions at once. SecureCRT's
+"Send string" setting is imported.
 
 ### Telnet and serial
 

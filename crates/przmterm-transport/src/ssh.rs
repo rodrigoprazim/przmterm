@@ -334,6 +334,15 @@ impl Transport for SshTransport {
         self.pipe.is_closed()
     }
 
+    fn logged_in(&self) -> bool {
+        // Kept once the login (and its questions) is over.
+        self.shared
+            .lock()
+            .ok()
+            .and_then(|slot| slot.as_ref()?.upgrade())
+            .is_some()
+    }
+
     fn ending(&self) -> Option<Ending> {
         self.pipe.ending()
     }

@@ -8,6 +8,31 @@ use std::path::PathBuf;
 use eframe::egui;
 use przmterm_transport::sftp::{Entry, SftpClient, SftpEvent, join, parent};
 
+/// The column the list is sorted by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SortBy {
+    Name,
+    Size,
+    Modified,
+    Permissions,
+}
+
+/// Sorts a listing by `by`, folders always first; equal values by name.
+fn sort_entries(entries: &mut [Entry], by: SortBy, ascending: bool) {
+    let name = |e: &Entry| e.name.to_lowercase();
+    entries.sort_by(|a, b| {
+        let order = match by {
+            SortBy::Name => std::cmp::Ordering::Equal,
+            SortBy::Size => a.size.cmp(&b.size),
+            SortBy::Modified => a.modified.cmp(&b.modified),
+            SortBy::Permissions => a.permissions.cmp(&b.permissions),
+        }
+        .then_with(|| name(a).cmp(&name(b)));
+        let order = if ascending { order } else { order.reverse() };
+        b.is_dir.cmp(&a.is_dir).then(order)
+    });
+}
+
 enum State {
     Running,
     Done,
@@ -63,6 +88,8 @@ pub struct SftpBrowser {
     drag_from: Option<(egui::Pos2, BTreeSet<String>)>,
     /// The last row clicked, for Shift+click ranges.
     anchor: Option<String>,
+    /// The column the list is sorted by, and whether ascending.
+    sort: (SortBy, bool),
 }
 
 /// `1.2 MB`.
@@ -115,6 +142,7 @@ impl SftpBrowser {
             hidden: false,
             drag_from: None,
             anchor: None,
+            sort: (SortBy::Name, true),
         }
     }
 
@@ -195,6 +223,7 @@ impl SftpBrowser {
                 self.path_edit = dir.clone();
                 self.dir = dir;
                 self.entries = entries;
+                sort_entries(&mut self.entries, self.sort.0, self.sort.1);
                 self.error = None;
             }
             SftpEvent::Progress { id, done, total } => {
@@ -391,23 +420,73 @@ impl SftpBrowser {
         let list_h = (ui.available_height() - transfers_h - 44.0).max(120.0);
         let width = ui.available_width();
         let (name_w, size_w, date_w) = (width * 0.46, width * 0.14, width * 0.2);
+        let gap = ui.spacing().item_spacing.x;
+        let perm_w = (width - name_w - size_w - date_w - 3.0 * gap).max(40.0);
         let row_h = ui.spacing().interact_size.y;
-        let header = |ui: &mut egui::Ui, w: f32, text: &str| {
-            ui.allocate_ui_with_layout(
-                egui::vec2(w, row_h),
-                egui::Layout::left_to_right(egui::Align::Center),
-                |ui| {
+        // The headers: a click sorts by the column, again reverses it.
+        let sort = self.sort;
+        let mut sort_by = None;
+        let mut header = |ui: &mut egui::Ui, w: f32, text: &str, by: SortBy| {
+            let arrow = match sort {
+                (s, true) if s == by => " ▲",
+                (s, false) if s == by => " ▼",
+                _ => "",
+            };
+            // Under the text: the highlight, once hovering is known.
+            let highlight = ui.painter().add(egui::Shape::Noop);
+            // Sizes are right-aligned: so is their header.
+            let layout = if by == SortBy::Size {
+                egui::Layout::right_to_left(egui::Align::Center)
+            } else {
+                egui::Layout::left_to_right(egui::Align::Center)
+            };
+            let cell = ui
+                .allocate_ui_with_layout(egui::vec2(w, row_h), layout, |ui| {
                     ui.set_min_width(w);
-                    ui.strong(text);
-                },
-            );
+                    ui.add_space(if by == SortBy::Size { 12.0 } else { 4.0 });
+                    ui.strong(format!("{text}{arrow}"));
+                })
+                .response;
+            let click = ui
+                .interact(
+                    cell.rect,
+                    ui.scope_id().with(("sort", text)),
+                    egui::Sense::click(),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(format!("Sort by {}", text.to_lowercase()));
+            if click.hovered() {
+                ui.painter().set(
+                    highlight,
+                    egui::epaint::RectShape::filled(
+                        cell.rect,
+                        2.0,
+                        ui.visuals().widgets.hovered.weak_bg_fill,
+                    ),
+                );
+            }
+            if click.clicked() {
+                sort_by = Some(by);
+            }
+            cell.rect
         };
-        ui.horizontal(|ui| {
-            header(ui, name_w, "Name");
-            header(ui, size_w, "Size");
-            header(ui, date_w, "Modified");
-            ui.strong("Permissions");
-        });
+        let headers = ui
+            .horizontal(|ui| {
+                [
+                    header(ui, name_w, "Name", SortBy::Name),
+                    header(ui, size_w, "Size", SortBy::Size),
+                    header(ui, date_w, "Modified", SortBy::Modified),
+                    header(ui, perm_w, "Permissions", SortBy::Permissions),
+                ]
+            })
+            .inner;
+        if let Some(by) = sort_by {
+            self.sort = match self.sort {
+                (s, ascending) if s == by => (by, !ascending),
+                _ => (by, true),
+            };
+            sort_entries(&mut self.entries, self.sort.0, self.sort.1);
+        }
         let mut open_dir = None;
         let mut download = None;
         let (multi, range) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
@@ -467,7 +546,7 @@ impl SftpBrowser {
                             egui::Layout::left_to_right(egui::Align::Center),
                             |ui| {
                                 ui.set_min_width(date_w);
-                                ui.add_space(12.0);
+                                ui.add_space(4.0);
                                 ui.label(e.modified.map_or(String::new(), |t| {
                                     chrono::DateTime::from_timestamp(t as i64, 0)
                                         .map(|d| {
@@ -479,6 +558,7 @@ impl SftpBrowser {
                                 }));
                             },
                         );
+                        ui.add_space(4.0);
                         ui.monospace(
                             e.permissions
                                 .map(|m| mode_text(m, e.is_dir))
@@ -526,6 +606,18 @@ impl SftpBrowser {
                     }
                 }
             });
+        // Lines between the columns, and under the headers.
+        let line = ui.visuals().widgets.noninteractive.bg_stroke;
+        let (top, bottom) = (headers[0].top(), list.inner_rect.bottom());
+        for cell in &headers[..3] {
+            let x = cell.right() + gap / 2.0;
+            ui.painter().vline(x, top..=bottom, line);
+        }
+        ui.painter().hline(
+            headers[0].left()..=list.inner_rect.right(),
+            headers[0].bottom() + ui.spacing().item_spacing.y / 2.0,
+            line,
+        );
         self.box_select(ui, list.inner_rect, &rows, multi);
         if let Some(d) = open_dir {
             self.go(&d);
@@ -770,6 +862,35 @@ impl SftpBrowser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sorts_by_column_folders_first() {
+        let e = |name: &str, dir: bool, size: u64, modified: u64| Entry {
+            name: name.into(),
+            is_dir: dir,
+            is_link: false,
+            size,
+            modified: Some(modified),
+            permissions: Some(if dir { 0o755 } else { 0o644 }),
+        };
+        let mut list = vec![
+            e("b.log", false, 10, 3),
+            e("etc", true, 0, 1),
+            e("A.txt", false, 300, 1),
+            e("bin", true, 0, 2),
+            e("c.conf", false, 10, 2),
+        ];
+        let names = |l: &[Entry]| l.iter().map(|e| e.name.clone()).collect::<Vec<_>>();
+        sort_entries(&mut list, SortBy::Name, true);
+        assert_eq!(names(&list), ["bin", "etc", "A.txt", "b.log", "c.conf"]);
+        sort_entries(&mut list, SortBy::Name, false);
+        assert_eq!(names(&list), ["etc", "bin", "c.conf", "b.log", "A.txt"]);
+        // Equal sizes by name; folders stay on top.
+        sort_entries(&mut list, SortBy::Size, false);
+        assert_eq!(names(&list), ["etc", "bin", "A.txt", "c.conf", "b.log"]);
+        sort_entries(&mut list, SortBy::Modified, true);
+        assert_eq!(names(&list), ["etc", "bin", "A.txt", "c.conf", "b.log"]);
+    }
 
     #[test]
     fn sizes_and_modes() {

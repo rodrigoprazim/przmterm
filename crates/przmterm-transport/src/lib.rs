@@ -97,6 +97,13 @@ pub trait Transport: Send {
         false
     }
 
+    /// Whether what is written goes to the far end, rather than to a
+    /// question the transport asks itself while logging in (SSH: password,
+    /// host key, keeping the password). Default: always.
+    fn logged_in(&self) -> bool {
+        true
+    }
+
     /// Why the session ended, once it has (and the transport knows).
     fn ending(&self) -> Option<Ending> {
         None

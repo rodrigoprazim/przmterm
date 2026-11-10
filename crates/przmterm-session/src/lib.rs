@@ -485,6 +485,21 @@ impl SessionSettings {
         toml::from_str(text)
     }
 
+    /// The anti-idle text and interval these settings give
+    /// ([`Session::anti_idle`]); `None` when off.
+    pub fn anti_idle(&self) -> Option<(String, std::time::Duration)> {
+        let secs = self
+            .anti_idle_interval
+            .unwrap_or(DEFAULT_ANTI_IDLE_INTERVAL);
+        match self.anti_idle.as_deref() {
+            Some(text) if !text.is_empty() && secs > 0 => Some((
+                text.chars().take(ANTI_IDLE_MAX).collect(),
+                std::time::Duration::from_secs(u64::from(secs)),
+            )),
+            _ => None,
+        }
+    }
+
     /// TOML with only the keys that are set.
     pub fn to_toml(&self) -> String {
         toml::to_string(self).unwrap_or_default()
@@ -732,18 +747,7 @@ impl Session {
                 .logon_script
                 .clone()
                 .filter(|k| !k.trim().is_empty()),
-            anti_idle: match (
-                settings.anti_idle.as_deref(),
-                settings
-                    .anti_idle_interval
-                    .unwrap_or(DEFAULT_ANTI_IDLE_INTERVAL),
-            ) {
-                (Some(text), secs) if !text.is_empty() && secs > 0 => Some((
-                    text.chars().take(ANTI_IDLE_MAX).collect(),
-                    std::time::Duration::from_secs(u64::from(secs)),
-                )),
-                _ => None,
-            },
+            anti_idle: settings.anti_idle(),
             scp_shell: settings
                 .scp_shell
                 .clone()
@@ -803,19 +807,27 @@ impl Session {
     /// or `serial://PORT[@BAUD]` (`serial:///dev/ttyUSB0@115200`, `serial://COM3`).
     /// A leading `-v` turns on [`Session::debug`], as with `ssh -v`.
     pub fn quick_connect(target: &str) -> Result<Session, String> {
+        Self::quick_connect_with(target, &SessionSettings::default())
+    }
+
+    /// [`Session::quick_connect`] on top of `defaults` (the global
+    /// settings): what the string gives (protocol, host, port, user, serial
+    /// port and speed) wins, the rest (terminal, anti-idle, logging…) comes
+    /// from `defaults`.
+    pub fn quick_connect_with(target: &str, defaults: &SessionSettings) -> Result<Session, String> {
         let target = target.trim();
         if let Some(rest) = target
             .strip_prefix("-v ")
             .or_else(|| target.strip_prefix("-vvv "))
         {
-            let mut session = Session::quick_connect(rest)?;
+            let mut session = Session::quick_connect_with(rest, defaults)?;
             session.debug = true;
             return Ok(session);
         }
         let (protocol, rest) = match target.split_once("://") {
             Some(("ssh", rest)) => (Protocol::Ssh, rest),
             Some(("telnet", rest)) => (Protocol::Telnet, rest),
-            Some(("serial", rest)) => return Self::quick_serial(target, rest),
+            Some(("serial", rest)) => return Self::quick_serial(target, rest, defaults),
             Some((scheme, _)) => return Err(format!("unsupported protocol `{scheme}`")),
             None => (Protocol::Ssh, target),
         };
@@ -857,10 +869,20 @@ impl Session {
             username,
             ..SessionSettings::default()
         };
-        Session::resolve(target, Vec::new(), PathBuf::new(), &settings).map_err(|e| e.to_string())
+        Session::resolve(
+            target,
+            Vec::new(),
+            PathBuf::new(),
+            &defaults.overlay(&settings),
+        )
+        .map_err(|e| e.to_string())
     }
 
-    fn quick_serial(target: &str, rest: &str) -> Result<Session, String> {
+    fn quick_serial(
+        target: &str,
+        rest: &str,
+        defaults: &SessionSettings,
+    ) -> Result<Session, String> {
         let (port, baud) = match rest.rsplit_once('@') {
             Some((port, baud)) => {
                 let baud = baud
@@ -879,7 +901,13 @@ impl Session {
             baud_rate: baud,
             ..SessionSettings::default()
         };
-        Session::resolve(target, Vec::new(), PathBuf::new(), &settings).map_err(|e| e.to_string())
+        Session::resolve(
+            target,
+            Vec::new(),
+            PathBuf::new(),
+            &defaults.overlay(&settings),
+        )
+        .map_err(|e| e.to_string())
     }
 
     /// Keychain account for saved passwords (`user@host:port`), when the user is known.
@@ -1656,6 +1684,28 @@ mod tests {
         assert_eq!(merged.username.as_deref(), Some("admin"));
         assert_eq!(merged.port, Some(22));
         assert_eq!(merged.terminal.scrollback, Some(500));
+    }
+
+    #[test]
+    fn quick_connect_takes_the_global_settings() {
+        let defaults = SessionSettings {
+            username: Some("admin".into()),
+            port: Some(2222),
+            anti_idle: Some("#".into()),
+            anti_idle_interval: Some(30),
+            ..SessionSettings::default()
+        };
+        // Not the port: it belongs to the protocol typed (or SSH).
+        let s = Session::quick_connect_with("10.0.0.1", &defaults).unwrap();
+        assert_eq!(s.display_target(), "admin@10.0.0.1:22");
+        assert_eq!(
+            s.anti_idle,
+            Some(("#".into(), std::time::Duration::from_secs(30)))
+        );
+        // What is typed wins.
+        let s = Session::quick_connect_with("-v root@10.0.0.1:22", &defaults).unwrap();
+        assert_eq!(s.display_target(), "root@10.0.0.1:22");
+        assert!(s.debug && s.anti_idle.is_some());
     }
 
     #[test]

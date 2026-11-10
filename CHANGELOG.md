@@ -16,6 +16,21 @@ All notable changes to PrzmTerm are recorded here. The format follows
   (⌘Q) asks first when sessions are open, as closing the window does.
 - *About PrzmTerm* (also at the end of the **+** menu): the version, the
   developer and links to the project.
+- The file browser (SFTP and SCP) sorts by a column when its header is
+  clicked (again to reverse; folders stay on top), and has lines between
+  the columns and under the headers.
+
+### Fixed
+
+- Anti-idle was not sent while the window was minimized or hidden: the
+  sessions' work (reading, logging, triggers, scripts, transfers, anti-idle,
+  reconnecting) now runs whether or not the window is drawn.
+- Quick connects (the toolbar, and `ssh host` / `telnet host` in the
+  PrzmTerm shell) ignored the global settings: they now take them (anti-idle,
+  terminal, logging…), with what was typed (host, port, user) winning.
+- A changed anti-idle reaches sessions already open, without reconnecting;
+  and it no longer types into the password or keychain questions of an SSH
+  login.
 
 ## [0.9.0] - 2026-11-08
 

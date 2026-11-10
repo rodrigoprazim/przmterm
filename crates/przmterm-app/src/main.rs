@@ -821,6 +821,30 @@ impl PrzmApp {
             self.sessions = SessionTree::load(dir);
         }
         self.share_sessions();
+        self.refresh_anti_idle();
+    }
+
+    /// Open sessions take a changed anti-idle at once: a saved session from
+    /// its file (and folders), a quick connect from the global settings.
+    fn refresh_anti_idle(&mut self) {
+        let saved = self.sessions.root.all_sessions();
+        let global = self.sessions.root.inherited.anti_idle();
+        for pane in self.tabs.iter_mut().flat_map(|t| &mut t.panes) {
+            if pane.is_launcher() {
+                continue;
+            }
+            let Some(origin) = &mut pane.origin else {
+                continue;
+            };
+            origin.anti_idle = if origin.path.as_os_str().is_empty() {
+                global.clone()
+            } else {
+                match saved.iter().find(|s| s.path == origin.path) {
+                    Some(session) => session.anti_idle.clone(),
+                    None => continue,
+                }
+            };
+        }
     }
 
     /// Tells the PrzmTerm shells which sessions there are, and gives them the
@@ -934,7 +958,9 @@ impl PrzmApp {
             for (p, pane) in tab.panes.iter_mut().enumerate() {
                 for request in pane.take_requests() {
                     let session = match request {
-                        launcher::Request::Connect(session) => Some(*session),
+                        launcher::Request::Connect(target) => {
+                            Session::quick_connect_with(&target, &self.sessions.root.inherited).ok()
+                        }
                         launcher::Request::Open(label) => self
                             .sessions
                             .root
@@ -4194,6 +4220,28 @@ fn folder_ui(
 }
 
 impl eframe::App for PrzmApp {
+    /// What sessions do on their own: read, log, answer triggers, run
+    /// scripts and transfers, send anti-idle, reconnect. eframe calls this
+    /// before each frame, and also while the window is minimized or hidden,
+    /// when it draws nothing and calls no `ui`.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Every pane keeps reading, visible or not.
+        let mut got = false;
+        for tab in &mut self.tabs {
+            for pane in &mut tab.panes {
+                got |= pane.pump();
+            }
+        }
+        if got {
+            ctx.request_repaint();
+        }
+        self.run_retries(ctx);
+        self.run_queues(ctx);
+        self.run_scripts();
+        self.run_sftp_pending(ctx);
+        self.run_transfers(ctx);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // A glyph atlas that filled up last frame starts over.
         grid::atlas().begin_frame();
@@ -4220,22 +4268,8 @@ impl eframe::App for PrzmApp {
             }
         }
 
-        // Every pane keeps reading, visible or not.
-        let mut got = false;
-        for tab in &mut self.tabs {
-            for pane in &mut tab.panes {
-                got |= pane.pump();
-            }
-        }
-        if got {
-            ctx.request_repaint();
-        }
+        // The sessions' own work runs in `logic`, before this.
         actions.extend(self.launcher_requests());
-        self.run_retries(&ctx);
-        self.run_queues(&ctx);
-        self.run_scripts();
-        self.run_sftp_pending(&ctx);
-        self.run_transfers(&ctx);
         // "Send to all" is for split panes: off when the tab has one pane.
         if self.tab().panes.len() < 2 {
             self.broadcast = false;
@@ -4259,7 +4293,10 @@ impl eframe::App for PrzmApp {
                 );
                 let submitted = edit.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
                 if ui.button("Connect").clicked() || submitted {
-                    match Session::quick_connect(&self.quick_connect) {
+                    match Session::quick_connect_with(
+                        &self.quick_connect,
+                        &self.sessions.root.inherited,
+                    ) {
                         Ok(session) => {
                             self.quick_error = None;
                             actions.push(Action::Open(Box::new(session)));

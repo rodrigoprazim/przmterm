@@ -791,6 +791,10 @@ impl Pane {
         if self.transport.is_closed() || !self.heard || self.in_band_transfer() {
             return None;
         }
+        // Not into the password or keychain question of an SSH login.
+        if !self.transport.logged_in() {
+            return Some(now + std::time::Duration::from_secs(1));
+        }
         let due = self.last_sent + every;
         if now < due {
             return Some(due);
@@ -1120,6 +1124,67 @@ mod tests {
         pane.origin = Some(session);
         pane.transport = Box::new(Ended(ending));
         pane
+    }
+
+    /// An open SSH-like transport that keeps what is written, logged in or
+    /// still asking its own questions.
+    struct Open {
+        written: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+        logged_in: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl Transport for Open {
+        fn protocol(&self) -> Protocol {
+            Protocol::Ssh
+        }
+        fn read(&mut self, _: &mut [u8]) -> Result<usize, TransportError> {
+            Ok(0)
+        }
+        fn write(&mut self, data: &[u8]) -> Result<(), TransportError> {
+            self.written.lock().unwrap().extend_from_slice(data);
+            Ok(())
+        }
+        fn resize(&mut self, _: Size) -> Result<(), TransportError> {
+            Ok(())
+        }
+        fn close(&mut self) -> Result<(), TransportError> {
+            Ok(())
+        }
+        fn logged_in(&self) -> bool {
+            self.logged_in.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    #[test]
+    fn anti_idle_waits_for_the_login() {
+        use std::sync::atomic::Ordering;
+        use std::time::{Duration, Instant};
+        let mut session = Session::quick_connect("10.0.0.1").unwrap();
+        session.anti_idle = Some(("#".into(), Duration::from_secs(10)));
+        let transport = Open {
+            written: Default::default(),
+            logged_in: Default::default(),
+        };
+        let (written, logged_in) = (transport.written.clone(), transport.logged_in.clone());
+        let mut pane = Pane::launcher();
+        pane.origin = Some(session);
+        pane.transport = Box::new(transport);
+        pane.heard = true;
+        // Nothing sent for longer than the interval.
+        let now = Instant::now();
+        pane.last_sent = now.checked_sub(Duration::from_secs(11)).unwrap();
+        // Due, but the password question is still up: look again soon.
+        assert_eq!(pane.anti_idle(now), Some(now + Duration::from_secs(1)));
+        pane.run_queue(now);
+        assert!(written.lock().unwrap().is_empty());
+        // Logged in: sent as it is, and again an interval later.
+        logged_in.store(true, Ordering::Relaxed);
+        assert_eq!(pane.anti_idle(now), Some(now + Duration::from_secs(10)));
+        pane.run_queue(now);
+        assert_eq!(&*written.lock().unwrap(), b"#");
+        assert!(pane.anti_idle(now + Duration::from_secs(5)).is_some());
+        pane.run_queue(now + Duration::from_secs(5));
+        assert_eq!(&*written.lock().unwrap(), b"#");
     }
 
     #[test]
