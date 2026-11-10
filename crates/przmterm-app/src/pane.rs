@@ -785,6 +785,17 @@ impl Pane {
                     self.queue_at = Some(at);
                     return Some(at);
                 }
+                // Buttons and shortcuts fill these in before queueing;
+                // elsewhere (triggers) nothing is typed for them.
+                Chunk::Vault { entry, .. } => {
+                    self.term.feed(
+                        format!(
+                            "\x1b[33m[{{vault:{entry}}}: only buttons and shortcuts type \
+                             vault entries]\x1b[0m\r\n"
+                        )
+                        .as_bytes(),
+                    );
+                }
             }
         }
         None

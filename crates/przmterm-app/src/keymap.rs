@@ -437,6 +437,8 @@ pub struct KeymapEditor {
     edit: Option<Edit>,
     changed: bool,
     error: Option<String>,
+    /// The Vault menu asked for the vault to be unlocked.
+    pub unlock_request: bool,
 }
 
 pub enum KeymapResult {
@@ -452,6 +454,7 @@ impl KeymapEditor {
             edit: None,
             changed: false,
             error: (!shortcuts.errors.is_empty()).then(|| shortcuts.errors.join("\n")),
+            unlock_request: false,
         }
     }
 
@@ -470,6 +473,7 @@ impl KeymapEditor {
         ctx: &egui::Context,
         config_dir: &Path,
         buttons: &[String],
+        vault: Option<&[String]>,
     ) -> KeymapResult {
         let mut open = true;
         let mut close = false;
@@ -604,7 +608,7 @@ impl KeymapEditor {
                 });
                 ui.weak("Copy and paste (⌘C/⌘V, Ctrl+Shift+C/V) cannot be changed.");
             });
-        self.edit_dialog(ctx, config_dir, buttons);
+        self.edit_dialog(ctx, config_dir, buttons, vault);
         if self.changed {
             self.changed = false;
             let defaults = compile(&defaults()).0;
@@ -643,7 +647,14 @@ impl KeymapEditor {
         }
     }
 
-    fn edit_dialog(&mut self, ctx: &egui::Context, config_dir: &Path, buttons: &[String]) {
+    fn edit_dialog(
+        &mut self,
+        ctx: &egui::Context,
+        config_dir: &Path,
+        buttons: &[String],
+        vault: Option<&[String]>,
+    ) {
+        let unlock_request = &mut self.unlock_request;
         let Some(edit) = &mut self.edit else { return };
         // Recording: the next key pressed with its modifiers. The modifiers
         // arrive as keys of their own first: they are held, not recorded.
@@ -773,8 +784,23 @@ impl KeymapEditor {
                                         .desired_rows(5)
                                         .desired_width(field),
                                 );
-                                ui.weak(
-                                    "\\r Enter   \\n line feed   \\t Tab   \\e Esc   \\p pause 1 s",
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(field, row_h),
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        ui.set_min_width(field);
+                                        ui.weak("\\r Enter   \\t Tab   \\e Esc   \\p pause 1 s");
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                *unlock_request |= crate::buttonbar::vault_menu(
+                                                    ui,
+                                                    &mut edit.text,
+                                                    vault,
+                                                );
+                                            },
+                                        );
+                                    },
                                 );
                             });
                         }

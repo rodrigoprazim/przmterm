@@ -252,9 +252,18 @@ What an AI assistant connected through `przm mcp` may do with the session.
 | `\e` | Escape |
 | `\p` | nothing: waits one second |
 | `\\` | a backslash |
+| `{vault:NAME}` | the password of the vault entry NAME |
+| `{vault:NAME:username}` | its user name |
+| `{vault:NAME:passphrase}` | its key passphrase |
 
 Write `send` in single quotes (`'show run\r'`) so TOML keeps the
 backslashes for PrzmTerm.
+
+The `{vault:…}` pieces work in buttons and shortcuts: the file names the
+entry, and the secret stays in the encrypted [vault](#password-vault-vaulttoml).
+When the button or shortcut is used, PrzmTerm asks for the master password
+if the vault is locked, then types the value. If the entry or the field is
+missing, nothing is sent. Triggers do not type vault entries.
 
 ## Button bar: `buttons.toml`
 

@@ -200,7 +200,11 @@ adds or deletes groups, or shows or hides all the group's tooltips. **+** on
 the bar adds a button; right-click a button to edit, move or delete it (or
 turn its tooltip off). A button sends to the current session. In
 the text, `\r` is Enter, `\t` Tab, `\e` Esc, `\n` a line feed and `\p` a
-one-second pause. Buttons are kept in `<config>/buttons.toml`:
+one-second pause. **Vault ▾** next to the text adds `{vault:NAME}`, which
+types the password of that [vault](#password-vault) entry
+(`{vault:NAME:username}` its user name): the button keeps only the entry's
+name, and the vault is unlocked first if it is locked. Shortcuts that send
+text take the same. Buttons are kept in `<config>/buttons.toml`:
 
 ```toml
 [[group]]
