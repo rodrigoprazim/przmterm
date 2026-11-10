@@ -84,6 +84,9 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Fixed
 
+- macOS: PrzmTerm run outside the app bundle (`cargo run`) is called
+  PrzmTerm in the menu bar and the Dock, not `przmterm`: the executable
+  carries its own Info.plist.
 - `session.username` in scripts is the user name the session logs in with:
   its vault entry's while the vault is open, as the script guide said.
 - The session list indents sessions like folders: each name sits one step
