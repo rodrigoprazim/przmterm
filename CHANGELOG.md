@@ -43,6 +43,12 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Added
 
+- The user guide, [docs/GUIDE.md](docs/GUIDE.md), organised by task; the
+  README keeps the introduction, installation and a short start.
+- The scripting reference, [docs/SCRIPTING.md](docs/SCRIPTING.md): every
+  function, how waiting works, errors, scripts through MCP and the
+  examples.
+- `session.wait_for([…], seconds)` takes fractional seconds too.
 - Buttons and shortcuts can type passwords from the vault:
   `{vault:NAME}` in the text to send types the entry's password
   (`{vault:NAME:username}` its user name), added from the **Vault ▾** menu
@@ -81,6 +87,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
 - macOS: PrzmTerm run outside the app bundle (`cargo run`) is called
   PrzmTerm in the menu bar and the Dock, not `przmterm`: the executable
   carries its own Info.plist.
+- `session.username` in scripts is the user name the session logs in with:
+  its vault entry's while the vault is open, as the script guide said.
 - The session list indents sessions like folders: each name sits one step
   in from its folder's name, with a small session icon where folders have
   theirs.
@@ -100,6 +108,12 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Added
 
+- The user guide, [docs/GUIDE.md](docs/GUIDE.md), organised by task; the
+  README keeps the introduction, installation and a short start.
+- The scripting reference, [docs/SCRIPTING.md](docs/SCRIPTING.md): every
+  function, how waiting works, errors, scripts through MCP and the
+  examples.
+- `session.wait_for([…], seconds)` takes fractional seconds too.
 - macOS releases come as `PrzmTerm.app` on a disk image (drag it to
   Applications) instead of loose binaries: it has an icon, sits in the Dock,
   opens without a Terminal window and asks for local network access like
@@ -210,6 +224,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Fixed
 
+- `session.username` in scripts is the user name the session logs in with:
+  its vault entry's while the vault is open, as the script guide said.
 - `ssh` and `open` in the PrzmTerm shell take session names with spaces and
   dashes (`ssh Lab/Core - DB`, quotes allowed), and Tab completes them.
 - Tab in the PrzmTerm shell lists many matching sessions under their
@@ -241,6 +257,12 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Added
 
+- The user guide, [docs/GUIDE.md](docs/GUIDE.md), organised by task; the
+  README keeps the introduction, installation and a short start.
+- The scripting reference, [docs/SCRIPTING.md](docs/SCRIPTING.md): every
+  function, how waiting works, errors, scripts through MCP and the
+  examples.
+- `session.wait_for([…], seconds)` takes fractional seconds too.
 - SFTP browser: *File Browser › SFTP* in the tab menu or in a session's menu
   in the list (connects first if needed), or a keyboard shortcut, opens a
   window on the same SSH connection, with no new login. Browse folders (path
@@ -301,6 +323,12 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Added
 
+- The user guide, [docs/GUIDE.md](docs/GUIDE.md), organised by task; the
+  README keeps the introduction, installation and a short start.
+- The scripting reference, [docs/SCRIPTING.md](docs/SCRIPTING.md): every
+  function, how waiting works, errors, scripts through MCP and the
+  examples.
+- `session.wait_for([…], seconds)` takes fractional seconds too.
 - Scripts in [Rhai](https://rhai.rs) (`<config>/scripts/*.rhai`): a
   `session` object with `send`, `wait_for` (one text or a list, with a
   timeout), `read_until`, `name`, `host` and `username`, plus `log`/`print`,
@@ -327,6 +355,12 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Added
 
+- The user guide, [docs/GUIDE.md](docs/GUIDE.md), organised by task; the
+  README keeps the introduction, installation and a short start.
+- The scripting reference, [docs/SCRIPTING.md](docs/SCRIPTING.md): every
+  function, how waiting works, errors, scripts through MCP and the
+  examples.
+- `session.wait_for([…], seconds)` takes fractional seconds too.
 - Keyword highlighting: named keyword sets in `<config>/keywords/*.toml`,
   each a list of whole words or regular expressions (lookaround allowed)
   with a text colour, optional background and bold. Chosen per session,
@@ -406,6 +440,12 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Added
 
+- The user guide, [docs/GUIDE.md](docs/GUIDE.md), organised by task; the
+  README keeps the introduction, installation and a short start.
+- The scripting reference, [docs/SCRIPTING.md](docs/SCRIPTING.md): every
+  function, how waiting works, errors, scripts through MCP and the
+  examples.
+- `session.wait_for([…], seconds)` takes fractional seconds too.
 - Keepalive interval per session (`keepalive`, seconds; 0 turns it off):
   SSH keepalives, Telnet NOPs. Default 30 s.
 - Import from SecureCRT (**+** › *Import from SecureCRT…*, or
@@ -451,6 +491,12 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Added
 
+- The user guide, [docs/GUIDE.md](docs/GUIDE.md), organised by task; the
+  README keeps the introduction, installation and a short start.
+- The scripting reference, [docs/SCRIPTING.md](docs/SCRIPTING.md): every
+  function, how waiting works, errors, scripts through MCP and the
+  examples.
+- `session.wait_for([…], seconds)` takes fractional seconds too.
 - Telnet sessions with option negotiation: the server echoes (ECHO),
   character mode (SGA), 8-bit (BINARY), terminal type (TTYPE) and window size
   (NAWS, sent again on resize). Unknown options are refused without loops.
@@ -487,6 +533,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Fixed
 
+- `session.username` in scripts is the user name the session logs in with:
+  its vault entry's while the vault is open, as the script guide said.
 - Renaming a folder or session by changing only letter case (`GeOFibra` →
   `GeoFibra`) failed with "already exists" on macOS and Windows; renaming a
   session that way could lose its file. Saving a session never overwrites
@@ -501,6 +549,12 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Added
 
+- The user guide, [docs/GUIDE.md](docs/GUIDE.md), organised by task; the
+  README keeps the introduction, installation and a short start.
+- The scripting reference, [docs/SCRIPTING.md](docs/SCRIPTING.md): every
+  function, how waiting works, errors, scripts through MCP and the
+  examples.
+- `session.wait_for([…], seconds)` takes fractional seconds too.
 - Tabs and split panes (side by side or stacked). A new tab or pane opens the
   same session. Shortcuts: Ctrl+Shift+T / ⌘⇧T new tab, Ctrl+Shift+D and
   Ctrl+Shift+E split, Ctrl+Shift+W close pane, Ctrl+Tab next tab.
@@ -544,6 +598,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Fixed
 
+- `session.username` in scripts is the user name the session logs in with:
+  its vault entry's while the vault is open, as the script guide said.
 - A password followed by a two-factor prompt (keyboard-interactive in two
   rounds) was never saved, and a saved password was wrongly dropped when the
   token prompt came. The password is now saved and reused; the token is always asked.
@@ -554,6 +610,12 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Added
 
+- The user guide, [docs/GUIDE.md](docs/GUIDE.md), organised by task; the
+  README keeps the introduction, installation and a short start.
+- The scripting reference, [docs/SCRIPTING.md](docs/SCRIPTING.md): every
+  function, how waiting works, errors, scripts through MCP and the
+  examples.
+- `session.wait_for([…], seconds)` takes fractional seconds too.
 - SSH sessions: password, public key files, ssh-agent (Pageant and the OpenSSH
   agent on Windows) and keyboard-interactive (2FA) authentication.
 - Host keys are checked against PrzmTerm's own `known_hosts` and, read-only,
@@ -572,6 +634,12 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Added
 
+- The user guide, [docs/GUIDE.md](docs/GUIDE.md), organised by task; the
+  README keeps the introduction, installation and a short start.
+- The scripting reference, [docs/SCRIPTING.md](docs/SCRIPTING.md): every
+  function, how waiting works, errors, scripts through MCP and the
+  examples.
+- `session.wait_for([…], seconds)` takes fractional seconds too.
 - Cargo workspace with `core`, `transport`, `term`, `session`, `cli` and `app` crates.
 - Command bus shared by every front end.
 - `Transport` trait and an in-memory loopback transport.
