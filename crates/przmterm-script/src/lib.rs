@@ -275,6 +275,15 @@ fn engine(api: &Api) -> Engine {
                 })
             },
         )
+        .register_fn(
+            "wait_for",
+            |s: &mut Api, list: Array, timeout: f64| -> R<i64> {
+                Ok(match s.wait(&strings(&list)?, seconds(timeout))? {
+                    Found::Match(i, _) => i as i64,
+                    _ => -1,
+                })
+            },
+        )
         // read_until(text) → the output before `text`; an error if the
         // session closes or the timeout runs out first.
         .register_fn("read_until", |s: &mut Api, text: &str| {
@@ -681,5 +690,57 @@ mod tests {
             Outcome::Failed(e) => assert!(e.contains("cannot read"), "{e}"),
             o => panic!("{o:?}"),
         }
+    }
+
+    /// docs/SCRIPTING.md names everything scripts can call, and every
+    /// example script is listed there.
+    #[test]
+    fn the_reference_covers_the_api_and_the_examples() {
+        let doc = include_str!("../../../docs/SCRIPTING.md");
+        let source = include_str!("lib.rs");
+        let mut names: Vec<&str> = Vec::new();
+        for call in ["register_fn(", "register_get("] {
+            for piece in source.split(call).skip(1) {
+                let piece = piece.trim_start();
+                if let Some(rest) = piece.strip_prefix('"')
+                    && let Some(end) = rest.find('"')
+                    && rest[..end]
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+                {
+                    names.push(&rest[..end]);
+                }
+            }
+        }
+        names.extend(["print", "debug"]);
+        assert!(names.len() > 8, "{names:?}");
+        for name in names {
+            assert!(
+                doc.contains(&format!("{name}(")) || doc.contains(&format!("session.{name}`")),
+                "{name} is not in docs/SCRIPTING.md"
+            );
+        }
+        for example in &EXAMPLES {
+            assert!(
+                doc.contains(&format!("| `{}` |", example.name)),
+                "{} is not listed",
+                example.name
+            );
+        }
+        // The examples in the reference compile.
+        let mut lines = doc.lines();
+        let mut checked = 0;
+        while let Some(line) = lines.next() {
+            if line.trim() == "```rhai" {
+                let code: String = lines
+                    .by_ref()
+                    .take_while(|l| l.trim() != "```")
+                    .map(|l| format!("{l}\n"))
+                    .collect();
+                assert_eq!(check(&code), Ok(()), "{code}");
+                checked += 1;
+            }
+        }
+        assert!(checked >= 7, "{checked}");
     }
 }

@@ -91,8 +91,8 @@ if !session.wait_for("ready", 5) {
     Topic {
         title: "Session details",
         text: "session.name is the session's name, session.host its host (or serial \
-port) and session.username its user name, from the session or its vault entry; empty \
-when there is none.",
+port) and session.username the user name it logs in with: its vault entry's while the \
+vault is open, otherwise the session's; empty when there is none.",
         code: r##"let user = session.username;
 if user == "" { user = prompt("User name for " + session.name); }
 log("logging in to " + session.host + " as " + user);
@@ -104,7 +104,8 @@ log("logging in to " + session.host + " as " + user);
 else { }. Loops: for x in [1, 2, 3] { }, while … { }, loop { } with break. \
 Functions: fn name(a, b) { … } — a function does not see the script's variables, so \
 pass session to it. Text: .len(), .contains(x), .split(\";\"), .trim() (changes the \
-text in place), .to_upper(). The full language is described at rhai.rs.",
+text in place), .to_upper(). Every function is listed in docs/SCRIPTING.md in the \
+project; the full language is described at rhai.rs.",
         code: r##"fn run(s, command) {
     s.send(command + "\r");
     s.wait_for(command, 10);

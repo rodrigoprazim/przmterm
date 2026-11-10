@@ -1720,7 +1720,12 @@ impl PrzmApp {
             Action::Macro(press) if press.script.is_some() => {
                 let name = press.script.unwrap_or_default();
                 let path = przmterm_session::script_path(self.config_dir.as_deref(), &name);
-                self.tab_mut().pane_mut().run_script(&path, waker);
+                let credentials = self.vault.credentials();
+                self.tab_mut().pane_mut().run_script(
+                    &path,
+                    credentials.as_deref().map(Vec::as_slice),
+                    waker,
+                );
             }
             Action::RunScript(t) => {
                 let mut picker = rfd::FileDialog::new()
@@ -1732,7 +1737,12 @@ impl PrzmApp {
                     picker = picker.set_directory(scripts);
                 }
                 if let Some(path) = picker.pick_file() {
-                    self.tabs[t].pane_mut().run_script(&path, waker);
+                    let credentials = self.vault.credentials();
+                    self.tabs[t].pane_mut().run_script(
+                        &path,
+                        credentials.as_deref().map(Vec::as_slice),
+                        waker,
+                    );
                 }
             }
             Action::StopScript(t) => self.tabs[t].pane_mut().stop_script(),
