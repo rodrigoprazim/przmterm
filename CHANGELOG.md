@@ -34,7 +34,7 @@ All notable changes to PrzmTerm are recorded here. The format follows
   blinking a check box. Window titles sit in the middle of their bar.
   The cursor rows have no "Default" or reset buttons, and Log to file is
   just yes/no; the log's file name field is as wide as the folder row.
-- The button bar's groups are a drop-down list with **⋯** beside it to
+- The button bar's groups are a narrow drop-down list with **⋯** beside it to
   rename, add or delete them, so many groups no longer fill the bar.
 - Menus (right-click and drop-down) have their entries closer together and
   are wider, so longer entries fit on one line.
