@@ -603,12 +603,19 @@ impl Pane {
     fn start_logon_script(&mut self, env: &Env, waker: Waker) {
         if let Some(name) = self.origin.as_ref().and_then(|s| s.logon_script.clone()) {
             let path = przmterm_session::script_path(env.config_dir.as_deref(), &name);
-            self.run_script(&path, waker);
+            self.run_script(&path, env.credentials.as_deref().map(Vec::as_slice), waker);
         }
     }
 
     /// Runs the script at `path` on this pane, stopping one already running.
-    pub fn run_script(&mut self, path: &std::path::Path, waker: Waker) {
+    /// `credentials`: the vault's entries while it is open, for the user
+    /// name of a session that logs in with one.
+    pub fn run_script(
+        &mut self,
+        path: &std::path::Path,
+        credentials: Option<&[przmterm_session::vault::VaultEntry]>,
+        waker: Waker,
+    ) {
         self.stop_script();
         let info = match &self.origin {
             Some(s) => SessionInfo {
@@ -618,10 +625,18 @@ impl Pane {
                     Target::Serial(line) => line.port.clone(),
                     Target::Local => String::new(),
                 },
-                username: match &s.target {
-                    Target::Network { username, .. } => username.clone().unwrap_or_default(),
-                    _ => String::new(),
-                },
+                // As the login uses it: the vault entry's user name first.
+                username: s
+                    .credential
+                    .as_ref()
+                    .and_then(|name| credentials?.iter().find(|e| &e.name == name))
+                    .map(|e| e.username.clone())
+                    .filter(|u| !u.is_empty())
+                    .or_else(|| match &s.target {
+                        Target::Network { username, .. } => username.clone(),
+                        _ => None,
+                    })
+                    .unwrap_or_default(),
             },
             None => SessionInfo {
                 name: self.label.clone(),

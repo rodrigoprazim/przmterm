@@ -198,9 +198,11 @@ and, when a device is at hand, a serial console (Xmodem or Ymodem).
   every file and key in [docs/CONFIG.md](docs/CONFIG.md); unknown keys are
   left out with a note instead of refusing the file; button groups are
   `[[group]]` in `buttons.toml`
-- [ ] Signed releases: checksums signed with GPG, macOS (universal) ad-hoc
+- [x] Signed releases: checksums signed with GPG, macOS (universal) ad-hoc
   signed; Windows signed when SignPath (or another free route) is in place
-- [ ] User guide and scripting reference
+  (not required for 1.0)
+- [x] User guide and scripting reference: [docs/GUIDE.md](docs/GUIDE.md)
+  and [docs/SCRIPTING.md](docs/SCRIPTING.md)
 
 **Gate:** the maintainer's own automation scripts in daily use and no open
 critical bugs.

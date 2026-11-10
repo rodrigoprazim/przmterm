@@ -453,6 +453,7 @@ impl Server {
     ) -> Result<String> {
         use przmterm_script::{Outcome, Request, Script, SessionInfo};
         let dir = self.dir();
+        let credentials = self.credentials.clone();
         let open = self.get(id, true)?;
         let info = SessionInfo {
             name: open.session.name.clone(),
@@ -461,12 +462,19 @@ impl Server {
                 przmterm_session::Target::Serial(line) => line.port.clone(),
                 przmterm_session::Target::Local => String::new(),
             },
-            username: match &open.session.target {
-                przmterm_session::Target::Network { username, .. } => {
-                    username.clone().unwrap_or_default()
-                }
-                _ => String::new(),
-            },
+            // As the login uses it: the vault entry's user name first.
+            username: open
+                .session
+                .credential
+                .as_ref()
+                .and_then(|name| credentials.as_ref()?.iter().find(|e| &e.name == name))
+                .map(|e| e.username.clone())
+                .filter(|u| !u.is_empty())
+                .or_else(|| match &open.session.target {
+                    przmterm_session::Target::Network { username, .. } => username.clone(),
+                    _ => None,
+                })
+                .unwrap_or_default(),
         };
         let waker: przmterm_transport::Waker = std::sync::Arc::new(|| {});
         let mut script = match (file, source) {
