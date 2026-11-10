@@ -4174,7 +4174,12 @@ fn tree_row(ui: &mut egui::Ui, drag: bool, folder: bool, text: egui::WidgetText)
         egui::TextStyle::Body,
     );
     const ICON: f32 = 16.0;
-    let lead = if drag { ICON } else { 0.0 } + if folder { ICON + 2.0 } else { 0.0 };
+    // A session has no open/close arrow: it gets the arrow's room instead
+    // (egui gives the arrow the indent's width, with no gap after it), and
+    // its icon where a folder has one, so its name lines up with the
+    // folders' names beside it, one step in from its own folder's name.
+    let arrow = if folder { 0.0 } else { ui.spacing().indent };
+    let lead = arrow + if drag { ICON } else { 0.0 } + ICON + 2.0;
     let pad = ui.spacing().button_padding.x;
     let height = (galley.size().y + 4.0).max(ui.spacing().interact_size.y);
     let width =
@@ -4192,7 +4197,7 @@ fn tree_row(ui: &mut egui::Ui, drag: bool, folder: bool, text: egui::WidgetText)
             painter.rect_filled(rect, visuals.corner_radius, visuals.weak_bg_fill);
         }
         let color = visuals.text_color();
-        let mut x = rect.left() + pad;
+        let mut x = rect.left() + pad + arrow;
         let icon_rect =
             |x: f32| egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(ICON, height));
         if drag {
@@ -4206,8 +4211,15 @@ fn tree_row(ui: &mut egui::Ui, drag: bool, folder: bool, text: egui::WidgetText)
         }
         if folder {
             icons::draw(painter, icons::Icon::Folder, icon_rect(x), color);
-            x += ICON + 2.0;
+        } else {
+            icons::draw(
+                painter,
+                icons::Icon::Session,
+                icon_rect(x).shrink2(egui::vec2(1.0, 0.0)),
+                ui.visuals().weak_text_color(),
+            );
         }
+        x += ICON + 2.0;
         let y = rect.center().y - galley.size().y / 2.0;
         painter.galley(egui::pos2(x, y), galley, color);
     }

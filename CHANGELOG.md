@@ -78,6 +78,9 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Fixed
 
+- The session list indents sessions like folders: each name sits one step
+  in from its folder's name, with a small session icon where folders have
+  theirs.
 - Recording a shortcut takes the whole combination again (Ctrl, Alt, Shift
   or ⌘ with a key): the modifier pressed first was recorded on its own.
 - Anti-idle was not sent while the window was minimized or hidden: the

@@ -25,6 +25,8 @@ pub enum Icon {
     Grip,
     /// A folder of sessions.
     Folder,
+    /// A session: a small screen with a prompt.
+    Session,
     /// Split side by side: a frame cut down the middle.
     SplitColumns,
     /// Split one above the other.
@@ -200,6 +202,17 @@ pub fn draw_scaled(painter: &egui::Painter, icon: Icon, rect: Rect, color: Color
                 p(-0.85, 0.65),
             ];
             painter.add(Shape::closed_line(outline, Stroke::new(1.3 * scale, color)));
+        }
+        Icon::Session => {
+            let line = Stroke::new(1.2 * scale, color);
+            let screen = egui::Rect::from_min_max(p(-0.85, -0.6), p(0.85, 0.6));
+            painter.rect_stroke(screen, 1.5 * scale, line, egui::StrokeKind::Middle);
+            // `>_`
+            painter.add(Shape::line(
+                vec![p(-0.5, -0.25), p(-0.2, 0.0), p(-0.5, 0.25)],
+                line,
+            ));
+            painter.line_segment([p(-0.05, 0.3), p(0.45, 0.3)], line);
         }
         Icon::Gear => {
             let teeth = 8;
