@@ -25,26 +25,35 @@ pub enum Icon {
     Grip,
     /// A folder of sessions.
     Folder,
+    /// Split side by side: a frame cut down the middle.
+    SplitColumns,
+    /// Split one above the other.
+    SplitRows,
+    /// More actions: three dots.
+    More,
 }
 
 /// Size of an icon button: all of them match.
 pub const BUTTON: Vec2 = Vec2::new(24.0, 20.0);
 
-/// A framed button showing `icon`; `selected` draws it pressed. As tall as
-/// a text button, so rows of both line up.
+/// A button showing `icon`, flat until the pointer is on it; `selected`
+/// draws it pressed. As tall as a text button, so rows of both line up.
 pub fn button(ui: &mut egui::Ui, icon: Icon, selected: bool) -> egui::Response {
     let size = Vec2::new(BUTTON.x, BUTTON.y.max(ui.spacing().interact_size.y));
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     if ui.is_rect_visible(rect) {
         let visuals = ui.style().interact_selectable(&response, selected);
-        ui.painter().rect(
-            rect,
-            visuals.corner_radius,
-            visuals.weak_bg_fill,
-            visuals.bg_stroke,
-            egui::StrokeKind::Inside,
-        );
-        draw(ui.painter(), icon, rect, visuals.fg_stroke.color);
+        let lit = selected || response.hovered() || response.is_pointer_button_down_on();
+        if lit {
+            ui.painter()
+                .rect_filled(rect, visuals.corner_radius, visuals.weak_bg_fill);
+        }
+        let color = if lit {
+            visuals.fg_stroke.color
+        } else {
+            ui.visuals().text_color()
+        };
+        draw(ui.painter(), icon, rect, color);
     }
     response
 }
@@ -163,6 +172,21 @@ pub fn draw_scaled(painter: &egui::Painter, icon: Icon, rect: Rect, color: Color
                 for y in [-0.6, 0.0, 0.6] {
                     painter.circle_filled(p(x, y), 1.1 * scale, color);
                 }
+            }
+        }
+        Icon::SplitColumns | Icon::SplitRows => {
+            let frame = Rect::from_min_max(p(-0.95, -0.8), p(0.95, 0.8));
+            let thin = Stroke::new(1.2 * scale, color);
+            painter.rect_stroke(frame, 2.0 * scale, thin, egui::StrokeKind::Middle);
+            if matches!(icon, Icon::SplitColumns) {
+                painter.line_segment([p(0.0, -0.8), p(0.0, 0.8)], thin);
+            } else {
+                painter.line_segment([p(-0.95, 0.0), p(0.95, 0.0)], thin);
+            }
+        }
+        Icon::More => {
+            for x in [-0.6, 0.0, 0.6] {
+                painter.circle_filled(p(x, 0.0), 1.1 * scale, color);
             }
         }
         Icon::Folder => {

@@ -276,6 +276,7 @@ fn base_definitions() -> egui::FontDefinitions {
             family.push(SYMBOLS.to_owned());
         }
     }
+    crate::theme::add_fonts(&mut fonts);
     fonts
 }
 

@@ -15,6 +15,7 @@ mod launcher;
 mod pane;
 mod scriptguide;
 mod sftp;
+mod theme;
 mod transfer;
 mod update;
 mod vault;
@@ -60,6 +61,7 @@ fn main() -> eframe::Result {
             }
             let fonts = fonts::TermFonts::new(&cc.egui_ctx);
             let mut app = PrzmApp::new(fonts);
+            theme::apply(&cc.egui_ctx);
             app.menu_bar = appmenu::install(&cc.egui_ctx);
             if app.prefs.check_for_updates {
                 app.update = Some(update::Check::start(&cc.egui_ctx));
@@ -148,10 +150,11 @@ pub fn cursor_label(shape: przmterm_session::CursorShape) -> &'static str {
     }
 }
 
-/// A session tab: its title and, joined to it past a thin divider, a close
-/// segment with ✕ — one rounded box, filled when active. The whole segment
-/// closes the tab. Returns the tab's response (click selects, right-click
-/// opens its menu) and whether the close segment was clicked.
+/// A session tab, as editors draw them: flat on the tab strip; the active
+/// one in the terminal's colour, joined to it, with rounded top corners.
+/// The × shows on the active tab and under the pointer. Returns the tab's
+/// response (click selects, right-click opens its menu) and whether × was
+/// clicked.
 fn tab_widget(
     ui: &mut egui::Ui,
     title: &str,
@@ -160,91 +163,71 @@ fn tab_widget(
     group: Option<egui::Color32>,
 ) -> (egui::Response, bool) {
     let font = egui::TextStyle::Button.resolve(ui.style());
-    let visuals = ui.visuals().clone();
     let text_color = if active {
-        visuals.selection.stroke.color
+        theme::TEXT_STRONG
     } else {
-        visuals.text_color()
+        theme::TEXT_WEAK
     };
     let galley = ui
         .painter()
         .layout_no_wrap(title.to_string(), font, text_color);
-    let pad = egui::vec2(9.0, 3.0);
-    let close_w = 24.0;
-    let height = (galley.size().y + pad.y * 2.0).max(22.0);
-    // Room for a padlock before the title.
-    let lock_w = if locked { 16.0 } else { 0.0 };
-    let title_w = pad.x * 2.0 + lock_w + galley.size().x;
-    let (rect, response) =
-        ui.allocate_exact_size(egui::vec2(title_w + close_w, height), egui::Sense::click());
-    let title_rect = rect.with_max_x(rect.left() + title_w);
-    let close_rect = rect.with_min_x(title_rect.right());
-    // The close segment on top of the tab, so its clicks are its own.
+    let (pad, close_w, height) = (12.0, 22.0, 32.0);
+    let lock_w = if locked { 18.0 } else { 0.0 };
+    let width = pad + lock_w + galley.size().x + 6.0 + close_w + 6.0;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+    let close_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.right() - 6.0 - close_w / 2.0, rect.center().y),
+        egui::vec2(close_w, close_w - 2.0),
+    );
+    // The × on top of the tab, so its clicks are its own.
     let close = ui.interact(close_rect, response.id.with("close"), egui::Sense::click());
+    let hovered = response.hovered() || close.hovered();
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
-        let fill = if active {
-            visuals.selection.bg_fill
-        } else if response.hovered() || close.hovered() {
-            visuals.widgets.hovered.weak_bg_fill
-        } else {
-            visuals.widgets.inactive.weak_bg_fill
+        let top = egui::CornerRadius {
+            nw: 6,
+            ne: 6,
+            sw: 0,
+            se: 0,
         };
-        let radius: u8 = 5;
-        painter.rect_filled(rect, radius, fill);
+        if active {
+            painter.rect_filled(rect, top, view::rgb(view::DEFAULT_BG));
+        } else if hovered {
+            painter.rect_filled(rect.shrink2(egui::vec2(0.0, 3.0)), 5, theme::HOVER);
+        }
         // A tab of a group starts with a bar in the group's colour.
         if let Some(color) = group {
-            painter.rect_filled(
-                rect.with_max_x(rect.left() + 4.0),
-                egui::CornerRadius {
-                    nw: radius,
-                    sw: radius,
-                    ne: 0,
-                    se: 0,
-                },
-                color,
+            let bar = egui::Rect::from_min_max(
+                egui::pos2(rect.left() + 3.0, rect.top() + 8.0),
+                egui::pos2(rect.left() + 6.0, rect.bottom() - 8.0),
             );
+            painter.rect_filled(bar, 2, color);
         }
-        // The segment lights up as a whole when the pointer is on it.
-        if close.hovered() {
-            painter.rect_filled(
-                close_rect,
-                egui::CornerRadius {
-                    nw: 0,
-                    sw: 0,
-                    ne: radius,
-                    se: radius,
-                },
-                text_color.gamma_multiply(0.16),
-            );
-        }
+        let mut x = rect.left() + pad;
         if locked {
             let lock_rect = egui::Rect::from_center_size(
-                egui::pos2(title_rect.left() + pad.x + 6.0, rect.center().y),
+                egui::pos2(x + 6.0, rect.center().y),
                 egui::vec2(12.0, 12.0),
             );
             icons::draw(painter, icons::Icon::Lock, lock_rect, text_color);
+            x += lock_w;
         }
-        let text_pos = egui::pos2(
-            title_rect.left() + pad.x + lock_w,
-            rect.center().y - galley.size().y / 2.0,
+        painter.galley(
+            egui::pos2(x, rect.center().y - galley.size().y / 2.0),
+            galley,
+            text_color,
         );
-        painter.galley(text_pos, galley, text_color);
-        painter.line_segment(
-            [
-                egui::pos2(close_rect.left(), rect.top() + 4.0),
-                egui::pos2(close_rect.left(), rect.bottom() - 4.0),
-            ],
-            egui::Stroke::new(1.0, text_color.gamma_multiply(0.3)),
-        );
-        // The ✕ in the tab's own text colour, softer until the pointer is on
-        // its segment.
-        let mark = if close.hovered() {
-            text_color
-        } else {
-            text_color.gamma_multiply(0.6)
-        };
-        icons::draw(painter, icons::Icon::Close, close_rect, mark);
+        if active || hovered {
+            if close.hovered() {
+                painter.rect_filled(close_rect, 4, theme::PRESSED);
+            }
+            let mark = if close.hovered() {
+                theme::TEXT_STRONG
+            } else {
+                text_color
+            };
+            icons::draw(painter, icons::Icon::Close, close_rect, mark);
+        }
     }
     let close = close.on_hover_text("Close tab").clicked();
     (response, close)
@@ -1132,7 +1115,9 @@ impl PrzmApp {
                         closing = true;
                     }
                     actions.extend(self.shortcuts(&ctx));
-                    egui::Panel::top("tabs").show(ui, |ui| self.tab_bar(ui, &mut actions));
+                    egui::Panel::top("tabs")
+                        .frame(theme::tab_strip())
+                        .show(ui, |ui| self.tab_bar(ui, &mut actions));
                     self.terminal_area(ui, &mut actions);
                 },
             );
@@ -2564,6 +2549,7 @@ impl PrzmApp {
     /// The tabs of the current window, with + at the end.
     fn tab_bar(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
             let mut last_group = None;
             for (i, tab) in self.tabs.iter().enumerate() {
                 if tab.window != self.cur_window {
@@ -3976,7 +3962,7 @@ fn tab_menu(
             split,
             egui::Button::selectable(on, "Send Commands to This Tab"),
         )
-        .on_disabled_hover_text("Split the tab first (◫ Split)")
+        .on_disabled_hover_text("Split the tab first (the split icons at the top right)")
         .clicked()
     {
         if i != active {
@@ -4403,7 +4389,31 @@ impl eframe::App for PrzmApp {
                     }
                     let tab = &self.tabs[self.active_tab];
                     let split = tab.panes.len() > 1;
-                    ui.menu_button("◫ Split ▾", |ui| {
+                    // Split icons as editors have them; the rest in a menu.
+                    let more = icons::button(ui, icons::Icon::More, false)
+                        .on_hover_text("More ways to split and arrange");
+                    for (icon, layout, id, what) in [
+                        (
+                            icons::Icon::SplitRows,
+                            Layout::Rows,
+                            "split_rows",
+                            "Split Down",
+                        ),
+                        (
+                            icons::Icon::SplitColumns,
+                            Layout::Columns,
+                            "split_columns",
+                            "Split Right",
+                        ),
+                    ] {
+                        if icons::button(ui, icon, false)
+                            .on_hover_text(format!("{what}…{}", self.keys_hint(id)))
+                            .clicked()
+                        {
+                            actions.push(Action::Split(layout));
+                        }
+                    }
+                    egui::Popup::menu(&more).show(|ui| {
                         ui.weak("A PrzmTerm shell or sessions of other tabs");
                         for (layout, id) in [
                             (Layout::Grid, "split_grid"),
@@ -4826,6 +4836,9 @@ impl eframe::App for PrzmApp {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                        // Rows as close as a file tree's.
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        ui.spacing_mut().interact_size.y = 22.0;
                         if self.sessions.root.all_sessions().is_empty() {
                             let hint = match &self.config_dir {
                                 Some(_) => "No sessions yet.\n+ › New session… adds one.",
@@ -4977,7 +4990,9 @@ impl eframe::App for PrzmApp {
 
         // Added after the session list: the tabs and buttons span the
         // terminal only, and the session list reaches up to the toolbar.
-        egui::Panel::top("tabs").show(ui, |ui| self.tab_bar(ui, &mut actions));
+        egui::Panel::top("tabs")
+            .frame(theme::tab_strip())
+            .show(ui, |ui| self.tab_bar(ui, &mut actions));
 
         if self.buttons.visible {
             egui::Panel::bottom("buttons").show(ui, |ui| {

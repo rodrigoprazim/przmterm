@@ -210,11 +210,12 @@ send = 'copy run start\r\p\r'   # single quotes keep the backslashes
 description = "Saves the running configuration"
 ```
 
-**◫ Split ▾** at the top right joins sessions open in other tabs to the
-current one: *Grid (two per row)*, *Side by side* or *Stacked*, then tick the
-sessions (several at once); they move into this tab. To see one session
-twice, clone it first (*Clone Session* in the tab menu). In a split tab the
-same menu rearranges the panes, moves the active pane to a tab of its own or
+The split icons at the top right join sessions open in other tabs to the
+current one: *Split Right* (side by side) and *Split Down* (stacked), and
+**⋯** for *Grid (two per row)*; then tick the sessions (several at once);
+they move into this tab. To see one session twice, clone it first (*Clone
+Session* in the tab menu). In a split tab the **⋯** menu rearranges the
+panes, moves the active pane to a tab of its own or
 separates them all into tabs again. Each pane shows its session's name, and
 connected sessions have a green dot in the session list.
 

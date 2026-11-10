@@ -7,6 +7,18 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- A new look, in the style of today's dark editors: the Inter font for the
+  interface, flat surfaces with thin borders and one blue accent, compact
+  window title bars, buttons with icons that stay flat until the pointer is
+  on them, and a closer session list.
+- Session tabs look like editor tabs: flat on their strip, the active one in
+  the terminal's colour and joined to it, × on the active tab and under the
+  pointer.
+- *Split Right* and *Split Down* are icons at the top right, with **⋯** for
+  the grid and the arrangements, instead of the "◫ Split ▾" menu.
+
 ### Added
 
 - macOS: PrzmTerm's own menu bar. The app menu says PrzmTerm (not

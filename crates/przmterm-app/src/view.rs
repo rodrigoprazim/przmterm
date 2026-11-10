@@ -45,7 +45,7 @@ const ANSI_16: [[u8; 3]; 16] = [
     [255, 255, 255],
 ];
 
-fn rgb(c: [u8; 3]) -> Color32 {
+pub(crate) fn rgb(c: [u8; 3]) -> Color32 {
     Color32::from_rgb(c[0], c[1], c[2])
 }
 
