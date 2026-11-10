@@ -730,6 +730,7 @@ impl TerminalView {
         let bracketed = term.screen().bracketed_paste();
         let mut send_break = false;
         response.context_menu(|ui| {
+            crate::theme::menu(ui);
             if ui
                 .add_enabled(text.is_some(), egui::Button::new("Copy"))
                 .clicked()

@@ -2103,7 +2103,7 @@ impl PrzmApp {
             actions.push(Action::ToggleLog);
         }
         response.context_menu(|ui| {
-            ui.set_min_width(220.0);
+            crate::theme::menu(ui);
             match (&name, logging) {
                 (Some(name), true) => {
                     ui.label(egui::RichText::new(format!("● {name}")).color(green))
@@ -2606,6 +2606,7 @@ impl PrzmApp {
                     actions.push(Action::RequestClose(vec![i]));
                 }
                 tab_button.context_menu(|ui| {
+                    crate::theme::menu(ui);
                     tab_menu(
                         ui,
                         &self.tabs,
@@ -2724,6 +2725,7 @@ impl PrzmApp {
                         dropped = Some(i);
                     }
                     grip.context_menu(|ui| {
+                        crate::theme::menu(ui);
                         let earlier = if tab.layout == Layout::Rows {
                             "Move Up"
                         } else {
@@ -3765,7 +3767,7 @@ fn group_label(ui: &mut egui::Ui, group: &Group, actions: &mut Vec<Action>) {
                 .min_size(egui::vec2(0.0, 20.0)),
         )
         .on_hover_text("Tab group: click for its commands");
-    let menu = |ui: &mut egui::Ui| {
+    let mut menu = |ui: &mut egui::Ui| {
         let mut item = |ui: &mut egui::Ui, text: &str, action: Action| {
             if ui.button(text).clicked() {
                 actions.push(action);
@@ -3778,7 +3780,10 @@ fn group_label(ui: &mut egui::Ui, group: &Group, actions: &mut Vec<Action>) {
         item(ui, "Ungroup", Action::Ungroup(group.id));
         item(ui, "Close Group", Action::CloseGroup(group.id));
     };
-    egui::Popup::menu(&response).show(menu);
+    egui::Popup::menu(&response).show(|ui| {
+        crate::theme::menu(ui);
+        menu(ui)
+    });
 }
 
 fn tab_menu(
@@ -3860,6 +3865,7 @@ fn tab_menu(
     ui.separator();
     // Groups: those of this window.
     ui.menu_button("Group", |ui| {
+        crate::theme::menu(ui);
         item(ui, true, "New Group", Action::NewGroup(vec![i]));
         for g in groups {
             let here = same.iter().any(|&n| tabs[n].group == Some(g.id));
@@ -3880,6 +3886,7 @@ fn tab_menu(
         );
     });
     ui.menu_button("Window", |ui| {
+        crate::theme::menu(ui);
         item(
             ui,
             same.len() > 1 || window != 0,
@@ -3998,6 +4005,7 @@ fn browser_menu(ui: &mut egui::Ui, enabled: bool, shell: Option<&str>) -> Option
     let mut picked = None;
     ui.add_enabled_ui(enabled, |ui| {
         ui.menu_button("File Browser", |ui| {
+            crate::theme::menu(ui);
             if ui
                 .button("SFTP")
                 .on_hover_text("Browse and transfer files over SFTP")
@@ -4162,6 +4170,7 @@ fn folder_ui(
             "Right-click to add sessions, rename or set folder defaults"
         })
         .context_menu(|ui| {
+            crate::theme::menu(ui);
             if ui.button("New session here…").clicked() {
                 picked.push(TreeAction::NewSession(f.trail.clone()));
                 ui.close();
@@ -4243,6 +4252,7 @@ fn folder_ui(
             picked.push(TreeAction::Connect(s.clone()));
         }
         response.context_menu(|ui| {
+            crate::theme::menu(ui);
             if ui.button("Connect").clicked() {
                 picked.push(TreeAction::Connect(s.clone()));
                 ui.close();
@@ -4410,6 +4420,7 @@ impl eframe::App for PrzmApp {
                         }
                     }
                     egui::Popup::menu(&more).show(|ui| {
+                        crate::theme::menu(ui);
                         ui.weak("A PrzmTerm shell or sessions of other tabs");
                         for (layout, id) in [
                             (Layout::Grid, "split_grid"),
@@ -4683,6 +4694,7 @@ impl eframe::App for PrzmApp {
                         let plus = icons::button(ui, icons::Icon::Plus, false)
                             .on_hover_text("New session or folder, backup, vault, shortcuts…");
                         egui::Popup::menu(&plus).show(|ui| {
+                            crate::theme::menu(ui);
                             if ui.button("New session…").clicked() {
                                 self.editor = Some(Editor::new_session(&[]));
                                 ui.close();

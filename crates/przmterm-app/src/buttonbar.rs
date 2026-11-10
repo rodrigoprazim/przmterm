@@ -126,6 +126,7 @@ impl ButtonBarUi {
                     self.active = i;
                 }
                 tab.context_menu(|ui| {
+                    crate::theme::menu(ui);
                     if ui.button("Rename tab…").clicked() {
                         self.tab_edit = Some(TabEdit {
                             index: Some(i),
@@ -189,6 +190,7 @@ impl ButtonBarUi {
                     });
                 }
                 response.context_menu(|ui| {
+                    crate::theme::menu(ui);
                     if ui.button("Edit…").clicked() {
                         self.button_edit = Some(ButtonEdit {
                             tab,

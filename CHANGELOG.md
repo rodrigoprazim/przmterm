@@ -23,8 +23,10 @@ All notable changes to PrzmTerm are recorded here. The format follows
   them, and Save/OK are blue. Check boxes and radio buttons are filled with
   the blue when on; the cursor's shape is a list of radio buttons and its
   blinking a check box. Window titles sit in the middle of their bar.
-  The cursor colour has no separate "Default" button, and Log to file is
+  The cursor rows have no "Default" or reset buttons, and Log to file is
   just yes/no; the log's file name field is as wide as the folder row.
+- Menus (right-click and drop-down) have their entries closer together and
+  are wider, so longer entries fit on one line.
 - *Split Right* and *Split Down* are icons at the top right, with **⋯** for
   the grid and the arrangements, instead of the "◫ Split ▾" menu.
 

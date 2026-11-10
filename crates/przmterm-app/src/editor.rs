@@ -1156,6 +1156,7 @@ impl Editor {
             let pick_shell = crate::icons::button(ui, crate::icons::Icon::ChevronDown, false)
                 .on_hover_text("Common shells");
             egui::Popup::menu(&pick_shell).show(|ui| {
+                crate::theme::menu(ui);
                 for shell in przmterm_transport::scp::SHELLS {
                     let current = if shell == "Default" {
                         self.scp_shell.is_empty()
@@ -1186,6 +1187,7 @@ impl Editor {
             let pick_jump = crate::icons::button(ui, crate::icons::Icon::ChevronDown, false)
                 .on_hover_text("Your SSH sessions");
             egui::Popup::menu(&pick_jump).show(|ui| {
+                crate::theme::menu(ui);
                 egui::ScrollArea::vertical()
                     .max_height(240.0)
                     .show(ui, |ui| {
@@ -1377,6 +1379,7 @@ impl Editor {
                         .desired_width(200.0),
                 );
                 ui.menu_button("Ports ▾", |ui| {
+                    crate::theme::menu(ui);
                     let ports = self.ports.get_or_insert_with(available_ports);
                     if ports.is_empty() {
                         ui.weak("No serial ports found.");
@@ -1412,6 +1415,7 @@ impl Editor {
                     .desired_width(200.0),
             );
             ui.menu_button("Rates ▾", |ui| {
+                crate::theme::menu(ui);
                 for rate in COMMON_BAUD_RATES {
                     let rate = rate.to_string();
                     if ui.selectable_label(self.baud_rate == rate, &rate).clicked() {
@@ -1752,11 +1756,6 @@ impl Editor {
             if ui.color_edit_button_srgb(&mut color).changed() {
                 self.cursor_color = Some(przmterm_session::color_text(color));
             }
-            reset(
-                ui,
-                &mut self.cursor_color,
-                &cx.hint("terminal.cursor_color"),
-            );
         });
         ui.end_row();
         ui.label("");
@@ -1767,11 +1766,6 @@ impl Editor {
             if crate::theme::checkbox(ui, &mut blink, "Blinking cursor").changed() {
                 self.cursor_blink = Some(blink);
             }
-            reset(
-                ui,
-                &mut self.cursor_blink,
-                &cx.hint("terminal.cursor_blink"),
-            );
         });
         ui.end_row();
     }
@@ -1955,6 +1949,7 @@ fn folder_picker(ui: &mut egui::Ui, root: &Folder, trail: &mut Vec<String>) {
         trail.join(" › ")
     };
     ui.menu_button(format!("{label}  ▾"), |ui| {
+        crate::theme::menu(ui);
         egui::ScrollArea::vertical()
             .max_height(260.0)
             .show(ui, |ui| {

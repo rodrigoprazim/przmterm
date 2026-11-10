@@ -208,6 +208,16 @@ pub fn window_title(ctx: &egui::Context, text: impl Into<String>) -> egui::Atoms
         .into_atoms()
 }
 
+/// Menus: rows close together and wide enough for their longest entries.
+/// Called first thing in every menu and submenu.
+pub fn menu(ui: &mut egui::Ui) {
+    ui.set_min_width(MENU_WIDTH);
+    ui.spacing_mut().item_spacing.y = 1.0;
+}
+
+/// The narrowest a menu gets.
+pub const MENU_WIDTH: f32 = 230.0;
+
 /// A check box: a rounded square, filled with the accent and a white tick
 /// when checked. Toggles `checked` when clicked.
 pub fn checkbox(
