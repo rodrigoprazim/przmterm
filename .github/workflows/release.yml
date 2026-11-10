@@ -3,6 +3,9 @@ name: Release
 on:
   push:
     tags: ["v*.*.*"]
+  # A test build of any branch: the same files, kept with the run (Actions ›
+  # the run › Artifacts), no release published.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -12,7 +15,7 @@ env:
 
 jobs:
   verify:
-    name: Verify tag
+    name: Verify version
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
@@ -21,8 +24,14 @@ jobs:
       - uses: actions/checkout@v5
       - id: v
         run: |
-          tag="${GITHUB_REF_NAME#v}"
           manifest=$(grep -m1 '^version = ' Cargo.toml | cut -d '"' -f2)
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            # Test build: the version plus the commit, e.g. 1.0.0-dev+5220be3.
+            echo "version=$manifest+${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          tag="${GITHUB_REF_NAME#v}"
           if [ "$tag" != "$manifest" ]; then
             echo "::error::Tag v$tag does not match Cargo.toml version $manifest"
             exit 1
@@ -144,6 +153,7 @@ jobs:
   publish:
     name: Publish release
     needs: [verify, build]
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     env:
       # The checksums are signed when the release key is set

@@ -62,6 +62,14 @@ gh secret set RELEASE_GPG_PASSPHRASE          # the passphrase chosen above
 gpg --armor --export "PrzmTerm releases" > docs/release-key.asc   # commit it
 ```
 
+## Test builds
+
+*Actions › Release › Run workflow* (or `gh workflow run release.yml --ref
+main`) builds the release files of a branch, named after the version and the
+commit (`przmterm-1.0.0-dev+5220be3-macos-universal.dmg`), without a tag or
+a release: download them from the run's *Artifacts*. Windows signing applies
+as in a release; the checksums are not signed.
+
 ## Patch releases
 
 Fixes land on `main` first. If `main` already carries features for the next
