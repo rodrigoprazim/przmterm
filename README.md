@@ -44,8 +44,13 @@ longer want your sessions (see
 
 *Check for Updates…* (the PrzmTerm menu on macOS, the **+** menu elsewhere)
 looks for a newer release on GitHub; PrzmTerm also looks when it starts and
-shows a newer version in the status bar. It only points to the download
-page: nothing is installed for you.
+shows a newer version in the status bar. The window shows what is new.
+*Install and Restart* downloads the release, checks it against the signed
+checksums below, and replaces this copy: PrzmTerm.app on macOS, the
+programs in their folder elsewhere. When it cannot (no right to write
+there), the checked file is left in Downloads and opened. *Skip This
+Version* stops a release from being announced at start. Nothing is
+downloaded or installed until you click.
 
 `SHA256SUMS.txt` lists every file's checksum. When it comes with
 `SHA256SUMS.txt.asc`, that is signed with the release key in
@@ -134,7 +139,8 @@ ready to sign through SignPath, each signing approved by hand.
 **Privacy:** PrzmTerm does not send any information to other networked
 systems unless the user asks for it: it connects to the hosts you open and,
 when it starts, asks GitHub for the list of PrzmTerm releases to tell you of
-a newer one (turn that off in *Check for Updates…*). No telemetry.
+a newer one (turn that off in *Check for Updates…*), and downloads a release
+only when you choose to install it. No telemetry.
 
 ## Contributing
 

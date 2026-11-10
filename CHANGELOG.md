@@ -7,6 +7,17 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Updates from the app: *Check for Updates…* shows what is new in the
+  release, and *Install and Restart* downloads it, checks it against the
+  checksums signed with the release key, replaces this copy (PrzmTerm.app on
+  macOS, the programs in their folder elsewhere) and starts the new
+  version. Without the right to write there, the checked file is left in
+  Downloads and opened. *Skip This Version* stops a release from being
+  announced at start (`skipped_version` in `preferences.toml`). The status
+  bar follows the download.
+
 ## [1.0.0-rc.1] - 2026-11-10
 
 ### Changed

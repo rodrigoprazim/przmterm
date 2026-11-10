@@ -12,6 +12,7 @@ mod input;
 mod keymap;
 mod keywords;
 mod launcher;
+mod openpgp;
 mod pane;
 mod scriptguide;
 mod sftp;
@@ -64,6 +65,7 @@ fn main() -> eframe::Result {
             theme::apply(&cc.egui_ctx, app.prefs.look);
             app.look_shown = app.prefs.look;
             app.menu_bar = appmenu::install(&cc.egui_ctx);
+            update::clean_up();
             if app.prefs.check_for_updates {
                 app.update = Some(update::Check::start(&cc.egui_ctx));
             }
@@ -675,6 +677,8 @@ struct PrzmApp {
     /// The last check for a newer release, and whether its window is open
     /// (a check at startup only shows in the status bar).
     update: Option<update::Check>,
+    /// A newer release being downloaded and installed.
+    download: Option<update::Download>,
     update_window: bool,
     /// The Appearance window is open.
     appearance_window: bool,
@@ -810,6 +814,7 @@ impl PrzmApp {
             about: None,
             prefs,
             update: None,
+            download: None,
             update_window: false,
             appearance_window: false,
             look_shown: przmterm_session::preferences::Look::Dark,
@@ -2404,16 +2409,34 @@ impl PrzmApp {
             return;
         }
         let outcome = self.update.as_ref().and_then(update::Check::outcome);
+        // The download of the release shown, if one runs.
+        let stage = self
+            .download
+            .as_ref()
+            .filter(
+                |d| matches!(&outcome, Some(update::Outcome::Newer(f)) if f.version == d.version),
+            )
+            .map(update::Download::stage);
         let mut open = true;
         let mut check_at_start = self.prefs.check_for_updates;
-        egui::Window::new(crate::theme::window_title(ctx, "Check for Updates"))
+        // What the buttons asked for, done after drawing.
+        enum Do {
+            Install(update::Found),
+            Cancel,
+            Skip(String),
+            Restart(std::path::PathBuf),
+            Later,
+        }
+        let mut wanted = None;
+        let place = update::place();
+        egui::Window::new(crate::theme::window_title(ctx, "Software Update"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
             .auto_sized()
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
-                ui.set_max_width(320.0);
+                ui.set_max_width(480.0);
                 match &outcome {
                     None => {
                         ui.horizontal(|ui| {
@@ -2427,29 +2450,221 @@ impl PrzmApp {
                             przmterm_core::VERSION
                         ));
                     }
-                    Some(update::Outcome::Newer(found)) => {
-                        ui.strong(format!("PrzmTerm {} is available.", found.version));
-                        ui.label(format!("You have {}.", przmterm_core::VERSION));
-                        if ui.button("Open the Download Page").clicked() {
-                            ctx.open_url(egui::OpenUrl::new_tab(&found.url));
-                        }
-                    }
                     Some(update::Outcome::Failed(e)) => {
                         ui.label("Could not reach GitHub to check:");
                         ui.weak(e);
                     }
+                    Some(update::Outcome::Newer(found)) => {
+                        ui.set_width(480.0);
+                        ui.label(
+                            egui::RichText::new(format!("PrzmTerm {} is available", found.version))
+                                .size(16.0)
+                                .family(theme::semibold()),
+                        );
+                        let mut you = format!("You have {}.", przmterm_core::VERSION);
+                        if self.prefs.skipped_version.as_deref() == Some(&found.version) {
+                            you.push_str(" You chose to skip this version.");
+                        }
+                        ui.weak(you);
+                        theme::section_title(ui, "What's new");
+                        egui::Frame::new()
+                            .fill(theme::p().sunken)
+                            .stroke(egui::Stroke::new(1.0, theme::p().border))
+                            .corner_radius(4)
+                            .inner_margin(egui::Margin::same(10))
+                            .show(ui, |ui| {
+                                egui::ScrollArea::vertical()
+                                    .max_height(260.0)
+                                    .auto_shrink([false, true])
+                                    .show(ui, |ui| update_notes(ui, &found.notes));
+                            });
+                        if ui.link("Release page on GitHub").clicked() {
+                            ctx.open_url(egui::OpenUrl::new_tab(&found.url));
+                        }
+                        ui.add_space(10.0);
+                        match &stage {
+                            Some(update::Stage::Fetching { done, total }) => {
+                                let mb = |b: u64| b as f64 / 1_048_576.0;
+                                ui.add(egui::ProgressBar::new(*done as f32 / *total as f32).text(
+                                    format!(
+                                        "Downloading… {:.1} of {:.1} MB",
+                                        mb(*done),
+                                        mb(*total)
+                                    ),
+                                ));
+                                ui.add_space(6.0);
+                                ui.horizontal(|ui| {
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if ui.button("Cancel").clicked() {
+                                                wanted = Some(Do::Cancel);
+                                            }
+                                        },
+                                    );
+                                });
+                            }
+                            Some(update::Stage::Installing) => {
+                                ui.horizontal(|ui| {
+                                    ui.spinner();
+                                    ui.label("Checking the signature and installing…");
+                                });
+                            }
+                            Some(update::Stage::Installed(start)) => {
+                                ui.strong(format!("PrzmTerm {} is installed.", found.version));
+                                ui.weak(
+                                    "Restarting closes the open sessions. Until then this \
+                                     version keeps running.",
+                                );
+                                ui.add_space(6.0);
+                                ui.horizontal(|ui| {
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if theme::primary_button(ui, "Restart Now").clicked() {
+                                                wanted = Some(Do::Restart(start.clone()));
+                                            }
+                                            if ui.button("Later").clicked() {
+                                                wanted = Some(Do::Later);
+                                            }
+                                        },
+                                    );
+                                });
+                            }
+                            Some(update::Stage::Saved { file, why }) => {
+                                let name = file
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().into_owned())
+                                    .unwrap_or_default();
+                                ui.strong(format!("Downloaded and checked: {name}"));
+                                ui.label(if cfg!(target_os = "macos") {
+                                    "Drag PrzmTerm to Applications in the window that opened, \
+                                     then start it again."
+                                } else {
+                                    "Replace this copy with the files in it, then start \
+                                     PrzmTerm again."
+                                });
+                                if let Some(why) = why {
+                                    ui.weak(format!("Not installed for you: {why}."));
+                                }
+                            }
+                            Some(update::Stage::Failed(e)) => {
+                                ui.colored_label(
+                                    ui.visuals().error_fg_color,
+                                    format!("The update failed: {e}"),
+                                );
+                                ui.add_space(6.0);
+                                ui.horizontal(|ui| {
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if theme::primary_button(ui, "Try Again").clicked() {
+                                                wanted = Some(Do::Install(found.clone()));
+                                            }
+                                        },
+                                    );
+                                });
+                            }
+                            None | Some(update::Stage::Cancelled) => {
+                                if found.asset.is_none() {
+                                    ui.weak(
+                                        "There is no file for this system in the release: \
+                                         see the release page.",
+                                    );
+                                }
+                                ui.horizontal(|ui| {
+                                    if ui
+                                        .button("Skip This Version")
+                                        .on_hover_text(
+                                            "Not announced again when PrzmTerm starts; \
+                                             a newer one will be",
+                                        )
+                                        .clicked()
+                                    {
+                                        wanted = Some(Do::Skip(found.version.clone()));
+                                    }
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            let label = if place.is_some() {
+                                                "Install and Restart"
+                                            } else {
+                                                "Download"
+                                            };
+                                            let install = ui
+                                                .add_enabled_ui(found.asset.is_some(), |ui| {
+                                                    theme::primary_button(ui, label)
+                                                })
+                                                .inner;
+                                            let install = if place.is_some() {
+                                                install.on_hover_text(
+                                                    "Downloads it, checks it against the \
+                                                     release's signed checksums and \
+                                                     installs it in place of this copy",
+                                                )
+                                            } else {
+                                                install.on_hover_text(
+                                                    "Downloads it to Downloads, checked \
+                                                     against the release's signed checksums, \
+                                                     and opens it",
+                                                )
+                                            };
+                                            if install.clicked() {
+                                                wanted = Some(Do::Install(found.clone()));
+                                            }
+                                            if ui.button("Later").clicked() {
+                                                wanted = Some(Do::Later);
+                                            }
+                                        },
+                                    );
+                                });
+                            }
+                        }
+                    }
                 }
-                ui.add_space(6.0);
+                ui.add_space(8.0);
                 crate::theme::checkbox(ui, &mut check_at_start, "Check when PrzmTerm starts");
             });
+        let save = |prefs: &przmterm_session::preferences::Preferences,
+                    dir: &Option<std::path::PathBuf>| {
+            dir.as_ref()
+                .and_then(|dir| prefs.save(dir).err())
+                .map(|e| format!("Preferences not saved: {e}"))
+        };
         if check_at_start != self.prefs.check_for_updates {
             self.prefs.check_for_updates = check_at_start;
-            if let Some(dir) = &self.config_dir
-                && let Err(e) = self.prefs.save(dir)
-            {
-                self.notice = Some(format!("Preferences not saved: {e}"));
+            if let Some(e) = save(&self.prefs, &self.config_dir) {
+                self.notice = Some(e);
             }
         }
+        match wanted {
+            Some(Do::Install(found)) => {
+                self.download = Some(update::Download::start(ctx, &found));
+            }
+            Some(Do::Cancel) => {
+                if let Some(d) = &self.download {
+                    d.cancel();
+                }
+                self.download = None;
+            }
+            Some(Do::Skip(version)) => {
+                self.prefs.skipped_version = Some(version);
+                if let Some(e) = save(&self.prefs, &self.config_dir) {
+                    self.notice = Some(e);
+                }
+                open = false;
+            }
+            Some(Do::Restart(program)) => match update::start_after_exit(&program) {
+                Ok(()) => {
+                    self.quitting = true;
+                    ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
+                }
+                Err(e) => self.notice = Some(format!("Could not start the new version: {e}")),
+            },
+            Some(Do::Later) => open = false,
+            None => {}
+        }
+        // A download in progress keeps going with the window closed.
         if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.update_window = false;
         }
@@ -4626,7 +4841,11 @@ impl eframe::App for PrzmApp {
 
         // A newer release found at startup: a link in the status bar.
         let newer = match self.update.as_ref().and_then(update::Check::outcome) {
-            Some(update::Outcome::Newer(found)) => Some(found.version),
+            Some(update::Outcome::Newer(found))
+                if self.prefs.skipped_version.as_deref() != Some(&found.version) =>
+            {
+                Some(found.version)
+            }
             _ => None,
         };
         let mut open_update = false;
@@ -4635,10 +4854,31 @@ impl eframe::App for PrzmApp {
                 let pane = self.tab().pane();
                 let s = pane.term.screen();
                 ui.label(format!("PrzmTerm {}", przmterm_core::VERSION));
-                if let Some(version) = &newer
+                // An update on its way says how far it got.
+                let progress = self.download.as_ref().and_then(|d| match d.stage() {
+                    update::Stage::Fetching { done, total } => Some(format!(
+                        "Downloading {} … {}%",
+                        d.version,
+                        done * 100 / total.max(1)
+                    )),
+                    update::Stage::Installing => Some(format!("Installing {}…", d.version)),
+                    update::Stage::Installed(_) => {
+                        Some(format!("{} installed: restart", d.version))
+                    }
+                    _ => None,
+                });
+                if let Some(text) = progress {
+                    if ui
+                        .link(text)
+                        .on_hover_text("The update: open its window")
+                        .clicked()
+                    {
+                        open_update = true;
+                    }
+                } else if let Some(version) = &newer
                     && ui
                         .link(format!("{version} available"))
-                        .on_hover_text("A newer PrzmTerm: see what is new and download it")
+                        .on_hover_text("A newer PrzmTerm: see what is new and install it")
                         .clicked()
                 {
                     open_update = true;
@@ -5197,6 +5437,86 @@ impl eframe::App for PrzmApp {
         // A message set this frame shows on the next one.
         if self.notice.is_some() {
             ctx.request_repaint();
+        }
+    }
+}
+
+/// A release's notes (the changelog's Markdown): headings, bullets with
+/// their continuation lines, `code` in the terminal font; other marks are
+/// dropped.
+fn update_notes(ui: &mut egui::Ui, notes: &str) {
+    if notes.trim().is_empty() {
+        ui.weak("No notes for this release.");
+        return;
+    }
+    // Lines joined into headings, bullets and paragraphs.
+    let mut blocks: Vec<(u8, String)> = Vec::new();
+    for line in notes.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            blocks.push((0, String::new()));
+        } else if let Some(h) = trimmed.strip_prefix('#') {
+            blocks.push((1, h.trim_start_matches('#').trim().to_string()));
+        } else if let Some(item) = trimmed.strip_prefix("- ") {
+            blocks.push((2, item.to_string()));
+        } else if let Some((kind, text)) = blocks.last_mut()
+            && *kind != 1
+            && !text.is_empty()
+        {
+            text.push(' ');
+            text.push_str(trimmed);
+        } else {
+            blocks.push((3, trimmed.to_string()));
+        }
+    }
+    let body = egui::TextStyle::Body.resolve(ui.style());
+    let mono = egui::TextStyle::Monospace.resolve(ui.style());
+    let color = ui.visuals().text_color();
+    let rich = |text: &str| {
+        let mut job = egui::text::LayoutJob::default();
+        // [label](url) shows the label.
+        let mut plain = String::new();
+        let mut rest = text;
+        while let Some(open) = rest.find('[') {
+            match rest[open..].find("](").zip(rest[open..].find(')')) {
+                Some((mid, close)) if mid < close => {
+                    plain.push_str(&rest[..open]);
+                    plain.push_str(&rest[open + 1..open + mid]);
+                    rest = &rest[open + close + 1..];
+                }
+                _ => {
+                    plain.push_str(&rest[..=open]);
+                    rest = &rest[open + 1..];
+                }
+            }
+        }
+        plain.push_str(rest);
+        for (i, part) in plain.split('`').enumerate() {
+            let (text, font) = if i % 2 == 1 {
+                (part.to_string(), mono.clone())
+            } else {
+                (part.replace('*', ""), body.clone())
+            };
+            job.append(&text, 0.0, egui::TextFormat::simple(font, color));
+        }
+        job
+    };
+    for (kind, text) in blocks {
+        match kind {
+            0 => {}
+            1 => {
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new(text).family(theme::semibold()));
+            }
+            2 => {
+                ui.horizontal_top(|ui| {
+                    ui.label("•");
+                    ui.add(egui::Label::new(rich(&text)).wrap());
+                });
+            }
+            _ => {
+                ui.add(egui::Label::new(rich(&text)).wrap());
+            }
         }
     }
 }

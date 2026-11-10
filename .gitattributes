@@ -1,0 +1,3 @@
+# Signed release files used in tests: their bytes must not change on
+# checkout (no line-ending conversion on Windows).
+crates/przmterm-app/testdata/** -text
