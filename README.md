@@ -193,10 +193,12 @@ prompts.
 
 ### Buttons and sending to several sessions
 
-**▤ Buttons** in the status bar shows the button bar: tabs of buttons (one per
-device type, say) that send commands. **+** on the bar adds a button;
-right-click a button to edit, move or delete it (or turn its tooltip off), and
-a tab to rename, add or delete tabs (or show or hide all its tooltips). A button sends to the current session. In
+**▤ Buttons** in the status bar shows the button bar: groups of buttons (one
+per device type, say) that send commands. The list at the left of the bar
+picks the group; **⋯** next to it renames,
+adds or deletes groups, or shows or hides all the group's tooltips. **+** on
+the bar adds a button; right-click a button to edit, move or delete it (or
+turn its tooltip off). A button sends to the current session. In
 the text, `\r` is Enter, `\t` Tab, `\e` Esc, `\n` a line feed and `\p` a
 one-second pause. Buttons are kept in `<config>/buttons.toml`:
 
@@ -210,11 +212,12 @@ send = 'copy run start\r\p\r'   # single quotes keep the backslashes
 description = "Saves the running configuration"
 ```
 
-**◫ Split ▾** at the top right joins sessions open in other tabs to the
-current one: *Grid (two per row)*, *Side by side* or *Stacked*, then tick the
-sessions (several at once); they move into this tab. To see one session
-twice, clone it first (*Clone Session* in the tab menu). In a split tab the
-same menu rearranges the panes, moves the active pane to a tab of its own or
+The split icons at the top right join sessions open in other tabs to the
+current one: *Split Right* (side by side) and *Split Down* (stacked), and
+**⋯** for *Grid (two per row)*; then tick the sessions (several at once);
+they move into this tab. To see one session twice, clone it first (*Clone
+Session* in the tab menu). In a split tab the **⋯** menu rearranges the
+panes, moves the active pane to a tab of its own or
 separates them all into tabs again. Each pane shows its session's name, and
 connected sessions have a green dot in the session list.
 
@@ -499,10 +502,15 @@ pasted, to check or edit it.
 In a split tab, drag a pane by its caption onto another to swap them, or
 right-click the caption to move it left or right.
 
-*Font and Cursor…* in a tab's menu picks the font (the built-in one or any
-installed monospace font), its size, the cursor (block, underline or bar), its
-colour and whether it blinks; *Save* keeps them for the session. They are also in the
-session settings, so a folder or the defaults can set them for many sessions.
+*Font, Colors and Cursor…* in a tab's menu picks the font (the built-in one or
+any installed monospace font), its size, the terminal's background and text
+colours, the cursor (block, underline or bar), its colour and whether it blinks;
+*Save* keeps them for the session. They are also in the session settings
+(*Terminal* page), so a folder or the defaults can set them for many sessions.
+
+**+** › *Appearance…* (*PrzmTerm* › *Appearance…* on macOS) switches the
+interface between dark and light, or follows the system's mode. The terminal
+keeps its own colours whichever is chosen.
 
 These are the built-in shortcuts. **+** › *Keyboard shortcuts…* changes them
 and adds others: a key can send text (`show ip interface brief\r`), run an app
@@ -579,6 +587,8 @@ flow_control = "none"      # none | software (XON/XOFF) | hardware (RTS/CTS)
 [terminal]
 term_type = "xterm-256color"
 scrollback = 10000
+background = "#181a1f"         # the terminal's background
+foreground = "#d8dee9"         # plain text
 
 [log]
 enabled = true

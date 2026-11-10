@@ -223,6 +223,7 @@ impl TransferDialog {
             let pick_shell = crate::icons::button(ui, crate::icons::Icon::ChevronDown, false)
                 .on_hover_text("Common shells");
             egui::Popup::menu(&pick_shell).show(|ui| {
+                crate::theme::menu(ui);
                 for shell in scp::SHELLS {
                     let pick = if shell == "Default" { "" } else { shell };
                     if ui.selectable_label(self.shell == pick, shell).clicked() {
@@ -387,7 +388,11 @@ impl TransferDialog {
                             }
                         }
                         ui.label("");
-                        ui.checkbox(&mut self.command, "Start the other side for me")
+                        crate::theme::checkbox(
+                            ui,
+                            &mut self.command,
+                            "Start the other side for me",
+                        )
                         .on_hover_text(
                             "On a Unix host with lrzsz installed, type its command (rz, sz NAME, \
                              rb, sb, rx, sx) first. Leave it off for a device that is already \

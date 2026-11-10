@@ -102,6 +102,45 @@ impl ButtonBarUi {
         }
     }
 
+    /// Rename, add and delete groups, and the tooltips of the shown one.
+    fn group_menu(&mut self, ui: &mut egui::Ui, changed: &mut bool) {
+        let i = self.active;
+        if ui.button("Rename group…").clicked() {
+            self.tab_edit = Some(TabEdit {
+                index: Some(i),
+                name: self.bar.tabs[i].name.clone(),
+                error: None,
+            });
+            ui.close();
+        }
+        if ui.button("New group…").clicked() {
+            self.tab_edit = Some(TabEdit {
+                index: None,
+                name: String::new(),
+                error: None,
+            });
+            ui.close();
+        }
+        if ui.button("Delete group…").clicked() {
+            self.delete_tab = Some(i);
+            ui.close();
+        }
+        ui.separator();
+        for (label, on) in [("Show all tooltips", true), ("Hide all tooltips", false)] {
+            if ui
+                .button(label)
+                .on_hover_text("For every button in this group")
+                .clicked()
+            {
+                for button in &mut self.bar.tabs[i].buttons {
+                    button.tooltip = on;
+                }
+                *changed = true;
+                ui.close();
+            }
+        }
+    }
+
     /// Draws the bar; returns the button pressed, if any.
     pub fn show(&mut self, ui: &mut egui::Ui, config_dir: Option<&Path>) -> Option<Press> {
         let mut press = None;
@@ -109,7 +148,7 @@ impl ButtonBarUi {
         ui.horizontal_wrapped(|ui| {
             if self.bar.tabs.is_empty() {
                 ui.weak("No buttons yet.");
-                if ui.button("+ Add a tab of buttons").clicked() {
+                if ui.button("+ Add a group of buttons").clicked() {
                     self.tab_edit = Some(TabEdit {
                         index: None,
                         name: "Commands".into(),
@@ -119,49 +158,32 @@ impl ButtonBarUi {
                 return;
             }
             self.active = self.active.min(self.bar.tabs.len() - 1);
-            for i in 0..self.bar.tabs.len() {
-                let name = self.bar.tabs[i].name.clone();
-                let tab = ui.selectable_label(i == self.active, egui::RichText::new(name).strong());
-                if tab.clicked() {
-                    self.active = i;
-                }
-                tab.context_menu(|ui| {
-                    if ui.button("Rename tab…").clicked() {
-                        self.tab_edit = Some(TabEdit {
-                            index: Some(i),
-                            name: self.bar.tabs[i].name.clone(),
-                            error: None,
-                        });
-                        ui.close();
-                    }
-                    if ui.button("New tab…").clicked() {
-                        self.tab_edit = Some(TabEdit {
-                            index: None,
-                            name: String::new(),
-                            error: None,
-                        });
-                        ui.close();
-                    }
-                    if ui.button("Delete tab…").clicked() {
-                        self.delete_tab = Some(i);
-                        ui.close();
-                    }
-                    ui.separator();
-                    for (label, on) in [("Show all tooltips", true), ("Hide all tooltips", false)] {
-                        if ui
-                            .button(label)
-                            .on_hover_text("For every button in this tab")
-                            .clicked()
-                        {
-                            for button in &mut self.bar.tabs[i].buttons {
-                                button.tooltip = on;
-                            }
-                            changed = true;
-                            ui.close();
+            // The groups are a list to pick from, so many of them still
+            // leave the bar to the buttons.
+            let mut chosen = self.active;
+            let combo = ui.scope(|ui| {
+                crate::theme::sunken_combos(ui);
+                egui::ComboBox::from_id_salt("button-groups")
+                    .selected_text(egui::RichText::new(&self.bar.tabs[self.active].name).strong())
+                    .width(75.0)
+                    .height(400.0)
+                    .show_ui(ui, |ui| {
+                        crate::theme::menu(ui);
+                        ui.set_min_width(150.0);
+                        for (i, group) in self.bar.tabs.iter().enumerate() {
+                            ui.selectable_value(&mut chosen, i, &group.name);
                         }
-                    }
-                });
-            }
+                    })
+                    .response
+            });
+            self.active = chosen;
+            combo.inner.on_hover_text("Button group");
+            let more = crate::icons::button(ui, crate::icons::Icon::More, false)
+                .on_hover_text("Group actions");
+            egui::Popup::menu(&more).show(|ui| {
+                crate::theme::menu(ui);
+                self.group_menu(ui, &mut changed);
+            });
             ui.separator();
             let tab = self.active;
             let count = self.bar.tabs[tab].buttons.len();
@@ -189,6 +211,7 @@ impl ButtonBarUi {
                     });
                 }
                 response.context_menu(|ui| {
+                    crate::theme::menu(ui);
                     if ui.button("Edit…").clicked() {
                         self.button_edit = Some(ButtonEdit {
                             tab,
@@ -219,7 +242,7 @@ impl ButtonBarUi {
                     }
                     ui.separator();
                     let mut on = button.tooltip;
-                    if ui.checkbox(&mut on, "Show tooltip").changed() {
+                    if crate::theme::checkbox(ui, &mut on, "Show tooltip").changed() {
                         tooltip = Some((i, on));
                     }
                 });
@@ -237,7 +260,7 @@ impl ButtonBarUi {
                 changed = true;
             }
             if crate::icons::button(ui, crate::icons::Icon::Plus, false)
-                .on_hover_text("Add a button to this tab")
+                .on_hover_text("Add a button to this group")
                 .clicked()
             {
                 self.button_edit = Some(ButtonEdit {
@@ -328,7 +351,7 @@ impl ButtonBarUi {
                         );
                         ui.end_row();
                         ui.label("");
-                        ui.checkbox(&mut edit.button.tooltip, "Show tooltip")
+                        crate::theme::checkbox(ui, &mut edit.button.tooltip, "Show tooltip")
                             .on_hover_text(
                                 "For this button: the description, or else what it sends",
                             );
@@ -348,7 +371,7 @@ impl ButtonBarUi {
                         edit.error = None;
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Save").clicked() {
+                        if crate::theme::primary_button(ui, "Save").clicked() {
                             done = Some(true);
                         }
                         if ui.button("Cancel").clicked() || escape {
@@ -380,9 +403,9 @@ impl ButtonBarUi {
         if let Some(edit) = &mut self.tab_edit {
             let mut done = None;
             egui::Window::new(if edit.index.is_some() {
-                "Rename tab"
+                "Rename group"
             } else {
-                "New tab"
+                "New group"
             })
             .pivot(egui::Align2::CENTER_CENTER)
             .default_pos(center)
@@ -400,7 +423,7 @@ impl ButtonBarUi {
                 }
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("OK").clicked() || enter {
+                        if crate::theme::primary_button(ui, "OK").clicked() || enter {
                             done = Some(true);
                         }
                         if ui.button("Cancel").clicked() || escape {
@@ -411,7 +434,7 @@ impl ButtonBarUi {
             });
             match done {
                 Some(true) if edit.name.trim().is_empty() => {
-                    edit.error = Some("Give the tab a name.".into());
+                    edit.error = Some("Give the group a name.".into());
                 }
                 Some(true) => {
                     let name = edit.name.trim().to_string();
@@ -437,14 +460,14 @@ impl ButtonBarUi {
         if let Some(i) = self.delete_tab {
             let mut done = None;
             let tab = &self.bar.tabs[i];
-            egui::Window::new("Delete tab")
+            egui::Window::new("Delete group")
                 .pivot(egui::Align2::CENTER_CENTER)
                 .default_pos(center)
                 .collapsible(false)
                 .resizable(false)
                 .show(ctx, |ui| {
                     ui.label(format!(
-                        "Delete the tab {} and its {} button(s)?",
+                        "Delete the group {} and its {} button(s)?",
                         tab.name,
                         tab.buttons.len()
                     ));

@@ -18,6 +18,7 @@ pub enum AppCommand {
     About,
     CheckUpdates,
     Settings,
+    Appearance,
     Shortcuts,
     Vault,
     Keywords,
@@ -30,10 +31,11 @@ pub enum AppCommand {
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 impl AppCommand {
-    const ALL: [AppCommand; 10] = [
+    const ALL: [AppCommand; 11] = [
         Self::About,
         Self::CheckUpdates,
         Self::Settings,
+        Self::Appearance,
         Self::Shortcuts,
         Self::Vault,
         Self::Keywords,
@@ -48,6 +50,7 @@ impl AppCommand {
             Self::About => "about",
             Self::CheckUpdates => "check-updates",
             Self::Settings => "settings",
+            Self::Appearance => "appearance",
             Self::Shortcuts => "shortcuts",
             Self::Vault => "vault",
             Self::Keywords => "keywords",
@@ -114,6 +117,7 @@ pub fn install(ctx: &egui::Context) -> Option<MenuBar> {
             &item(AppCommand::CheckUpdates, "Check for Updates…", None),
             &PredefinedMenuItem::separator(),
             &item(AppCommand::Settings, "Settings…", Some(Code::Comma)),
+            &item(AppCommand::Appearance, "Appearance…", None),
             &item(AppCommand::Shortcuts, "Keyboard Shortcuts…", None),
             &item(AppCommand::Vault, "Password Vault…", None),
             &item(AppCommand::Keywords, "Keyword Sets…", None),

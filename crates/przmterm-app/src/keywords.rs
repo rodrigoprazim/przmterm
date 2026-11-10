@@ -160,7 +160,7 @@ impl KeywordEditor {
     pub fn show(&mut self, ctx: &egui::Context) -> KeywordResult {
         let mut open = true;
         let mut close = false;
-        egui::Window::new("Keyword sets")
+        egui::Window::new(crate::theme::window_title(ctx, "Keyword sets"))
             .pivot(egui::Align2::CENTER_CENTER)
             .default_pos(ctx.content_rect().center())
             .open(&mut open)
@@ -326,7 +326,7 @@ impl KeywordEditor {
         ui.horizontal(|ui| {
             ui.label("Name");
             crate::editor::name_field(ui, &mut self.name, "Set name");
-            ui.checkbox(&mut self.set.match_case, "Match case");
+            crate::theme::checkbox(ui, &mut self.set.match_case, "Match case");
             ui.add(
                 egui::TextEdit::singleline(&mut self.filter)
                     .hint_text("🔍 Find a rule")
@@ -549,7 +549,7 @@ fn rule_row(
     color_pick(ui, &mut rule.color, [255, 255, 0], "Text colour");
     ui.horizontal(|ui| {
         color_pick(ui, &mut rule.background, [60, 60, 60], "Background");
-        ui.checkbox(&mut rule.bold, "bold");
+        crate::theme::checkbox(ui, &mut rule.bold, "bold");
     });
     if crate::icons::button(ui, crate::icons::Icon::Close, false)
         .on_hover_text("Remove the rule")
@@ -563,7 +563,10 @@ fn rule_row(
 fn color_pick(ui: &mut egui::Ui, value: &mut Option<String>, default: [u8; 3], hover: &str) {
     ui.horizontal(|ui| {
         let mut on = value.is_some();
-        if ui.checkbox(&mut on, "").on_hover_text(hover).changed() {
+        if crate::theme::checkbox(ui, &mut on, "")
+            .on_hover_text(hover)
+            .changed()
+        {
             *value = on.then(|| format_color(default));
         }
         if let Some(text) = value {

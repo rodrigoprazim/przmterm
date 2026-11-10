@@ -116,7 +116,18 @@ pub struct TerminalSettings {
     /// Cursor colour as `#rrggbb`; `""` is the default one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor_color: Option<String>,
+    /// The terminal's background as `#rrggbb`; `""` is the default one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    /// The colour of plain text as `#rrggbb`; `""` is the default one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub foreground: Option<String>,
 }
+
+/// The terminal's background when none is chosen.
+pub const DEFAULT_BACKGROUND: [u8; 3] = [24, 26, 31];
+/// The colour of plain text when none is chosen.
+pub const DEFAULT_FOREGROUND: [u8; 3] = [216, 222, 233];
 
 /// `#rrggbb` (or `rrggbb`) as red, green and blue.
 pub fn parse_color(text: &str) -> Option<[u8; 3]> {
@@ -323,7 +334,7 @@ pub struct SessionSettings {
 }
 
 /// Keys of the individual settings, used to compare and copy them.
-pub const FIELDS: [&str; 38] = [
+pub const FIELDS: [&str; 40] = [
     "protocol",
     "host",
     "port",
@@ -357,6 +368,8 @@ pub const FIELDS: [&str; 38] = [
     "terminal.cursor",
     "terminal.cursor_blink",
     "terminal.cursor_color",
+    "terminal.background",
+    "terminal.foreground",
     "log.enabled",
     "log.path",
     "log.dir",
@@ -403,6 +416,8 @@ impl SessionSettings {
             "terminal.cursor_color" => {
                 self.terminal.cursor_color = from.terminal.cursor_color.clone();
             }
+            "terminal.background" => self.terminal.background = from.terminal.background.clone(),
+            "terminal.foreground" => self.terminal.foreground = from.terminal.foreground.clone(),
             "log.enabled" => self.log.enabled = from.log.enabled,
             "log.path" => self.log.path = from.log.path.clone(),
             "log.dir" => self.log.dir = from.log.dir.clone(),
@@ -467,6 +482,8 @@ impl SessionSettings {
             "terminal.cursor" => self.terminal.cursor.map(|c| c.name().to_string()),
             "terminal.cursor_blink" => self.terminal.cursor_blink.map(yes_no),
             "terminal.cursor_color" => self.terminal.cursor_color.clone(),
+            "terminal.background" => self.terminal.background.clone(),
+            "terminal.foreground" => self.terminal.foreground.clone(),
             "log.enabled" => self.log.enabled.map(yes_no),
             "log.path" => self.log.path.clone(),
             "log.dir" => self.log.dir.clone(),
@@ -546,6 +563,8 @@ impl SessionSettings {
                 cursor: pick(&self.terminal.cursor, &over.terminal.cursor),
                 cursor_blink: pick(&self.terminal.cursor_blink, &over.terminal.cursor_blink),
                 cursor_color: pick(&self.terminal.cursor_color, &over.terminal.cursor_color),
+                background: pick(&self.terminal.background, &over.terminal.background),
+                foreground: pick(&self.terminal.foreground, &over.terminal.foreground),
             },
             log: LogSettings {
                 enabled: pick(&self.log.enabled, &over.log.enabled),
@@ -577,6 +596,8 @@ impl SessionSettings {
             "terminal.font_size" => s.terminal.font_size = Some(DEFAULT_FONT_SIZE),
             "terminal.cursor" => s.terminal.cursor = Some(CursorShape::Block),
             "terminal.cursor_blink" => s.terminal.cursor_blink = Some(false),
+            "terminal.background" => s.terminal.background = Some(color_text(DEFAULT_BACKGROUND)),
+            "terminal.foreground" => s.terminal.foreground = Some(color_text(DEFAULT_FOREGROUND)),
             "log.enabled" => s.log.enabled = Some(false),
             "debug" => s.debug = Some(false),
             "keepalive" => s.keepalive = Some(DEFAULT_KEEPALIVE),
@@ -657,6 +678,10 @@ pub struct Session {
     pub cursor_blink: bool,
     /// `None`: the default colour.
     pub cursor_color: Option<[u8; 3]>,
+    /// The terminal's background; `None`: the default one.
+    pub background: Option<[u8; 3]>,
+    /// The colour of plain text; `None`: the default one.
+    pub foreground: Option<[u8; 3]>,
     pub log_enabled: bool,
     pub log_path: Option<String>,
     /// Folder for relative log file names, with `~` expanded.
@@ -788,6 +813,16 @@ impl Session {
             cursor_color: settings
                 .terminal
                 .cursor_color
+                .as_deref()
+                .and_then(parse_color),
+            background: settings
+                .terminal
+                .background
+                .as_deref()
+                .and_then(parse_color),
+            foreground: settings
+                .terminal
+                .foreground
                 .as_deref()
                 .and_then(parse_color),
             log_enabled: settings.log.enabled.unwrap_or(false),
@@ -1419,6 +1454,51 @@ pub fn keep_old_defaults(
     Ok(counts)
 }
 
+/// Drops `keys` from every folder's and session's own settings, so they all
+/// follow the global value. The session's address (`protocol`, `host`) is
+/// never touched. Returns how many files changed.
+pub fn clear_overrides(config_dir: &Path, keys: &[&str]) -> Result<usize, SessionError> {
+    fn walk(folder: &Folder, keys: &[&str], changed: &mut usize) -> Result<(), SessionError> {
+        let unset = SessionSettings::default();
+        let clear = |own: &mut SessionSettings| {
+            let mut any = false;
+            for key in keys {
+                if matches!(*key, "protocol" | "host") || own.field_text(key).is_none() {
+                    continue;
+                }
+                own.copy_field(&unset, key);
+                any = true;
+            }
+            any
+        };
+        if !folder.trail.is_empty() {
+            let mut own = folder.own.clone();
+            if clear(&mut own) {
+                write_folder_settings(&folder.dir, &own)?;
+                *changed += 1;
+            }
+        }
+        for session in &folder.sessions {
+            let mut own = read_session_settings(&session.path)?;
+            if clear(&mut own) {
+                fs::write(&session.path, own.to_toml()).map_err(|source| SessionError::Io {
+                    path: session.path.clone(),
+                    source,
+                })?;
+                *changed += 1;
+            }
+        }
+        for f in &folder.folders {
+            walk(f, keys, changed)?;
+        }
+        Ok(())
+    }
+    let tree = SessionTree::load(config_dir);
+    let mut changed = 0;
+    walk(&tree.root, keys, &mut changed)?;
+    Ok(changed)
+}
+
 /// Moves a session file into `folder_dir` and returns its new path.
 pub fn move_session(path: &Path, folder_dir: &Path) -> Result<PathBuf, SessionError> {
     let file_name = path.file_name().ok_or_else(|| SessionError::Invalid {
@@ -1883,6 +1963,65 @@ mod tests {
         );
         assert_eq!(target("b"), "ops@b:9");
         assert_eq!(target("c"), "ops@c:2222");
+    }
+
+    #[test]
+    fn terminal_colors_come_from_defaults_folders_and_sessions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write(dir, "defaults.toml", "[terminal]\nbackground = '#ffffff'");
+        write(dir, "sessions/a.toml", "host = 'a'");
+        write(
+            dir,
+            "sessions/b.toml",
+            "host = 'b'\n[terminal]\nbackground = '#000000'\nforeground = '#00ff00'",
+        );
+        let tree = SessionTree::load(dir);
+        let find = |n: &str| {
+            tree.root
+                .all_sessions()
+                .into_iter()
+                .find(|s| s.name == n)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(find("a").background, Some([255, 255, 255]));
+        assert_eq!(find("a").foreground, None);
+        assert_eq!(find("b").background, Some([0, 0, 0]));
+        assert_eq!(find("b").foreground, Some([0, 255, 0]));
+    }
+
+    #[test]
+    fn clear_overrides_makes_every_session_follow_global() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write(dir, "defaults.toml", "port = 2200");
+        write(dir, "sessions/a.toml", "host = 'a'");
+        write(
+            dir,
+            "sessions/b.toml",
+            "host = 'b'\nport = 9\nusername = 'me'",
+        );
+        write(dir, "sessions/Lab/folder.toml", "port = 2222");
+        write(dir, "sessions/Lab/c.toml", "host = 'c'");
+
+        let new = SessionSettings::from_toml("port = 22").unwrap();
+        assert_eq!(clear_overrides(dir, &["port", "host"]).unwrap(), 2);
+        write_defaults(dir, &new).unwrap();
+        assert!(!dir.join("sessions/Lab").join(FOLDER_FILE).exists());
+
+        let tree = SessionTree::load(dir);
+        let target = |n: &str| {
+            tree.root
+                .all_sessions()
+                .into_iter()
+                .find(|s| s.name == n)
+                .unwrap()
+                .display_target()
+        };
+        assert_eq!(target("a"), "a:22");
+        assert_eq!(target("b"), "me@b:22", "keeps its host and user");
+        assert_eq!(target("c"), "c:22");
     }
 
     #[test]

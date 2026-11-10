@@ -7,8 +7,43 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- A new look, in the style of today's dark editors: the Inter font for the
+  interface, flat surfaces with thin borders and one blue accent, compact
+  window title bars, buttons with icons that stay flat until the pointer is
+  on them, and a closer session list.
+- Session tabs look like editor tabs: flat on their strip, the active one in
+  the terminal's colour and joined to it (no line between), the one under
+  the pointer shaped as a tab too, × on the active tab and under the
+  pointer.
+- Settings and session windows: each page has a title, sections a larger
+  title with a line under it, choices such as ask/always/never are one
+  segmented control, combo boxes look like the text fields and line up with
+  them, and Save/OK are blue. Check boxes and radio buttons are filled with
+  the blue when on; the cursor's shape is a list of radio buttons and its
+  blinking a check box. Window titles sit in the middle of their bar.
+  The cursor rows have no "Default" or reset buttons, and Log to file is
+  just yes/no; the log's file name field is as wide as the folder row.
+- The button bar's groups are a drop-down list with **⋯** beside it to
+  rename, add or delete them, so many groups no longer fill the bar.
+- Menus (right-click and drop-down) have their entries closer together and
+  are wider, so longer entries fit on one line.
+- *Split Right* and *Split Down* are icons at the top right, with **⋯** for
+  the grid and the arrangements, instead of the "◫ Split ▾" menu.
+
 ### Added
 
+- *Appearance…* (**+** menu, and the PrzmTerm menu on macOS): the interface
+  in dark or light, or following the system's mode.
+- The terminal's background and text colours can be chosen: in the
+  settings (*Terminal* › *Colors*, for every session, a folder or one
+  session, with a sample) and per tab in *Font, Colors and Cursor…*. The
+  active tab wears the terminal's colours.
+- Changing the global settings can now apply the new values to *all*
+  sessions, including those with their own value: their own values for the
+  changed fields are removed (the address is never touched). The other
+  choices stay: sessions that use the default, or new sessions only.
 - macOS: PrzmTerm's own menu bar. The app menu says PrzmTerm (not
   "przmterm") and has *About PrzmTerm*, *Settings…* (⌘,), *Keyboard
   Shortcuts…*, *Password Vault…*, *Keyword Sets…* and *Settings Folder…*;
