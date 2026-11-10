@@ -156,6 +156,7 @@ pub fn defaults() -> Keymap {
                 })
             })
             .collect(),
+        ..Keymap::default()
     }
 }
 
@@ -275,7 +276,18 @@ pub struct Shortcuts {
 impl Shortcuts {
     pub fn load(config_dir: Option<&Path>) -> Shortcuts {
         let (keymap, mut errors) = match config_dir.map(read_keymap) {
-            Some(Ok(Some(k))) => (k, Vec::new()),
+            Some(Ok(Some(k))) => {
+                let notes = (!k.unknown.is_empty())
+                    .then(|| {
+                        format!(
+                            "keymap.toml: unknown setting(s) ignored: {}",
+                            k.unknown.join(", ")
+                        )
+                    })
+                    .into_iter()
+                    .collect();
+                (k, notes)
+            }
             Some(Err(e)) => (defaults(), vec![e]),
             _ => (defaults(), Vec::new()),
         };
@@ -577,6 +589,7 @@ impl KeymapEditor {
                                 ..b.clone()
                             })
                             .collect(),
+                        ..Keymap::default()
                     },
                 )
             };
@@ -847,6 +860,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            ..Keymap::default()
         };
         let (rows, errors) = compile(&keymap);
         assert_eq!(rows.len(), 1);

@@ -9,6 +9,12 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Changed
 
+- Settings files with keys this version does not know (written by a newer
+  version, or misspelt) are read without those keys instead of being
+  refused; the status line under the session list, the button bar,
+  *Keyboard shortcuts…* or the terminal (for keyword sets) names them.
+- `buttons.toml` calls the button groups `[[group]]` and
+  `[[group.button]]`; files with `[[tab]]` are still read.
 - A new look, in the style of today's dark editors: the Inter font for the
   interface, flat surfaces with thin borders and one blue accent, compact
   window title bars, buttons with icons that stay flat until the pointer is
@@ -34,6 +40,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Added
 
+- The configuration reference, [docs/CONFIG.md](docs/CONFIG.md): every file
+  and key, their defaults, and what stays compatible from 1.0 on.
 - *Appearance…* (**+** menu, and the PrzmTerm menu on macOS): the interface
   in dark or light, or following the system's mode.
 - The terminal's background and text colours can be chosen: in the

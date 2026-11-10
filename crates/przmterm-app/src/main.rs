@@ -5083,7 +5083,10 @@ impl eframe::App for PrzmApp {
                             ui.separator();
                             ui.colored_label(
                                 ui.visuals().warn_fg_color,
-                                format!("{} file(s) with errors", self.sessions.errors.len()),
+                                format!(
+                                    "{} settings file(s) with problems",
+                                    self.sessions.errors.len()
+                                ),
                             )
                             .on_hover_text(
                                 self.sessions

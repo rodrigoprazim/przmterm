@@ -1,22 +1,23 @@
-//! The button bar: macro buttons grouped in tabs, saved in
+//! The button bar: macro buttons in groups, saved in
 //! `<config>/buttons.toml`:
 //!
 //! ```toml
-//! [[tab]]
+//! [[group]]
 //! name = "Cisco"
 //!
-//! [[tab.button]]
+//! [[group.button]]
 //! label = "Interfaces"
 //! send = 'show ip interface brief\r'
 //!
-//! [[tab.button]]
+//! [[group.button]]
 //! label = "Save"
 //! send = 'copy run start\r\p\r'   # \p waits a second
 //! description = "Saves the running configuration"
 //! ```
 //!
 //! A button sends to the session that has the keyboard. `tooltip = false`
-//! on a button stops its description from popping up.
+//! on a button stops its description from popping up. Files before 1.0
+//! say `[[tab]]` for a group; they are read the same.
 //!
 //! In `send`, `\r` is Enter, `\n` a line feed, `\t` Tab, `\e` Escape,
 //! `\p` a one-second pause and `\\` a backslash. Write `send` in single
@@ -34,7 +35,6 @@ pub const BUTTONS_FILE: &str = "buttons.toml";
 pub const PAUSE: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct MacroButton {
     pub label: String,
     /// Text to send to the current session, with the escapes above.
@@ -70,7 +70,6 @@ impl Default for MacroButton {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ButtonTab {
     pub name: String,
     #[serde(default, rename = "button", skip_serializing_if = "Vec::is_empty")]
@@ -78,15 +77,18 @@ pub struct ButtonTab {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ButtonBar {
     /// The switch for every button's tooltip in files from 0.8.0: read
     /// into each button's `tooltip`, never written.
     #[doc(hidden)]
     #[serde(default = "yes", rename = "tooltips", skip_serializing)]
     pub legacy_tooltips: bool,
-    #[serde(default, rename = "tab")]
+    /// The groups (`[[group]]`, `[[tab]]` before 1.0).
+    #[serde(default, rename = "group", alias = "tab")]
     pub tabs: Vec<ButtonTab>,
+    /// Keys in the file this version does not know (left out).
+    #[serde(skip)]
+    pub unknown: Vec<String>,
 }
 
 impl Default for ButtonBar {
@@ -94,6 +96,7 @@ impl Default for ButtonBar {
         Self {
             legacy_tooltips: true,
             tabs: Vec::new(),
+            unknown: Vec::new(),
         }
     }
 }
@@ -155,8 +158,9 @@ pub fn read_buttons(config_dir: &Path) -> Result<ButtonBar, SessionError> {
     let path = config_dir.join(BUTTONS_FILE);
     match std::fs::read_to_string(&path) {
         Ok(text) => {
-            let mut bar: ButtonBar =
-                toml::from_str(&text).map_err(|source| SessionError::Parse { path, source })?;
+            let (mut bar, unknown) = crate::from_toml_lenient::<ButtonBar>(&text)
+                .map_err(|source| SessionError::Parse { path, source })?;
+            bar.unknown = unknown;
             if !bar.legacy_tooltips {
                 for button in bar.tabs.iter_mut().flat_map(|t| &mut t.buttons) {
                     button.tooltip = false;
@@ -238,7 +242,17 @@ mod tests {
             text.contains("description = \"Saves the configuration\""),
             "{text}"
         );
+        assert!(text.starts_with("[[group]]"), "{text}");
         assert_eq!(read_buttons(dir.path()).unwrap(), bar);
+        // Unknown keys are left out and noted.
+        std::fs::write(
+            dir.path().join(BUTTONS_FILE),
+            "[[group]]\nname = 'x'\ncolor = 'red'\n[[group.button]]\nlabel = 'a'\n",
+        )
+        .unwrap();
+        let newer = read_buttons(dir.path()).unwrap();
+        assert_eq!(newer.tabs[0].buttons[0].label, "a");
+        assert_eq!(newer.unknown, ["group.0.color"]);
         // Files from before: `target` is accepted and dropped; tooltips on.
         std::fs::write(
             dir.path().join(BUTTONS_FILE),

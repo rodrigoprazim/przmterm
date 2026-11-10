@@ -88,6 +88,27 @@ pub enum SessionError {
     },
     #[error("{path}: {reason}")]
     Invalid { path: PathBuf, reason: String },
+    /// The file was read, but these keys mean nothing to this version (a
+    /// newer one wrote them, or they are misspelt); they were left out.
+    #[error("{path}: unknown setting(s) ignored: {}", keys.join(", "))]
+    Unknown { path: PathBuf, keys: Vec<String> },
+}
+
+/// Reads TOML into `T`, leaving out keys `T` does not know, so a file
+/// written by a newer version still opens. Returns those keys' dotted
+/// paths (`terminal.colour`, `forward.0.via`) to point them out.
+pub fn from_toml_lenient<T: serde::de::DeserializeOwned>(
+    text: &str,
+) -> Result<(T, Vec<String>), toml::de::Error> {
+    let de = toml::Deserializer::parse(text)?;
+    let mut unknown = Vec::new();
+    let value = serde_ignored::deserialize(de, |path| {
+        // `?` marks an optional value on the way: not part of the key.
+        let path = path.to_string().replace(".?", "").replace("?.", "");
+        unknown.push(path);
+    })?;
+    unknown.sort();
+    Ok((value, unknown))
 }
 
 fn is_default<T: Default + PartialEq>(value: &T) -> bool {
@@ -96,7 +117,7 @@ fn is_default<T: Default + PartialEq>(value: &T) -> bool {
 
 /// Terminal options of a settings layer. `None` = inherit.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct TerminalSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub term_type: Option<String>,
@@ -207,7 +228,7 @@ pub const DEFAULT_MCP_BLOCK: [&str; 7] = [
 
 /// AI access options of a settings layer (`[mcp]`). `None` = inherit.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct McpSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub access: Option<McpAccess>,
@@ -224,7 +245,7 @@ pub const FONT_SIZES: std::ops::RangeInclusive<u16> = 8..=36;
 
 /// Logging options of a settings layer. `None` = inherit.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct LogSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
@@ -238,7 +259,7 @@ pub struct LogSettings {
 
 /// One settings layer: defaults, a folder or a session. `None` = inherit.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct SessionSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub protocol: Option<Protocol>,
@@ -499,8 +520,9 @@ impl SessionSettings {
         }
     }
 
+    /// Settings from TOML; keys this version does not know are left out.
     pub fn from_toml(text: &str) -> Result<Self, toml::de::Error> {
-        toml::from_str(text)
+        from_toml_lenient(text).map(|(settings, _)| settings)
     }
 
     /// The anti-idle text and interval these settings give
@@ -1080,7 +1102,7 @@ impl SessionTree {
     pub fn load(config_dir: &Path) -> SessionTree {
         let mut tree = SessionTree::default();
         let defaults_path = config_dir.join(DEFAULTS_FILE);
-        let defaults = match read_settings(&defaults_path) {
+        let defaults = match read_settings_noting(&defaults_path, &mut tree.errors) {
             Ok(Some(s)) => s,
             Ok(None) => SessionSettings::default(),
             Err(e) => {
@@ -1328,7 +1350,10 @@ pub fn read_keyword_set(config_dir: &Path, name: &str) -> Result<KeywordSet, Ses
         path: path.clone(),
         source,
     })?;
-    toml::from_str(&text).map_err(|source| SessionError::Parse { path, source })
+    let (mut set, unknown) = from_toml_lenient::<KeywordSet>(&text)
+        .map_err(|source| SessionError::Parse { path, source })?;
+    set.unknown = unknown;
+    Ok(set)
 }
 
 /// Writes `<config>/keywords/<name>.toml`, replacing a set of that name.
@@ -1643,6 +1668,14 @@ pub fn expand_tilde(path: &str) -> PathBuf {
 }
 
 fn read_settings(path: &Path) -> Result<Option<SessionSettings>, SessionError> {
+    read_settings_noting(path, &mut Vec::new())
+}
+
+/// [`read_settings`], noting keys it did not know in `notes`.
+fn read_settings_noting(
+    path: &Path,
+    notes: &mut Vec<SessionError>,
+) -> Result<Option<SessionSettings>, SessionError> {
     let text = match fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -1653,12 +1686,18 @@ fn read_settings(path: &Path) -> Result<Option<SessionSettings>, SessionError> {
             });
         }
     };
-    SessionSettings::from_toml(&text)
-        .map(Some)
-        .map_err(|source| SessionError::Parse {
+    let (settings, unknown) =
+        from_toml_lenient::<SessionSettings>(&text).map_err(|source| SessionError::Parse {
             path: path.to_path_buf(),
             source,
-        })
+        })?;
+    if !unknown.is_empty() {
+        notes.push(SessionError::Unknown {
+            path: path.to_path_buf(),
+            keys: unknown,
+        });
+    }
+    Ok(Some(settings))
 }
 
 /// Loads a folder that inherits `inherited` from above.
@@ -1669,7 +1708,7 @@ fn load_folder(
     inherited: &SessionSettings,
     errors: &mut Vec<SessionError>,
 ) -> Folder {
-    let own = match read_settings(&dir.join(FOLDER_FILE)) {
+    let own = match read_settings_noting(&dir.join(FOLDER_FILE), errors) {
         Ok(own) => own.unwrap_or_default(),
         Err(e) => {
             errors.push(e);
@@ -1725,7 +1764,7 @@ fn load_folder(
                 .and_then(|s| s.to_str())
                 .unwrap_or_default()
                 .to_string();
-            let result = read_settings(&path).and_then(|own| {
+            let result = read_settings_noting(&path, errors).and_then(|own| {
                 let merged = settings.overlay(&own.unwrap_or_default());
                 Session::resolve(session_name, trail.clone(), &path, &merged)
             });
@@ -2067,9 +2106,89 @@ mod tests {
         );
     }
 
+    /// Every TOML example in docs/CONFIG.md reads without unknown keys, so
+    /// the reference keeps up with the files.
     #[test]
-    fn rejects_unknown_keys() {
-        assert!(SessionSettings::from_toml("hots = 'typo'").is_err());
+    fn the_configuration_reference_examples_read_cleanly() {
+        let doc = include_str!("../../../docs/CONFIG.md");
+        let mut section = "";
+        let mut checked = 0;
+        let mut lines = doc.lines();
+        while let Some(line) = lines.next() {
+            if let Some(title) = line.strip_prefix("## ") {
+                section = title;
+                continue;
+            }
+            if line != "```toml" {
+                continue;
+            }
+            let block: String = lines
+                .by_ref()
+                .take_while(|l| *l != "```")
+                .map(|l| format!("{l}\n"))
+                .collect();
+            fn unknown<T: serde::de::DeserializeOwned>(text: &str) -> Vec<String> {
+                from_toml_lenient::<T>(text)
+                    .unwrap_or_else(|e| panic!("{e}\n{text}"))
+                    .1
+            }
+            let unknown = match section {
+                s if s.starts_with("Sessions") => unknown::<SessionSettings>(&block),
+                s if s.starts_with("Button bar") => unknown::<buttons::ButtonBar>(&block),
+                s if s.starts_with("Keyboard") => unknown::<keymap::Keymap>(&block),
+                s if s.starts_with("Keyword") => unknown::<KeywordSet>(&block),
+                s if s.starts_with("App preferences") => {
+                    unknown::<preferences::Preferences>(&block)
+                }
+                s if s.starts_with("Backups") => unknown::<bundle::Bundle>(&block),
+                other => panic!("a TOML example under `{other}`: which file is it?"),
+            };
+            assert!(unknown.is_empty(), "{section}: {unknown:?}\n{block}");
+            checked += 1;
+        }
+        assert_eq!(checked, 6);
+        // And every session setting has its row.
+        for key in FIELDS {
+            let name = key.rsplit('.').next().unwrap();
+            let row = format!("| `{name}` |");
+            let list = format!("### `[[{name}]]`");
+            assert!(
+                doc.contains(&row) || doc.contains(&list),
+                "{key} is not in the reference"
+            );
+        }
+        // The sample configuration reads cleanly too.
+        let sample = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/config");
+        let tree = SessionTree::load(&sample);
+        assert!(tree.errors.is_empty(), "{:?}", tree.errors);
+        assert!(!tree.root.all_sessions().is_empty());
+    }
+
+    #[test]
+    fn leaves_out_unknown_keys_and_points_them_out() {
+        let s = SessionSettings::from_toml("hots = 'typo'\nport = 2").unwrap();
+        assert_eq!(s.port, Some(2));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write(dir, "defaults.toml", "port = 22\nfuture = 1");
+        write(
+            dir,
+            "sessions/a.toml",
+            "host = 'a'\n[terminal]\nglow = true\n[[forward]]\ntype = 'dynamic'\nlisten = '1'\nvia = 'x'",
+        );
+        let tree = SessionTree::load(dir);
+        assert_eq!(tree.root.sessions.len(), 1, "the session still loads");
+        let notes: Vec<String> = tree.errors.iter().map(|e| e.to_string()).collect();
+        assert_eq!(notes.len(), 2, "{notes:?}");
+        assert!(
+            notes[0].ends_with("unknown setting(s) ignored: future"),
+            "{notes:?}"
+        );
+        assert!(
+            notes[1].ends_with("unknown setting(s) ignored: forward.0.via, terminal.glow"),
+            "{notes:?}"
+        );
     }
 
     #[test]

@@ -46,7 +46,16 @@ pub struct ButtonBarUi {
 impl ButtonBarUi {
     pub fn load(config_dir: Option<&Path>) -> Self {
         let (bar, error) = match config_dir.map(read_buttons) {
-            Some(Ok(bar)) => (bar, None),
+            Some(Ok(bar)) => {
+                let note = (!bar.unknown.is_empty()).then(|| {
+                    format!(
+                        "{}: unknown setting(s) ignored: {}",
+                        przmterm_session::buttons::BUTTONS_FILE,
+                        bar.unknown.join(", ")
+                    )
+                });
+                (bar, note)
+            }
             Some(Err(e)) => (ButtonBar::default(), Some(e.to_string())),
             None => (ButtonBar::default(), None),
         };

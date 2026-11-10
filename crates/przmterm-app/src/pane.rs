@@ -741,7 +741,13 @@ impl Pane {
         };
         match przmterm_session::read_keyword_set(dir, name) {
             Ok(set) => {
-                let (h, problems) = przmterm_term::highlight::Highlighter::new(&set);
+                let (h, mut problems) = przmterm_term::highlight::Highlighter::new(&set);
+                if !set.unknown.is_empty() {
+                    problems.push(format!(
+                        "unknown setting(s) ignored: {}",
+                        set.unknown.join(", ")
+                    ));
+                }
                 for p in problems {
                     self.term
                         .feed(format!("\x1b[33m[Keywords {name}: {p}]\x1b[0m\r\n").as_bytes());

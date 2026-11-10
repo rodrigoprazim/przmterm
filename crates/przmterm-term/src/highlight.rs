@@ -285,6 +285,7 @@ mod tests {
         let (h, problems) = Highlighter::new(&KeywordSet {
             match_case: false,
             rules,
+            ..KeywordSet::default()
         });
         assert!(problems.is_empty(), "{problems:?}");
         h
@@ -376,6 +377,7 @@ mod tests {
         let (h, problems) = Highlighter::new(&KeywordSet {
             match_case: false,
             rules: vec![regex("(unclosed", "#ff0000"), word("x", "red")],
+            ..KeywordSet::default()
         });
         assert!(h.is_empty());
         assert_eq!(problems.len(), 2, "{problems:?}");

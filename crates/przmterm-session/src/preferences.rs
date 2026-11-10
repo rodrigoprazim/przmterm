@@ -11,7 +11,7 @@ use crate::SessionError;
 pub const PREFERENCES_FILE: &str = "preferences.toml";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Preferences {
     /// Look for a newer release on GitHub when the app starts.
     pub check_for_updates: bool,

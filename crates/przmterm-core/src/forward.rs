@@ -41,7 +41,6 @@ impl ForwardKind {
 /// target = "10.0.0.5:80"     # not used by dynamic forwards
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Forward {
     #[serde(rename = "type", default)]
     pub kind: ForwardKind,

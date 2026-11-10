@@ -203,10 +203,10 @@ the text, `\r` is Enter, `\t` Tab, `\e` Esc, `\n` a line feed and `\p` a
 one-second pause. Buttons are kept in `<config>/buttons.toml`:
 
 ```toml
-[[tab]]
+[[group]]
 name = "Cisco"
 
-[[tab.button]]
+[[group.button]]
 label = "Save"
 send = 'copy run start\r\p\r'   # single quotes keep the backslashes
 description = "Saves the running configuration"
@@ -560,7 +560,9 @@ przmterm/
 ```
 
 Each file can set any of these keys; anything unset is inherited from the
-folder above, then from `defaults.toml`:
+folder above, then from `defaults.toml`. Every file and key, and what stays
+compatible from 1.0 on, is in the
+[configuration reference](docs/CONFIG.md):
 
 ```toml
 protocol = "ssh"          # ssh | telnet | serial | local
@@ -606,8 +608,10 @@ a folder to add a session or subfolder there, rename it, or edit the settings
 its sessions inherit.
 
 Global defaults live in `defaults.toml` (⚙ next to *Sessions* in the app).
-Changing them asks whether existing sessions that use the defaults should
-follow; if not, PrzmTerm writes the old value into those sessions.
+Changing them asks which existing sessions take the new values: those that
+use the default (sessions with their own value keep it), all of them
+(their own values for those settings are removed), or only new sessions
+(PrzmTerm writes the old value into the existing ones).
 
 Unlock the padlock next to *Sessions* to drag sessions and folders (by the
 dots before their names) onto another folder, or to the top level.

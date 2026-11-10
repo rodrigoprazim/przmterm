@@ -27,7 +27,6 @@ fn is_false(b: &bool) -> bool {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Trigger {
     /// What to look for in the output.
     #[serde(rename = "match")]
