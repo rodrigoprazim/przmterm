@@ -369,6 +369,7 @@ impl ButtonBarUi {
                 if let Some(err) = &edit.error {
                     ui.colored_label(ui.visuals().error_fg_color, err);
                 }
+                ui.add_space(14.0);
                 // Cancel and Clear on the left, Save on the right.
                 ui.horizontal(|ui| {
                     if ui

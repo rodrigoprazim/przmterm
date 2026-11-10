@@ -9,6 +9,9 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Changed
 
+- *New shortcut*: the text to send is a box of several lines, the fields
+  reach the window's edge, and the choice of what the shortcut does is one
+  segmented control.
 - Settings files with keys this version does not know (written by a newer
   version, or misspelt) are read without those keys instead of being
   refused; the status line under the session list, the button bar,
@@ -69,6 +72,9 @@ All notable changes to PrzmTerm are recorded here. The format follows
   the columns and under the headers.
 
 ### Fixed
+
+- Recording a shortcut takes the whole combination again (Ctrl, Alt, Shift
+  or ⌘ with a key): the modifier pressed first was recorded on its own.
 
 - Anti-idle was not sent while the window was minimized or hidden: the
   sessions' work (reading, logging, triggers, scripts, transfers, anti-idle,
