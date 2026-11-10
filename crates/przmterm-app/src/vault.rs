@@ -246,7 +246,7 @@ impl VaultUi {
         // it is wide enough for the entries. (Two ids: egui keeps a
         // window's size.)
         let unlocked = self.vault.is_some();
-        let mut window = egui::Window::new("Password vault")
+        let mut window = egui::Window::new(crate::theme::window_title(ctx, "Password vault"))
             .id(egui::Id::unique(if unlocked {
                 "vault-window"
             } else {
@@ -530,7 +530,7 @@ impl VaultUi {
                     );
                     ui.end_row();
                     ui.label("");
-                    ui.checkbox(&mut edit.show, "Show password and passphrase");
+                    crate::theme::checkbox(ui, &mut edit.show, "Show password and passphrase");
                     ui.end_row();
                 });
             if let Some(err) = &edit.error {

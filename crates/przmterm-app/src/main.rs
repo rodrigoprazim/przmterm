@@ -144,9 +144,9 @@ pub fn font_picker(
 
 pub fn cursor_label(shape: przmterm_session::CursorShape) -> &'static str {
     match shape {
-        przmterm_session::CursorShape::Block => "█ Block",
+        przmterm_session::CursorShape::Block => "▌ Block",
         przmterm_session::CursorShape::Underline => "▁ Underline",
-        przmterm_session::CursorShape::Bar => "▏ Bar",
+        przmterm_session::CursorShape::Bar => "▏ Vertical bar",
     }
 }
 
@@ -1246,7 +1246,7 @@ impl PrzmApp {
                         .hint_text("one command per line"),
                 )
                 .request_focus();
-                ui.checkbox(enter_after, "Press Enter after each line");
+                crate::theme::checkbox(ui, enter_after, "Press Enter after each line");
                 ui.weak("Locked tabs are left out.");
                 buttons(
                     ui,
@@ -2320,7 +2320,7 @@ impl PrzmApp {
         let outcome = self.update.as_ref().and_then(update::Check::outcome);
         let mut open = true;
         let mut check_at_start = self.prefs.check_for_updates;
-        egui::Window::new("Check for Updates")
+        egui::Window::new(crate::theme::window_title(ctx, "Check for Updates"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -2354,7 +2354,7 @@ impl PrzmApp {
                     }
                 }
                 ui.add_space(6.0);
-                ui.checkbox(&mut check_at_start, "Check when PrzmTerm starts");
+                crate::theme::checkbox(ui, &mut check_at_start, "Check when PrzmTerm starts");
             });
         if check_at_start != self.prefs.check_for_updates {
             self.prefs.check_for_updates = check_at_start;
@@ -2385,7 +2385,7 @@ impl PrzmApp {
             ctx.load_texture("przmterm-icon", image, egui::TextureOptions::LINEAR)
         });
         let mut open = true;
-        egui::Window::new("About PrzmTerm")
+        egui::Window::new(crate::theme::window_title(ctx, "About PrzmTerm"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -3178,7 +3178,7 @@ impl PrzmApp {
                 .show(ctx, |ui| {
                     ui.label("Show next to this session:");
                     ui.add_space(4.0);
-                    ui.checkbox(&mut dialog.shell, "A new PrzmTerm shell")
+                    crate::theme::checkbox(ui, &mut dialog.shell, "A new PrzmTerm shell")
                         .on_hover_text("To connect to another host from there");
                     if !dialog.others.is_empty() {
                         ui.add_space(4.0);
@@ -3195,7 +3195,8 @@ impl PrzmApp {
                                     } else {
                                         ""
                                     };
-                                    ui.checkbox(
+                                    crate::theme::checkbox(
+                                        ui,
                                         picked,
                                         format!("Tab {}: {}{state}", *t + 1, pane_name(pane)),
                                     );
@@ -3351,7 +3352,7 @@ impl PrzmApp {
                     .collapsible(false)
                     .resizable(false)
                     .show(ctx, |ui| {
-                        ui.label(egui::RichText::new("Font").strong());
+                        theme::section_title(ui, "Font");
                         egui::Grid::new("font-dialog-font")
                             .num_columns(2)
                             .min_col_width(60.0)
@@ -3369,21 +3370,21 @@ impl PrzmApp {
                                 size = f32::from(points);
                                 ui.end_row();
                             });
-                        ui.add_space(8.0);
-                        ui.label(egui::RichText::new("Cursor").strong());
+                        theme::section_title(ui, "Cursor");
                         egui::Grid::new("font-dialog-cursor")
                             .num_columns(2)
                             .min_col_width(60.0)
                             .spacing([12.0, 8.0])
                             .show(ui, |ui| {
                                 ui.label("Shape");
-                                ui.horizontal(|ui| {
+                                ui.vertical(|ui| {
+                                    ui.spacing_mut().item_spacing.y = 0.0;
                                     for shape in przmterm_session::CursorShape::ALL {
-                                        ui.selectable_value(
-                                            &mut cursor,
-                                            shape,
-                                            cursor_label(shape),
-                                        );
+                                        if theme::radio(ui, cursor == shape, cursor_label(shape))
+                                            .clicked()
+                                        {
+                                            cursor = shape;
+                                        }
                                     }
                                 });
                                 ui.end_row();
@@ -3404,8 +3405,8 @@ impl PrzmApp {
                                     }
                                 });
                                 ui.end_row();
-                                ui.label("Blink");
-                                ui.checkbox(&mut blink, "");
+                                ui.label("");
+                                theme::checkbox(ui, &mut blink, "Blinking cursor");
                                 ui.end_row();
                             });
                         ui.add_space(4.0);

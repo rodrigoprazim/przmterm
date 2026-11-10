@@ -264,15 +264,18 @@ impl SftpBrowser {
             self.handle(event);
         }
         let mut open = true;
-        let response = egui::Window::new(format!("{}: {}", self.protocol, self.name))
-            .id(egui::Id::unique(("sftp", self.id)))
-            .open(&mut open)
-            .default_size([760.0, 520.0])
-            .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(ctx.content_rect().center())
-            .resizable(true)
-            .collapsible(true)
-            .show(ctx, |ui| self.body(ui));
+        let response = egui::Window::new(crate::theme::window_title(
+            ctx,
+            format!("{}: {}", self.protocol, self.name),
+        ))
+        .id(egui::Id::unique(("sftp", self.id)))
+        .open(&mut open)
+        .default_size([760.0, 520.0])
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .resizable(true)
+        .collapsible(true)
+        .show(ctx, |ui| self.body(ui));
         // Files dropped on the window are uploaded to the current folder.
         if let Some(r) = response
             && self.ready
@@ -401,7 +404,7 @@ impl SftpBrowser {
                     self.ask = Some(Ask::Delete(selected.clone()));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.checkbox(&mut self.hidden, "Hidden files")
+                    crate::theme::checkbox(ui, &mut self.hidden, "Hidden files")
                         .on_hover_text("Show names that start with a dot");
                 });
             });

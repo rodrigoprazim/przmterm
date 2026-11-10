@@ -421,7 +421,7 @@ impl KeymapEditor {
         let mut open = true;
         let mut close = false;
         let escape = ctx.input(|i| i.key_pressed(Key::Escape));
-        egui::Window::new("Keyboard shortcuts")
+        egui::Window::new(crate::theme::window_title(ctx, "Keyboard shortcuts"))
             .open(&mut open)
             .pivot(egui::Align2::CENTER_CENTER)
             .default_pos(ctx.content_rect().center())

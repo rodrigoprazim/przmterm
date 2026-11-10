@@ -710,7 +710,7 @@ impl Editor {
         // Anchored at its top: a page that grows the window pushes its
         // bottom down, and nothing moves under the pointer.
         let screen = ctx.content_rect();
-        egui::Window::new(self.title.clone())
+        egui::Window::new(crate::theme::window_title(ctx, self.title.clone()))
             .pivot(egui::Align2::CENTER_TOP)
             .default_pos(egui::pos2(
                 screen.center().x,
@@ -729,7 +729,7 @@ impl Editor {
                     let names: Vec<&str> = confirm.keys.iter().map(|k| field_label(k)).collect();
                     ui.label(format!("Changed: {}.", names.join(", ")));
                     ui.add_space(6.0);
-                    ui.checkbox(
+                    crate::theme::checkbox(ui,
                         &mut confirm.apply_existing,
                         "Apply the new values to existing sessions that use the default",
                     );
@@ -1203,7 +1203,7 @@ impl Editor {
                             .font(egui::TextStyle::Monospace)
                             .desired_width(96.0),
                     );
-                    ui.checkbox(&mut t.regex, "regex")
+                    crate::theme::checkbox(ui, &mut t.regex, "regex")
                         .on_hover_text("The text is a regular expression");
                     ui.label("→");
                     ui.add(
@@ -1213,7 +1213,7 @@ impl Editor {
                             .desired_width(80.0),
                     )
                     .on_hover_text("\\r Enter, \\t Tab, \\e Esc, \\p pause 1 s");
-                    ui.checkbox(&mut t.once, "once")
+                    crate::theme::checkbox(ui, &mut t.once, "once")
                         .on_hover_text("Only the first time per connection");
                     if crate::icons::button(ui, crate::icons::Icon::Close, false)
                         .on_hover_text("Remove")
@@ -1685,13 +1685,22 @@ impl Editor {
     /// The cursor's shape, colour and blinking.
     fn cursor_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
         ui.label("Shape");
-        choice_pick(
-            ui,
-            &mut self.cursor,
-            cx.inherited.terminal.cursor.unwrap_or_default(),
-            &przmterm_session::CursorShape::ALL.map(|c| (c, crate::cursor_label(c))),
-            &cx.hint("terminal.cursor"),
-        );
+        ui.horizontal_top(|ui| {
+            let effective = self
+                .cursor
+                .unwrap_or(cx.inherited.terminal.cursor.unwrap_or_default());
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for shape in przmterm_session::CursorShape::ALL {
+                    if crate::theme::radio(ui, effective == shape, crate::cursor_label(shape))
+                        .clicked()
+                    {
+                        self.cursor = Some(shape);
+                    }
+                }
+            });
+            reset(ui, &mut self.cursor, &cx.hint("terminal.cursor"));
+        });
         ui.end_row();
         ui.label("Color");
         ui.horizontal(|ui| {
@@ -1720,15 +1729,20 @@ impl Editor {
             );
         });
         ui.end_row();
-        ui.label("Blink");
-        bool_pick(
-            ui,
-            &mut self.cursor_blink,
-            cx.inherited.terminal.cursor_blink.unwrap_or(false),
-            ["yes", "no"],
-            None,
-            &cx.hint("terminal.cursor_blink"),
-        );
+        ui.label("");
+        ui.horizontal(|ui| {
+            let mut blink = self
+                .cursor_blink
+                .unwrap_or(cx.inherited.terminal.cursor_blink.unwrap_or(false));
+            if crate::theme::checkbox(ui, &mut blink, "Blinking cursor").changed() {
+                self.cursor_blink = Some(blink);
+            }
+            reset(
+                ui,
+                &mut self.cursor_blink,
+                &cx.hint("terminal.cursor_blink"),
+            );
+        });
         ui.end_row();
     }
 
@@ -1823,15 +1837,13 @@ fn section_help(
     about: &str,
 ) {
     let shown = *open == Some(title);
-    let toggle = ui
-        .horizontal(|ui| {
-            crate::theme::section_title(ui, title);
-            ui.add_space(-8.0);
-            ui.selectable_label(shown, " ? ")
-                .on_hover_text("What is this?")
-                .clicked()
-        })
-        .inner;
+    let mut toggle = false;
+    crate::theme::section_header(ui, title, |ui| {
+        toggle = ui
+            .selectable_label(shown, " ? ")
+            .on_hover_text("What is this?")
+            .clicked();
+    });
     if toggle {
         *open = if shown { None } else { Some(title) };
     }

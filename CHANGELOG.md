@@ -20,7 +20,9 @@ All notable changes to PrzmTerm are recorded here. The format follows
 - Settings and session windows: each page has a title, sections a larger
   title with a line under it, choices such as ask/always/never are one
   segmented control, combo boxes look like the text fields and line up with
-  them, and Save/OK are blue.
+  them, and Save/OK are blue. Check boxes and radio buttons are filled with
+  the blue when on; the cursor's shape is a list of radio buttons and its
+  blinking a check box. Window titles sit in the middle of their bar.
 - *Split Right* and *Split Down* are icons at the top right, with **⋯** for
   the grid and the arrangements, instead of the "◫ Split ▾" menu.
 

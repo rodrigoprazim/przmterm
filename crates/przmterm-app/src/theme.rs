@@ -4,7 +4,9 @@
 
 use std::sync::Arc;
 
-use eframe::egui::{self, Color32, CornerRadius, FontFamily, FontId, Margin, Shadow, Stroke};
+use eframe::egui::{
+    self, Color32, CornerRadius, FontFamily, FontId, IntoAtoms as _, Margin, Shadow, Stroke,
+};
 
 const fn rgb(r: u8, g: u8, b: u8) -> Color32 {
     Color32::from_rgb(r, g, b)
@@ -164,14 +166,24 @@ pub fn segmented(ui: &mut egui::Ui, selected: Option<usize>, options: &[&str]) -
 }
 
 /// A section's title in a form: larger and bolder than the labels, with a
-/// line under it.
+/// line under it across the form.
 pub fn section_title(ui: &mut egui::Ui, title: &str) {
+    section_header(ui, title, |_| {});
+}
+
+/// [`section_title`] with more after the title on its row (a ? button).
+pub fn section_header(ui: &mut egui::Ui, title: &str, after: impl FnOnce(&mut egui::Ui)) {
     ui.add_space(14.0);
-    ui.label(
-        egui::RichText::new(title)
-            .font(FontId::new(14.5, semibold()))
-            .color(TEXT_STRONG),
-    );
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(title)
+                .font(FontId::new(14.5, semibold()))
+                .color(TEXT_STRONG),
+        );
+        after(ui);
+    });
+    // The line goes under the whole row, from the form's left edge to its
+    // right edge, whatever the row holds.
     let rect = ui.available_rect_before_wrap();
     ui.painter().hline(
         rect.left()..=rect.right(),
@@ -179,6 +191,127 @@ pub fn section_title(ui: &mut egui::Ui, title: &str) {
         Stroke::new(1.0, BORDER),
     );
     ui.add_space(8.0);
+}
+
+/// A window title that sits in the middle of the title bar: egui centres
+/// it between the left edge and the close button, so a blank as wide as
+/// the button goes first. For windows with a close button.
+pub fn window_title(ctx: &egui::Context, text: impl Into<String>) -> egui::Atoms<'static> {
+    let side = ctx.fonts_mut(|f| f.row_height(&FontId::new(13.5, semibold())));
+    (
+        egui::Atom::custom(
+            egui::IdSalt::new("przm-title-balance"),
+            egui::vec2(side, side),
+        ),
+        text.into(),
+    )
+        .into_atoms()
+}
+
+/// A check box: a rounded square, filled with the accent and a white tick
+/// when checked. Toggles `checked` when clicked.
+pub fn checkbox(
+    ui: &mut egui::Ui,
+    checked: &mut bool,
+    text: impl Into<egui::WidgetText>,
+) -> egui::Response {
+    let response = mark_and_text(
+        ui,
+        text,
+        |painter, rect, on, hovered| {
+            let square = egui::Rect::from_center_size(rect.center(), egui::vec2(15.0, 15.0));
+            if on {
+                painter.rect_filled(square, 3, ACCENT);
+                painter.add(egui::Shape::line(
+                    vec![
+                        square.lerp_inside(egui::vec2(0.22, 0.52)),
+                        square.lerp_inside(egui::vec2(0.42, 0.72)),
+                        square.lerp_inside(egui::vec2(0.78, 0.30)),
+                    ],
+                    Stroke::new(1.8, Color32::WHITE),
+                ));
+            } else {
+                painter.rect_filled(square, 3, SUNKEN);
+                let border = if hovered { TEXT_WEAK } else { CONTROL_BORDER };
+                painter.rect_stroke(
+                    square,
+                    3,
+                    Stroke::new(1.0, border),
+                    egui::StrokeKind::Inside,
+                );
+            }
+        },
+        *checked,
+    );
+    let mut response = response;
+    if response.clicked() {
+        *checked = !*checked;
+        response.mark_changed();
+    }
+    response
+}
+
+/// A radio button: a circle, filled with the accent and a white dot when
+/// chosen. Returns its response (clicked: choose it).
+pub fn radio(ui: &mut egui::Ui, chosen: bool, text: impl Into<egui::WidgetText>) -> egui::Response {
+    mark_and_text(
+        ui,
+        text,
+        |painter, rect, on, hovered| {
+            let c = rect.center();
+            if on {
+                painter.circle_filled(c, 7.5, ACCENT);
+                painter.circle_filled(c, 3.0, Color32::WHITE);
+            } else {
+                painter.circle_filled(c, 7.5, SUNKEN);
+                let border = if hovered { TEXT_WEAK } else { CONTROL_BORDER };
+                painter.circle_stroke(c, 7.0, Stroke::new(1.0, border));
+            }
+        },
+        chosen,
+    )
+}
+
+/// A mark (box or circle, drawn by `paint` in a 16-point square) followed
+/// by `text`, clickable as a whole.
+fn mark_and_text(
+    ui: &mut egui::Ui,
+    text: impl Into<egui::WidgetText>,
+    paint: impl FnOnce(&egui::Painter, egui::Rect, bool, bool),
+    on: bool,
+) -> egui::Response {
+    let text: egui::WidgetText = text.into();
+    let galley = text.into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        egui::TextStyle::Body,
+    );
+    let mark = 16.0;
+    let gap = if galley.size().x > 0.0 { 7.0 } else { 0.0 };
+    let size = egui::vec2(mark + gap + galley.size().x, 22.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let mark_rect = egui::Rect::from_min_size(
+            egui::pos2(rect.left(), rect.center().y - mark / 2.0),
+            egui::vec2(mark, mark),
+        );
+        paint(ui.painter(), mark_rect, on, response.hovered());
+        let color = if response.hovered() {
+            TEXT_STRONG
+        } else {
+            TEXT
+        };
+        ui.painter().galley(
+            egui::pos2(
+                mark_rect.right() + gap,
+                rect.center().y - galley.size().y / 2.0,
+            ),
+            galley,
+            color,
+        );
+    }
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// Sets the interface's colours, sizes and spacing.

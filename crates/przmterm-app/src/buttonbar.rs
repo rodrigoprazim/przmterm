@@ -219,7 +219,7 @@ impl ButtonBarUi {
                     }
                     ui.separator();
                     let mut on = button.tooltip;
-                    if ui.checkbox(&mut on, "Show tooltip").changed() {
+                    if crate::theme::checkbox(ui, &mut on, "Show tooltip").changed() {
                         tooltip = Some((i, on));
                     }
                 });
@@ -328,7 +328,7 @@ impl ButtonBarUi {
                         );
                         ui.end_row();
                         ui.label("");
-                        ui.checkbox(&mut edit.button.tooltip, "Show tooltip")
+                        crate::theme::checkbox(ui, &mut edit.button.tooltip, "Show tooltip")
                             .on_hover_text(
                                 "For this button: the description, or else what it sends",
                             );
