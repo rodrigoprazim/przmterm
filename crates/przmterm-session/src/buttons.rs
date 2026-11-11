@@ -160,6 +160,13 @@ pub fn vault_reference(entry: &str, field: VaultField) -> String {
     }
 }
 
+/// Whether the text of a button or shortcut types from the vault.
+pub fn uses_vault(send: &str) -> bool {
+    parse_send(send)
+        .iter()
+        .any(|c| matches!(c, Chunk::Vault { .. }))
+}
+
 /// The vault entries `chunks` type from.
 pub fn vault_entries(chunks: &[Chunk]) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
@@ -363,6 +370,14 @@ mod tests {
         assert!(err.contains("no user name"), "{err}");
         let err = resolve_vault(&parse_send("{vault:Gone}"), &vault).unwrap_err();
         assert!(err.contains("no entry Gone"), "{err}");
+    }
+
+    #[test]
+    fn knows_what_types_from_the_vault() {
+        assert!(uses_vault("enable\\r\\p{vault:Core sw}\\r"));
+        assert!(uses_vault("{vault:Lab:username}"));
+        assert!(!uses_vault("show run\\r"));
+        assert!(!uses_vault("{vault:"));
     }
 
     #[test]

@@ -307,7 +307,14 @@ as `(?i)password:|senha:` for a button that types a password. Pressed
 anywhere else, the button sends nothing and the status bar says so, and the
 vault is not even asked for. The check is made when the button is pressed;
 `(?i)` makes it ignore case. The dialog warns when a button types from the
-vault without it. Buttons are kept in `<config>/buttons.toml`:
+vault without it.
+
+Changing a button or shortcut that types from the vault asks for the master
+password, even while the vault is open: opening it to edit, or saving one
+that newly types from the vault. Pressing it never asks (beyond unlocking a
+locked vault). This guards the app, not the file: anyone who can edit
+`buttons.toml` can still change it there. Buttons are kept in
+`<config>/buttons.toml`:
 
 ```toml
 [[group]]

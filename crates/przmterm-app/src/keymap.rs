@@ -4,6 +4,7 @@
 use std::path::Path;
 
 use eframe::egui::{self, Key, Modifiers};
+use przmterm_session::buttons::uses_vault;
 use przmterm_session::keymap::{
     Binding, Chord, Does, Keymap, read_keymap, reset_keymap, write_keymap,
 };
@@ -390,6 +391,17 @@ struct Edit {
     /// Only when, for Send text.
     only_when: String,
     error: Option<String>,
+    /// The master password was given for this dialog: it may save a
+    /// shortcut that types from the vault.
+    authorized: bool,
+}
+
+/// What waits for the master password.
+enum Pending {
+    /// Changing the shortcut in this row, which types from the vault.
+    Change(usize),
+    /// Saving the open dialog, whose shortcut types from the vault.
+    Save,
 }
 
 /// Shift, Control, Alt and Command (or Windows) keys themselves.
@@ -441,6 +453,11 @@ pub struct KeymapEditor {
     error: Option<String>,
     /// The Vault menu asked for the vault to be unlocked.
     pub unlock_request: bool,
+    /// A change to a shortcut that types from the vault needs the master
+    /// password; answer with [`Self::master_given`] or
+    /// [`Self::master_refused`].
+    pub master_request: bool,
+    pending: Option<Pending>,
 }
 
 pub enum KeymapResult {
@@ -457,7 +474,59 @@ impl KeymapEditor {
             changed: false,
             error: (!shortcuts.errors.is_empty()).then(|| shortcuts.errors.join("\n")),
             unlock_request: false,
+            master_request: false,
+            pending: None,
         }
+    }
+
+    /// The master password was given: the dialog may save shortcuts that
+    /// type from the vault, and what waited for it goes on.
+    pub fn master_given(&mut self) {
+        if let Some(edit) = &mut self.edit {
+            edit.authorized = true;
+        }
+        match self.pending.take() {
+            Some(Pending::Change(i)) => self.change(i, true),
+            Some(Pending::Save) => self.save_edit(),
+            None => {}
+        }
+    }
+
+    pub fn master_refused(&mut self) {
+        if let (Some(Pending::Save), Some(edit)) = (self.pending.take(), &mut self.edit) {
+            edit.error = Some(
+                "Not saved: a shortcut that types from the vault needs the master password.".into(),
+            );
+        }
+    }
+
+    /// Opens the dialog for the shortcut in row `i`.
+    fn change(&mut self, i: usize, authorized: bool) {
+        let Some((keys, b)) = self.rows.get(i) else {
+            return;
+        };
+        let (kind, command, text) = match b.does() {
+            Ok(Does::Command(id)) => (
+                Kind::Command,
+                command(id).map_or(COMMANDS[0].id, |c| c.id),
+                String::new(),
+            ),
+            Ok(Does::Send(t)) => (Kind::Send, COMMANDS[0].id, t.to_string()),
+            Ok(Does::Script(s)) => (Kind::Script, COMMANDS[0].id, s.to_string()),
+            Ok(Does::Button(s)) => (Kind::Button, COMMANDS[0].id, s.to_string()),
+            Err(_) => (Kind::Command, COMMANDS[0].id, String::new()),
+        };
+        self.edit = Some(Edit {
+            index: Some(i),
+            keys: Some(*keys),
+            recording: false,
+            kind,
+            command,
+            text,
+            only_when: b.only_when.clone(),
+            error: None,
+            authorized,
+        });
     }
 
     fn describe(b: &Binding) -> String {
@@ -559,28 +628,14 @@ impl KeymapEditor {
                     self.changed = true;
                 }
                 if let Some(i) = change {
-                    let (keys, b) = &self.rows[i];
-                    let (kind, command, text) = match b.does() {
-                        Ok(Does::Command(id)) => (
-                            Kind::Command,
-                            command(id).map_or(COMMANDS[0].id, |c| c.id),
-                            String::new(),
-                        ),
-                        Ok(Does::Send(t)) => (Kind::Send, COMMANDS[0].id, t.to_string()),
-                        Ok(Does::Script(s)) => (Kind::Script, COMMANDS[0].id, s.to_string()),
-                        Ok(Does::Button(s)) => (Kind::Button, COMMANDS[0].id, s.to_string()),
-                        Err(_) => (Kind::Command, COMMANDS[0].id, String::new()),
-                    };
-                    self.edit = Some(Edit {
-                        index: Some(i),
-                        keys: Some(*keys),
-                        recording: false,
-                        kind,
-                        command,
-                        text,
-                        only_when: b.only_when.clone(),
-                        error: None,
-                    });
+                    if uses_vault(&self.rows[i].1.send) {
+                        // The master password first: its Only when could
+                        // be taken off.
+                        self.pending = Some(Pending::Change(i));
+                        self.master_request = true;
+                    } else {
+                        self.change(i, false);
+                    }
                 }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
@@ -603,6 +658,7 @@ impl KeymapEditor {
                                 text: String::new(),
                                 only_when: String::new(),
                                 error: None,
+                                authorized: false,
                             });
                         }
                         if ui.button("Close").clicked() {
@@ -880,61 +936,73 @@ at the cursor matches it",
             });
         });
         match done {
-            Some(true) => {
-                let Some(keys) = edit.keys else {
-                    edit.error = Some("Record the keys first.".into());
-                    return;
-                };
-                let text = edit.text.trim().to_string();
-                let mut b = Binding {
-                    keys: keys.chord().text(),
-                    ..Default::default()
-                };
-                match edit.kind {
-                    Kind::Command => b.command = edit.command.into(),
-                    Kind::Send => {
-                        b.send = edit.text.clone();
-                        b.only_when = edit.only_when.trim().to_string();
-                    }
-                    Kind::Script => b.script = text,
-                    Kind::Button => b.button = text,
-                }
-                if let Err(e) = b.does() {
-                    edit.error = Some(match edit.kind {
-                        Kind::Send => "Type the text to send.".into(),
-                        Kind::Script => "Choose a script.".into(),
-                        Kind::Button => "Choose a button.".into(),
-                        Kind::Command => e,
-                    });
-                    return;
-                }
-                if let Err(e) = crate::buttonbar::check_only_when(&b.only_when) {
-                    edit.error = Some(e);
-                    return;
-                }
-                if let Some((i, _)) = self
-                    .rows
-                    .iter()
-                    .enumerate()
-                    .find(|(i, (k, _))| *k == keys && Some(*i) != edit.index)
-                {
-                    edit.error = Some(format!(
-                        "{} already does: {}",
-                        keys.label(),
-                        Self::describe(&self.rows[i].1)
-                    ));
-                    return;
-                }
-                match edit.index {
-                    Some(i) => self.rows[i] = (keys, b),
-                    None => self.rows.push((keys, b)),
-                }
+            Some(true) => self.save_edit(),
+            Some(false) => {
                 self.edit = None;
-                self.changed = true;
+                self.pending = None;
             }
-            Some(false) => self.edit = None,
             None => {}
         }
+    }
+
+    /// Checks the dialog's shortcut, then saves it and closes the dialog.
+    fn save_edit(&mut self) {
+        let Some(edit) = &mut self.edit else { return };
+        let Some(keys) = edit.keys else {
+            edit.error = Some("Record the keys first.".into());
+            return;
+        };
+        let text = edit.text.trim().to_string();
+        let mut b = Binding {
+            keys: keys.chord().text(),
+            ..Default::default()
+        };
+        match edit.kind {
+            Kind::Command => b.command = edit.command.into(),
+            Kind::Send => {
+                b.send = edit.text.clone();
+                b.only_when = edit.only_when.trim().to_string();
+            }
+            Kind::Script => b.script = text,
+            Kind::Button => b.button = text,
+        }
+        if let Err(e) = b.does() {
+            edit.error = Some(match edit.kind {
+                Kind::Send => "Type the text to send.".into(),
+                Kind::Script => "Choose a script.".into(),
+                Kind::Button => "Choose a button.".into(),
+                Kind::Command => e,
+            });
+            return;
+        }
+        if let Err(e) = crate::buttonbar::check_only_when(&b.only_when) {
+            edit.error = Some(e);
+            return;
+        }
+        if uses_vault(&b.send) && !edit.authorized {
+            self.pending = Some(Pending::Save);
+            self.master_request = true;
+            return;
+        }
+        if let Some((i, _)) = self
+            .rows
+            .iter()
+            .enumerate()
+            .find(|(i, (k, _))| *k == keys && Some(*i) != edit.index)
+        {
+            edit.error = Some(format!(
+                "{} already does: {}",
+                keys.label(),
+                Self::describe(&self.rows[i].1)
+            ));
+            return;
+        }
+        match edit.index {
+            Some(i) => self.rows[i] = (keys, b),
+            None => self.rows.push((keys, b)),
+        }
+        self.edit = None;
+        self.changed = true;
     }
 }
 

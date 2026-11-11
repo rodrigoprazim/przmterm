@@ -266,7 +266,9 @@ if the vault is locked, then types the value. If the entry or the field is
 missing, nothing is sent. Triggers do not type vault entries.
 
 Give such a button or shortcut an `only_when` (below), so a stray press at
-the shell does not type the password where everyone can read it.
+the shell does not type the password where everyone can read it. In the
+app, changing a button or shortcut that types from the vault asks for the
+master password first.
 
 ## Button bar: `buttons.toml`
 

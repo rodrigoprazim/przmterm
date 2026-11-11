@@ -636,6 +636,8 @@ struct PrzmApp {
     vault: vault::VaultUi,
     /// What to do once the vault is unlocked (opening a session that uses it).
     after_unlock: Option<Action>,
+    /// Which window the master password prompt answers.
+    master_for: Option<MasterFor>,
     /// Macro buttons above the status bar.
     buttons: buttonbar::ButtonBarUi,
     /// What is typed goes to every connected pane of the current tab.
@@ -702,6 +704,14 @@ const IMPORT_FOLDER: &str = "SecureCRT";
 const STATUS_TIME: std::time::Duration = std::time::Duration::from_secs(8);
 
 /// What the user picked in the session tree.
+/// A window that asked for the master password (to change a button or a
+/// shortcut that types from the vault).
+#[derive(Clone, Copy)]
+enum MasterFor {
+    Buttons,
+    Keymap,
+}
+
 enum TreeAction {
     Connect(Session),
     /// Connect (if needed) and open an SFTP browser.
@@ -791,6 +801,7 @@ impl PrzmApp {
             keyword_editor: None,
             vault: vault::VaultUi::new(),
             after_unlock: None,
+            master_for: None,
             buttons,
             broadcast: false,
             confirm_broadcast: false,
@@ -3579,6 +3590,18 @@ impl PrzmApp {
             if std::mem::take(&mut editor.unlock_request) {
                 self.vault
                     .ask_unlock("Unlock the vault to list its entries.".into());
+                self.master_for = Some(MasterFor::Keymap);
+            }
+            if std::mem::take(&mut editor.master_request) {
+                if przmterm_session::vault::vault_path(&dir).is_file() {
+                    self.vault.ask_master(
+                        "This shortcut types from the vault: enter the master password to change it."
+                            .into(),
+                    );
+                    self.master_for = Some(MasterFor::Keymap);
+                } else {
+                    editor.master_given();
+                }
             }
             if let keymap::KeymapResult::Closed = result {
                 self.keymap_editor = None;
@@ -5436,12 +5459,50 @@ impl eframe::App for PrzmApp {
         if std::mem::take(&mut self.buttons.unlock_request) {
             self.vault
                 .ask_unlock("Unlock the vault to list its entries.".into());
+            self.master_for = Some(MasterFor::Buttons);
+        }
+        if std::mem::take(&mut self.buttons.master_request) {
+            let vault = self
+                .config_dir
+                .as_deref()
+                .is_some_and(|d| przmterm_session::vault::vault_path(d).is_file());
+            if vault {
+                self.vault.ask_master(
+                    "This button types from the vault: enter the master password to change it."
+                        .into(),
+                );
+                self.master_for = Some(MasterFor::Buttons);
+            } else {
+                // No vault: nothing to protect.
+                self.buttons.master_given(self.config_dir.as_deref());
+            }
         }
         if let Some(dir) = self.config_dir.clone() {
-            match self.vault.show(&ctx, &dir) {
+            let event = self.vault.show(&ctx, &dir);
+            let master_for = match event {
+                vault::VaultEvent::None => None,
+                _ => self.master_for.take(),
+            };
+            let given = event == vault::VaultEvent::Unlocked;
+            match event {
                 vault::VaultEvent::Unlocked => actions.extend(self.after_unlock.take()),
                 vault::VaultEvent::Cancelled => self.after_unlock = None,
                 vault::VaultEvent::None => {}
+            }
+            match (master_for, given) {
+                (Some(MasterFor::Buttons), true) => self.buttons.master_given(Some(&dir)),
+                (Some(MasterFor::Buttons), false) => self.buttons.master_refused(),
+                (Some(MasterFor::Keymap), true) => {
+                    if let Some(editor) = &mut self.keymap_editor {
+                        editor.master_given();
+                    }
+                }
+                (Some(MasterFor::Keymap), false) => {
+                    if let Some(editor) = &mut self.keymap_editor {
+                        editor.master_refused();
+                    }
+                }
+                (None, _) => {}
             }
         }
         if let Some(notice) = self.vault.notice.take() {

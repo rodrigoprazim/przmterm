@@ -5,7 +5,7 @@ use std::path::Path;
 
 use eframe::egui;
 use przmterm_session::buttons::{
-    ButtonBar, ButtonTab, Chunk, MacroButton, parse_send, read_buttons, write_buttons,
+    ButtonBar, ButtonTab, Chunk, MacroButton, parse_send, read_buttons, uses_vault, write_buttons,
 };
 
 /// A button was pressed: what to send to the current session.
@@ -36,6 +36,17 @@ struct ButtonEdit {
     error: Option<String>,
     /// The label field got the focus once (on opening).
     focused: bool,
+    /// The master password was given for this dialog: it may save a
+    /// button that types from the vault.
+    authorized: bool,
+}
+
+/// What waits for the master password.
+enum Pending {
+    /// Opening the dialog of a button that types from the vault.
+    Edit(usize, usize),
+    /// Saving the open dialog, whose button types from the vault.
+    Save,
 }
 
 struct TabEdit {
@@ -56,6 +67,11 @@ pub struct ButtonBarUi {
     pub error: Option<String>,
     /// The Vault menu asked for the vault to be unlocked.
     pub unlock_request: bool,
+    /// A change to a button that types from the vault needs the master
+    /// password; answer with [`Self::master_given`] or
+    /// [`Self::master_refused`].
+    pub master_request: bool,
+    pending: Option<Pending>,
 }
 
 impl ButtonBarUi {
@@ -84,6 +100,8 @@ impl ButtonBarUi {
             delete_tab: None,
             error,
             unlock_request: false,
+            master_request: false,
+            pending: None,
         }
     }
 
@@ -116,6 +134,56 @@ impl ButtonBarUi {
 
     pub fn modal(&self) -> bool {
         self.button_edit.is_some() || self.tab_edit.is_some() || self.delete_tab.is_some()
+    }
+
+    /// The master password was given: the dialog may save vault buttons,
+    /// and what waited for it goes on.
+    pub fn master_given(&mut self, config_dir: Option<&Path>) {
+        if let Some(edit) = &mut self.button_edit {
+            edit.authorized = true;
+        }
+        match self.pending.take() {
+            Some(Pending::Edit(tab, i)) => {
+                if let Some(button) = self.bar.tabs.get(tab).and_then(|t| t.buttons.get(i)) {
+                    self.button_edit = Some(ButtonEdit {
+                        tab,
+                        index: Some(i),
+                        button: button.clone(),
+                        error: None,
+                        focused: false,
+                        authorized: true,
+                    });
+                }
+            }
+            Some(Pending::Save) => self.commit_edit(config_dir),
+            None => {}
+        }
+    }
+
+    pub fn master_refused(&mut self) {
+        if let (Some(Pending::Save), Some(edit)) = (self.pending.take(), &mut self.button_edit) {
+            edit.error = Some(
+                "Not saved: a button that types from the vault needs the master password.".into(),
+            );
+        }
+    }
+
+    /// Saves the dialog's button and closes it.
+    fn commit_edit(&mut self, config_dir: Option<&Path>) {
+        let Some(edit) = self.button_edit.take() else {
+            return;
+        };
+        let mut button = edit.button;
+        button.label = button.label.trim().to_string();
+        button.only_when = button.only_when.trim().to_string();
+        let Some(group) = self.bar.tabs.get_mut(edit.tab) else {
+            return;
+        };
+        match edit.index {
+            Some(i) if i < group.buttons.len() => group.buttons[i] = button,
+            _ => group.buttons.push(button),
+        }
+        self.save(config_dir);
     }
 
     fn save(&mut self, config_dir: Option<&Path>) {
@@ -232,15 +300,25 @@ impl ButtonBarUi {
                     press = Some(Press::of(button));
                 }
                 response.context_menu(|ui| {
-                    crate::theme::menu(ui);
+                    // Its few short entries: half a menu's width.
+                    ui.set_min_width(crate::theme::MENU_WIDTH / 2.0);
+                    ui.spacing_mut().item_spacing.y = 1.0;
                     if ui.button("Edit…").clicked() {
-                        self.button_edit = Some(ButtonEdit {
-                            tab,
-                            index: Some(i),
-                            button: button.clone(),
-                            error: None,
-                            focused: false,
-                        });
+                        if uses_vault(&button.send) {
+                            // Its password is not shown, but its Only when
+                            // could be taken off: the master password first.
+                            self.pending = Some(Pending::Edit(tab, i));
+                            self.master_request = true;
+                        } else {
+                            self.button_edit = Some(ButtonEdit {
+                                tab,
+                                index: Some(i),
+                                button: button.clone(),
+                                error: None,
+                                focused: false,
+                                authorized: false,
+                            });
+                        }
                         ui.close();
                     }
                     if ui
@@ -290,6 +368,7 @@ impl ButtonBarUi {
                     button: MacroButton::default(),
                     error: None,
                     focused: false,
+                    authorized: false,
                 });
             }
         });
@@ -316,6 +395,7 @@ impl ButtonBarUi {
         });
         let center = ctx.content_rect().center();
 
+        let mut commit = false;
         if let Some(edit) = &mut self.button_edit {
             let mut done = None; // Some(true) save, Some(false) cancel
             egui::Window::new(if edit.index.is_some() {
@@ -458,21 +538,20 @@ the prompt it answers, so a stray press does not show it on screen.",
                 Some(true) if check_only_when(&edit.button.only_when).is_err() => {
                     edit.error = check_only_when(&edit.button.only_when).err();
                 }
-                Some(true) => {
-                    let mut button = edit.button.clone();
-                    button.label = button.label.trim().to_string();
-                    button.only_when = button.only_when.trim().to_string();
-                    let buttons = &mut self.bar.tabs[edit.tab].buttons;
-                    match edit.index {
-                        Some(i) => buttons[i] = button,
-                        None => buttons.push(button),
-                    }
-                    self.button_edit = None;
-                    self.save(config_dir);
+                Some(true) if uses_vault(&edit.button.send) && !edit.authorized => {
+                    self.pending = Some(Pending::Save);
+                    self.master_request = true;
                 }
-                Some(false) => self.button_edit = None,
+                Some(true) => commit = true,
+                Some(false) => {
+                    self.button_edit = None;
+                    self.pending = None;
+                }
                 None => {}
             }
+        }
+        if commit {
+            self.commit_edit(config_dir);
         }
 
         if let Some(edit) = &mut self.tab_edit {
@@ -677,5 +756,36 @@ mod tests {
         assert!(check_only_when("(unclosed").is_err());
         assert!(check_only_when("").is_ok());
         assert!(check_only_when("[Pp]assword:").is_ok());
+    }
+
+    #[test]
+    fn vault_buttons_wait_for_the_master_password() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut bar = ButtonBarUi::load(Some(dir.path()));
+        bar.bar.tabs.push(ButtonTab {
+            name: "Cisco".into(),
+            buttons: vec![MacroButton {
+                label: "Enable".into(),
+                send: "{vault:Core}\\r".into(),
+                only_when: "(?i)password:".into(),
+                ..MacroButton::default()
+            }],
+        });
+        // Refused: nothing opens.
+        bar.pending = Some(Pending::Edit(0, 0));
+        bar.master_refused();
+        assert!(bar.button_edit.is_none() && bar.pending.is_none());
+        // Given: the dialog opens, and may save without asking again.
+        bar.pending = Some(Pending::Edit(0, 0));
+        bar.master_given(Some(dir.path()));
+        let edit = bar.button_edit.as_mut().unwrap();
+        assert!(edit.authorized);
+        edit.button.only_when.clear();
+        bar.pending = Some(Pending::Save);
+        bar.master_given(Some(dir.path()));
+        assert!(bar.button_edit.is_none());
+        assert_eq!(bar.bar.tabs[0].buttons[0].only_when, "");
+        let saved = read_buttons(dir.path()).unwrap();
+        assert_eq!(saved.tabs[0].buttons[0].label, "Enable");
     }
 }

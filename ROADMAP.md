@@ -204,7 +204,8 @@ and, when a device is at hand, a serial console (Xmodem or Ymodem).
 - [x] User guide and scripting reference: [docs/GUIDE.md](docs/GUIDE.md)
   and [docs/SCRIPTING.md](docs/SCRIPTING.md)
 - [x] Buttons and shortcuts that type a password can require the prompt
-  they answer (*Only when*, `only_when`)
+  they answer (*Only when*, `only_when`); changing them in the app asks for
+  the master password
 
 **Gate:** the maintainer's own automation scripts in daily use and no open
 critical bugs.

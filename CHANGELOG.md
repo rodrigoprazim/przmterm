@@ -15,6 +15,14 @@ All notable changes to PrzmTerm are recorded here. The format follows
   prompt, nothing is typed and the status bar says why, so a button that
   types a vault password does not show it at the shell by mistake. The
   button dialog warns when a button types from the vault without one.
+- Changing a button or shortcut that types from the vault (opening it to
+  edit, or saving one that newly does) asks for the master password, even
+  while the vault is open, so its *Only when* cannot be taken off by
+  someone else at the keyboard. Pressing it does not ask.
+
+### Changed
+
+- The menu of a button (right-click) is half as wide.
 
 ## [1.0.0-rc.2] - 2026-11-10
 

@@ -54,6 +54,9 @@ pub struct VaultUi {
     pub window: bool,
     /// The unlock prompt is open, saying why.
     prompt: Option<String>,
+    /// The prompt asks for the master password even if the vault is open:
+    /// to confirm a change, not to unlock.
+    confirm: bool,
     master: String,
     again: String,
     error: Option<String>,
@@ -74,6 +77,7 @@ impl VaultUi {
             snapshot: None,
             window: false,
             prompt: None,
+            confirm: false,
             master: String::new(),
             again: String::new(),
             error: None,
@@ -111,6 +115,16 @@ impl VaultUi {
     /// Opens the unlock prompt; `why` says which session needs it.
     pub fn ask_unlock(&mut self, why: String) {
         self.prompt = Some(why);
+        self.confirm = false;
+        self.clear_fields();
+    }
+
+    /// Asks for the master password even when the vault is open, to
+    /// confirm a change; `why` says which. Answered like the unlock prompt
+    /// ([`VaultEvent::Unlocked`] or [`VaultEvent::Cancelled`]).
+    pub fn ask_master(&mut self, why: String) {
+        self.prompt = Some(why);
+        self.confirm = true;
         self.clear_fields();
     }
 
@@ -191,7 +205,12 @@ impl VaultUi {
 
         if let Some(why) = self.prompt.clone() {
             let mut done = None; // Some(true) unlock, Some(false) cancel
-            egui::Window::new("Unlock the vault")
+            let (title, go) = if self.confirm {
+                ("Master password", "Continue")
+            } else {
+                ("Unlock the vault", "Unlock")
+            };
+            egui::Window::new(title)
                 .order(egui::Order::Foreground)
                 .pivot(egui::Align2::CENTER_CENTER)
                 .default_pos(center)
@@ -209,7 +228,7 @@ impl VaultUi {
                     }
                     ui.horizontal(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("Unlock").clicked() {
+                            if ui.button(go).clicked() {
                                 done = Some(true);
                             }
                             if ui.button("Cancel").clicked() || escape {
