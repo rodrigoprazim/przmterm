@@ -265,6 +265,9 @@ When the button or shortcut is used, PrzmTerm asks for the master password
 if the vault is locked, then types the value. If the entry or the field is
 missing, nothing is sent. Triggers do not type vault entries.
 
+Give such a button or shortcut an `only_when` (below), so a stray press at
+the shell does not type the password where everyone can read it.
+
 ## Button bar: `buttons.toml`
 
 Buttons come in groups. The bar shows one group at a time, chosen from the
@@ -284,6 +287,11 @@ send = 'copy run start\r\p\r'
 description = "Saves the running configuration"
 
 [[group.button]]
+label = "Enable"
+send = '{vault:Core switches}\r'
+only_when = '(?i)password:|senha:'
+
+[[group.button]]
 label = "Backup"
 script = "cisco-backup.rhai"
 tooltip = false
@@ -295,6 +303,7 @@ tooltip = false
 | `group.button.label` | text | — | The text on the button. |
 | `group.button.send` | text | `""` | What the button types into the session that has the keyboard, with the [escapes](#escapes-in-send). |
 | `group.button.script` | text | none | A script to run instead of sending text. A bare name is looked for in `<config>/scripts`. |
+| `group.button.only_when` | text | none | A regular expression. The button sends (or runs its script) only when the line at the cursor, up to the cursor, matches it: the prompt being answered, such as `(?i)password:`. Otherwise nothing is sent and the status bar says why. |
 | `group.button.description` | text | none | Shown when the pointer rests on the button. |
 | `group.button.tooltip` | `true` or `false` | `true` | Show the description (or what the button sends) under the pointer. |
 
@@ -330,6 +339,7 @@ button = "Cisco/Interfaces"
 | `keys` | text | The keys, joined with `+`. The modifiers are `Cmd` (⌘ on macOS, Ctrl elsewhere), `Ctrl` (always the Control key), `Alt` (Option on macOS) and `Shift`. The key itself is a letter, a digit, or a name such as `F5`, `Tab`, `Enter`, `Space`, `Plus` or `PageUp`. |
 | `command` | text | An app command from the table below. |
 | `send` | text | Text to type, with the [escapes](#escapes-in-send). |
+| `only_when` | text | With `send`: type it only when the line at the cursor matches this regular expression, as a button's [`only_when`](#button-bar-buttonstoml). |
 | `script` | text | A script to run. |
 | `button` | text | A button to press, as `Group/Label`. |
 

@@ -1452,6 +1452,25 @@ impl PrzmApp {
         let ctx2 = ctx.clone();
         let waker: Waker = Arc::new(move || ctx2.request_repaint());
         let env = self.env();
+        // A button's Only when: the line at the cursor must match, or
+        // nothing is typed (and the vault is not asked for).
+        if let Action::Macro(press) = &action {
+            let line = self.tab().pane().term.screen().text_before_cursor();
+            match buttonbar::guard_allows(&press.only_when, &line) {
+                Ok(true) => {}
+                Ok(false) => {
+                    self.notice = Some(format!(
+                        "Nothing sent: the line at the cursor does not match {}",
+                        press.only_when
+                    ));
+                    return;
+                }
+                Err(e) => {
+                    self.notice = Some(format!("Nothing sent: {e}."));
+                    return;
+                }
+            }
+        }
         if let Some(why) = self.needs_unlock(&action, &env) {
             self.vault.ask_unlock(why);
             self.after_unlock = Some(action);
@@ -2060,6 +2079,7 @@ impl PrzmApp {
         let step = |by: usize| mine[(at + by) % mine.len()];
         let n = mine.len().max(1);
         use przmterm_session::keymap::Does;
+        let binding_guard = binding.only_when.trim().to_string();
         Some(match binding.does().ok()? {
             Does::Command(id) => match id {
                 "new_tab" => Action::NewTab,
@@ -2091,10 +2111,12 @@ impl PrzmApp {
             Does::Send(text) => Action::Macro(buttonbar::Press {
                 chunks: przmterm_session::buttons::parse_send(text),
                 script: None,
+                only_when: binding_guard,
             }),
             Does::Script(name) => Action::Macro(buttonbar::Press {
                 chunks: Vec::new(),
                 script: Some(name.to_string()),
+                only_when: String::new(),
             }),
             Does::Button(id) => match self.buttons.press(id) {
                 Some(press) => Action::Macro(press),

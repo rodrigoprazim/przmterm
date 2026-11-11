@@ -387,6 +387,8 @@ struct Edit {
     kind: Kind,
     command: &'static str,
     text: String,
+    /// Only when, for Send text.
+    only_when: String,
     error: Option<String>,
 }
 
@@ -576,6 +578,7 @@ impl KeymapEditor {
                         kind,
                         command,
                         text,
+                        only_when: b.only_when.clone(),
                         error: None,
                     });
                 }
@@ -598,6 +601,7 @@ impl KeymapEditor {
                                 kind: Kind::Send,
                                 command: COMMANDS[0].id,
                                 text: String::new(),
+                                only_when: String::new(),
                                 error: None,
                             });
                         }
@@ -844,6 +848,19 @@ impl KeymapEditor {
                         }
                     }
                     ui.end_row();
+                    if edit.kind == Kind::Send {
+                        ui.label("Only when").on_hover_text(
+                            "A regular expression: the text is sent only when the line \
+at the cursor matches it",
+                        );
+                        ui.add(
+                            egui::TextEdit::singleline(&mut edit.only_when)
+                                .hint_text("(?i)password:|senha:   (empty: always)")
+                                .font(egui::TextStyle::Monospace)
+                                .desired_width(field),
+                        );
+                        ui.end_row();
+                    }
                 });
             if let Some(e) = &edit.error {
                 ui.add_space(4.0);
@@ -875,7 +892,10 @@ impl KeymapEditor {
                 };
                 match edit.kind {
                     Kind::Command => b.command = edit.command.into(),
-                    Kind::Send => b.send = edit.text.clone(),
+                    Kind::Send => {
+                        b.send = edit.text.clone();
+                        b.only_when = edit.only_when.trim().to_string();
+                    }
                     Kind::Script => b.script = text,
                     Kind::Button => b.button = text,
                 }
@@ -886,6 +906,10 @@ impl KeymapEditor {
                         Kind::Button => "Choose a button.".into(),
                         Kind::Command => e,
                     });
+                    return;
+                }
+                if let Err(e) = crate::buttonbar::check_only_when(&b.only_when) {
+                    edit.error = Some(e);
                     return;
                 }
                 if let Some((i, _)) = self

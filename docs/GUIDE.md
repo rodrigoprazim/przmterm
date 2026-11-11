@@ -299,7 +299,15 @@ one-second pause. **Vault ▾** next to the text adds `{vault:NAME}`, which
 types the password of that [vault](#passwords-keychain-and-vault) entry
 (`{vault:NAME:username}` its user name): the button keeps only the entry's
 name, and the vault is unlocked first if it is locked. Shortcuts that send
-text take the same. Buttons are kept in `<config>/buttons.toml`:
+text take the same.
+
+**Only when** keeps a button from typing at the wrong place: a regular
+expression that the line at the cursor (up to the cursor) must match, such
+as `(?i)password:|senha:` for a button that types a password. Pressed
+anywhere else, the button sends nothing and the status bar says so, and the
+vault is not even asked for. The check is made when the button is pressed;
+`(?i)` makes it ignore case. The dialog warns when a button types from the
+vault without it. Buttons are kept in `<config>/buttons.toml`:
 
 ```toml
 [[group]]

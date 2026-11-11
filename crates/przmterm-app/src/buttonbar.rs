@@ -13,6 +13,19 @@ pub struct Press {
     pub chunks: Vec<Chunk>,
     /// Run this script instead (a name in `<config>/scripts` or a path).
     pub script: Option<String>,
+    /// A regular expression the line at the cursor must match; empty:
+    /// always send.
+    pub only_when: String,
+}
+
+impl Press {
+    fn of(button: &MacroButton) -> Self {
+        Self {
+            chunks: parse_send(&button.send),
+            script: (!button.script.trim().is_empty()).then(|| button.script.clone()),
+            only_when: button.only_when.trim().to_string(),
+        }
+    }
 }
 
 struct ButtonEdit {
@@ -98,10 +111,7 @@ impl ButtonBarUi {
             .buttons
             .iter()
             .find(|b| b.label == label)?;
-        Some(Press {
-            chunks: parse_send(&button.send),
-            script: (!button.script.trim().is_empty()).then(|| button.script.clone()),
-        })
+        Some(Press::of(button))
     }
 
     pub fn modal(&self) -> bool {
@@ -219,10 +229,7 @@ impl ButtonBarUi {
                     response = response.on_hover_text(tip);
                 }
                 if response.clicked() {
-                    press = Some(Press {
-                        chunks: parse_send(&button.send),
-                        script: (!button.script.trim().is_empty()).then(|| button.script.clone()),
-                    });
+                    press = Some(Press::of(button));
                 }
                 response.context_menu(|ui| {
                     crate::theme::menu(ui);
@@ -358,6 +365,33 @@ impl ButtonBarUi {
                             );
                         });
                         ui.end_row();
+                        ui.label("Only when").on_hover_text(
+                            "A regular expression: the button sends only when the line \
+at the cursor matches it",
+                        );
+                        ui.add(
+                            egui::TextEdit::singleline(&mut edit.button.only_when)
+                                .hint_text("(?i)password:|senha:   (empty: always)")
+                                .font(egui::TextStyle::Monospace)
+                                .desired_width(320.0),
+                        );
+                        ui.end_row();
+                        if edit.button.only_when.trim().is_empty()
+                            && edit.button.send.contains("{vault:")
+                        {
+                            ui.label("");
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(
+                                        "This button types a password. Set Only when to \
+the prompt it answers, so a stray press does not show it on screen.",
+                                    )
+                                    .color(ui.visuals().warn_fg_color),
+                                )
+                                .wrap(),
+                            );
+                            ui.end_row();
+                        }
                         ui.label("Script").on_hover_text(
                             "A Rhai script to run instead of sending the text above",
                         );
@@ -421,9 +455,13 @@ impl ButtonBarUi {
                 Some(true) if edit.button.label.trim().is_empty() => {
                     edit.error = Some("Give the button a label.".into());
                 }
+                Some(true) if check_only_when(&edit.button.only_when).is_err() => {
+                    edit.error = check_only_when(&edit.button.only_when).err();
+                }
                 Some(true) => {
                     let mut button = edit.button.clone();
                     button.label = button.label.trim().to_string();
+                    button.only_when = button.only_when.trim().to_string();
                     let buttons = &mut self.bar.tabs[edit.tab].buttons;
                     match edit.index {
                         Some(i) => buttons[i] = button,
@@ -538,6 +576,29 @@ impl ButtonBarUi {
 /// password, user name or key passphrase is typed when the button or
 /// shortcut is used, and only the entry's name is kept. Returns whether
 /// the vault should be unlocked to list its entries.
+/// Checks a button's Only when expression; empty is fine.
+pub fn check_only_when(pattern: &str) -> Result<(), String> {
+    let pattern = pattern.trim();
+    if pattern.is_empty() {
+        return Ok(());
+    }
+    fancy_regex::Regex::new(pattern)
+        .map(|_| ())
+        .map_err(|e| format!("Only when is not a valid regular expression: {e}"))
+}
+
+/// Whether `line` (the text before the cursor) lets a press with this
+/// Only when expression through. An invalid expression lets nothing
+/// through.
+pub fn guard_allows(pattern: &str, line: &str) -> Result<bool, String> {
+    if pattern.trim().is_empty() {
+        return Ok(true);
+    }
+    let re = fancy_regex::Regex::new(pattern.trim())
+        .map_err(|e| format!("Only when is not a valid regular expression: {e}"))?;
+    re.is_match(line).map_err(|e| e.to_string())
+}
+
 pub fn vault_menu(ui: &mut egui::Ui, text: &mut String, names: Option<&[String]>) -> bool {
     use przmterm_session::buttons::{VaultField, vault_reference};
     let mut unlock = false;
@@ -597,4 +658,24 @@ pub fn pick_script(config_dir: Option<&Path>) -> Option<String> {
             None => path.display().to_string(),
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_when_checks_the_prompt() {
+        assert_eq!(guard_allows("", "router#"), Ok(true));
+        assert_eq!(guard_allows("  ", "router#"), Ok(true));
+        let guard = "(P|p)assword:|(S|s)enha:";
+        assert_eq!(guard_allows(guard, "Password:"), Ok(true));
+        assert_eq!(guard_allows(guard, "senha:"), Ok(true));
+        assert_eq!(guard_allows(guard, "router#"), Ok(false));
+        assert_eq!(guard_allows("(?i)password:", "PASSWORD:"), Ok(true));
+        assert!(guard_allows("(unclosed", "Password:").is_err());
+        assert!(check_only_when("(unclosed").is_err());
+        assert!(check_only_when("").is_ok());
+        assert!(check_only_when("[Pp]assword:").is_ok());
+    }
 }

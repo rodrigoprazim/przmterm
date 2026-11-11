@@ -50,6 +50,11 @@ pub struct MacroButton {
     /// Runs this script (see [`crate::script_path`]) instead of sending text.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub script: String,
+    /// A regular expression: the button sends only when the cursor's line
+    /// matches it (the prompt it would answer), so a password is never
+    /// typed at the wrong prompt. Empty: always.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub only_when: String,
     /// Show the description (or what the button sends) when the pointer
     /// rests on it.
     #[serde(default = "yes", skip_serializing_if = "is_true")]
@@ -67,6 +72,7 @@ impl Default for MacroButton {
             send: String::new(),
             description: String::new(),
             script: String::new(),
+            only_when: String::new(),
             tooltip: true,
             legacy_target: None,
         }
@@ -379,6 +385,12 @@ mod tests {
                         tooltip: false,
                         ..MacroButton::default()
                     },
+                    MacroButton {
+                        label: "Enable".into(),
+                        send: "{vault:Core}\\r".into(),
+                        only_when: "(?i)password:".into(),
+                        ..MacroButton::default()
+                    },
                 ],
             }],
             ..ButtonBar::default()
@@ -393,6 +405,8 @@ mod tests {
             "{text}"
         );
         assert!(text.starts_with("[[group]]"), "{text}");
+        // Only the guarded button has only_when.
+        assert_eq!(text.matches("only_when").count(), 1, "{text}");
         assert_eq!(read_buttons(dir.path()).unwrap(), bar);
         // Unknown keys are left out and noted.
         std::fs::write(
