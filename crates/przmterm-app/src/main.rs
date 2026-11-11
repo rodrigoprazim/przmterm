@@ -4952,9 +4952,8 @@ impl eframe::App for PrzmApp {
                         .unwrap_or_default();
                     ui.separator();
                     ui.label(format!("Zoom {} pt", pane.view.font_size));
-                    if ui
-                        .small_button("Reset")
-                        .on_hover_text(format!("Back to {base} pt{keys}"))
+                    if icons::button(ui, icons::Icon::Reset, false)
+                        .on_hover_text(format!("Reset the zoom: back to {base} pt{keys}"))
                         .clicked()
                     {
                         reset_zoom = true;

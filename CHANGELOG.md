@@ -23,8 +23,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 - Zoom: ⌘ (Ctrl) and the wheel, a pinch on a trackpad, or ⌘= and ⌘-
   change the font of a pane, a point at a time, without saving it. While a
-  pane is zoomed, the status bar shows its size and **Reset**; ⌘0 (Ctrl+0)
-  resets too. New commands `zoom_in`, `zoom_out` and `zoom_reset`.
+  pane is zoomed, the status bar shows its size and a reset arrow; ⌘0
+  (Ctrl+0) resets too. New commands `zoom_in`, `zoom_out` and `zoom_reset`.
 
 ### Changed
 

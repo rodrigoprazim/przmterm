@@ -229,13 +229,13 @@ display's cookie from `xauth`; the server only ever sees a random stand-in.
 | Send BREAK (serial, Telnet) | Ctrl+Shift+B | ⌘⇧B |
 | Hide / show the session list | Ctrl+Shift+S | ⌘⇧S |
 | Zoom the pane's font in / out | Ctrl+wheel, Ctrl+= / Ctrl+- | ⌘+wheel or pinch, ⌘= / ⌘- |
-| Reset the zoom | Ctrl+0, or *Reset* in the status bar | ⌘0, or *Reset* |
+| Reset the zoom | Ctrl+0, or ⟲ in the status bar | ⌘0, or ⟲ |
 | Global settings | the gear above the sessions | ⌘, |
 
 Zooming changes the font of the pane under the pointer (the keys: the
 active pane), a point at a time, and is not saved. While a pane is zoomed,
-the status bar shows its size and **Reset**, which goes back to the size it
-had. To keep a size, set it in *Font, Colors and Cursor…*.
+the status bar shows its size and the reset arrow, which goes back to the
+size it had. To keep a size, set it in *Font, Colors and Cursor…*.
 
 Drag to select, double-click selects a word, triple-click a line. Right-click
 opens Copy / Paste / Select all. Text with line breaks is shown before it is
