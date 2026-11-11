@@ -22,7 +22,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Changed
 
-- The menu of a button (right-click) is half as wide.
+- The right-click menus of a button, a session and a folder (and the
+  *File Browser* submenu) are half as wide.
 
 ## [1.0.0-rc.2] - 2026-11-10
 

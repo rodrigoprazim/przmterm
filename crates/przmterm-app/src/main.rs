@@ -4394,7 +4394,7 @@ fn browser_menu(ui: &mut egui::Ui, enabled: bool, shell: Option<&str>) -> Option
     let mut picked = None;
     ui.add_enabled_ui(enabled, |ui| {
         ui.menu_button("File Browser", |ui| {
-            crate::theme::menu(ui);
+            crate::theme::compact_menu(ui);
             if ui
                 .button("SFTP")
                 .on_hover_text("Browse and transfer files over SFTP")
@@ -4571,7 +4571,7 @@ fn folder_ui(
             "Right-click to add sessions, rename or set folder defaults"
         })
         .context_menu(|ui| {
-            crate::theme::menu(ui);
+            crate::theme::compact_menu(ui);
             if ui.button("New session here…").clicked() {
                 picked.push(TreeAction::NewSession(f.trail.clone()));
                 ui.close();
@@ -4653,7 +4653,7 @@ fn folder_ui(
             picked.push(TreeAction::Connect(s.clone()));
         }
         response.context_menu(|ui| {
-            crate::theme::menu(ui);
+            crate::theme::compact_menu(ui);
             if ui.button("Connect").clicked() {
                 picked.push(TreeAction::Connect(s.clone()));
                 ui.close();

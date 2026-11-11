@@ -300,9 +300,7 @@ impl ButtonBarUi {
                     press = Some(Press::of(button));
                 }
                 response.context_menu(|ui| {
-                    // Its few short entries: half a menu's width.
-                    ui.set_min_width(crate::theme::MENU_WIDTH / 2.0);
-                    ui.spacing_mut().item_spacing.y = 1.0;
+                    crate::theme::compact_menu(ui);
                     if ui.button("Edit…").clicked() {
                         if uses_vault(&button.send) {
                             // Its password is not shown, but its Only when
