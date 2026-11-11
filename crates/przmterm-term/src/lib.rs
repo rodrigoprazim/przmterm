@@ -298,6 +298,12 @@ impl Screen {
         self.cursor
     }
 
+    /// The cursor's row up to the cursor: the prompt that typing answers.
+    pub fn text_before_cursor(&self) -> String {
+        let line = &self.lines[self.cursor.row];
+        cells_text(&line[..self.cursor.col.min(line.len())])
+    }
+
     pub fn cursor_visible(&self) -> bool {
         self.cursor_visible
     }
@@ -1223,6 +1229,17 @@ mod tests {
         assert_eq!(s.scrollback_len(), 2);
         assert_eq!(cells_text(s.scrollback_line(0).unwrap()), "2");
         assert_eq!(cells_text(s.scrollback_line(1).unwrap()), "3");
+    }
+
+    #[test]
+    fn text_before_the_cursor_is_the_prompt() {
+        let mut t = Terminal::new(80, 24);
+        t.feed(b"login ok\r\nPassword: ");
+        assert_eq!(t.screen().text_before_cursor(), "Password:");
+        t.feed(b"\r\nrouter# show run");
+        assert_eq!(t.screen().text_before_cursor(), "router# show run");
+        t.feed(b"\x1b[9D");
+        assert_eq!(t.screen().text_before_cursor(), "router#");
     }
 
     #[test]

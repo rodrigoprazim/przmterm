@@ -228,7 +228,14 @@ display's cookie from `xauth`; the server only ever sees a random stand-in.
 | Scroll back | wheel, scroll bar, Shift+PageUp/PageDown, Shift+Home/End | same |
 | Send BREAK (serial, Telnet) | Ctrl+Shift+B | ⌘⇧B |
 | Hide / show the session list | Ctrl+Shift+S | ⌘⇧S |
+| Zoom the pane's font in / out | Ctrl+wheel, Ctrl+= / Ctrl+- | ⌘+wheel or pinch, ⌘= / ⌘- |
+| Reset the zoom | Ctrl+0, or ⟲ in the status bar | ⌘0, or ⟲ |
 | Global settings | the gear above the sessions | ⌘, |
+
+Zooming changes the font of the pane under the pointer (the keys: the
+active pane), a point at a time, and is not saved. While a pane is zoomed,
+the status bar shows its size and the reset arrow, which goes back to the
+size it had. To keep a size, set it in *Font, Colors and Cursor…*.
 
 Drag to select, double-click selects a word, triple-click a line. Right-click
 opens Copy / Paste / Select all. Text with line breaks is shown before it is
@@ -299,7 +306,25 @@ one-second pause. **Vault ▾** next to the text adds `{vault:NAME}`, which
 types the password of that [vault](#passwords-keychain-and-vault) entry
 (`{vault:NAME:username}` its user name): the button keeps only the entry's
 name, and the vault is unlocked first if it is locked. Shortcuts that send
-text take the same. Buttons are kept in `<config>/buttons.toml`:
+text take the same.
+
+**Only when** keeps a button from typing at the wrong place: a regular
+expression for the prompt the button answers, matched at the end of the
+line, right before the cursor (trailing spaces aside). `(?i)password:|senha:`
+suits a button that types a password; `]#` matches `[root@host ~]#`, while
+`]` alone does not, since that line ends with `#`. `.*` reaches further
+back: `(?i)password.*:` also matches `[sudo] password for root:`. Pressed
+anywhere else, the button sends nothing and the status bar says so, and the
+vault is not even asked for. The check is made when the button is pressed;
+`(?i)` makes it ignore case. The dialog warns when a button types from the
+vault without it.
+
+Changing a button or shortcut that types from the vault asks for the master
+password, even while the vault is open: opening it to edit, or saving one
+that newly types from the vault. Pressing it never asks (beyond unlocking a
+locked vault). This guards the app, not the file: anyone who can edit
+`buttons.toml` can still change it there. Buttons are kept in
+`<config>/buttons.toml`:
 
 ```toml
 [[group]]

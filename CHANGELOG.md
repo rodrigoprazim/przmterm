@@ -7,6 +7,32 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- *Only when* on buttons and on shortcuts that send text (`only_when` in
+  `buttons.toml` and `keymap.toml`): a regular expression the prompt
+  must end with, right before the cursor, such as `(?i)password:|senha:`
+  or `]#`. Pressed at any other
+  prompt, nothing is typed and the status bar says why, so a button that
+  types a vault password does not show it at the shell by mistake. The
+  button dialog warns when a button types from the vault without one.
+- Changing a button or shortcut that types from the vault (opening it to
+  edit, or saving one that newly does) asks for the master password, even
+  while the vault is open, so its *Only when* cannot be taken off by
+  someone else at the keyboard. Pressing it does not ask.
+
+- Zoom: ⌘ (Ctrl) and the wheel, a pinch on a trackpad, or ⌘= and ⌘-
+  change the font of a pane, a point at a time, without saving it. While a
+  pane is zoomed, the status bar shows its size and a reset arrow; ⌘0
+  (Ctrl+0) resets too. New commands `zoom_in`, `zoom_out` and `zoom_reset`.
+
+### Changed
+
+- ⌘+, ⌘- and ⌘0 (Ctrl elsewhere) zoom the terminal's font instead of
+  the whole window.
+- The right-click menus of a button, a session and a folder (and the
+  *File Browser* submenu) are half as wide.
+
 ## [1.0.0-rc.2] - 2026-11-10
 
 ### Added

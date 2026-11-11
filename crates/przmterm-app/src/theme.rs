@@ -300,6 +300,13 @@ pub fn menu(ui: &mut egui::Ui) {
 /// The narrowest a menu gets.
 pub const MENU_WIDTH: f32 = 230.0;
 
+/// A short menu of short entries (a session's or a button's right-click
+/// menu): half as wide, still growing for a longer entry.
+pub fn compact_menu(ui: &mut egui::Ui) {
+    ui.set_min_width(MENU_WIDTH / 2.0);
+    ui.spacing_mut().item_spacing.y = 1.0;
+}
+
 /// A check box: a rounded square, filled with the accent and a white tick
 /// when checked. Toggles `checked` when clicked.
 pub fn checkbox(

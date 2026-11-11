@@ -63,6 +63,9 @@ fn main() -> eframe::Result {
             let fonts = fonts::TermFonts::new(&cc.egui_ctx);
             let mut app = PrzmApp::new(fonts);
             theme::apply(&cc.egui_ctx, app.prefs.look);
+            // ⌘+, ⌘− and ⌘0 zoom the terminal's font (shortcuts), not the
+            // whole window.
+            cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
             app.look_shown = app.prefs.look;
             app.menu_bar = appmenu::install(&cc.egui_ctx);
             update::clean_up();
@@ -567,6 +570,9 @@ enum Action {
     SessionOptions(usize),
     FontTab(usize),
     ToggleSessions,
+    /// The font of the active pane, by points (not saved).
+    Zoom(f32),
+    ZoomReset,
     /// Puts these tabs in a new group.
     NewGroup(Vec<usize>),
     /// Puts the tab in this group (`None`: out of its group).
@@ -636,6 +642,8 @@ struct PrzmApp {
     vault: vault::VaultUi,
     /// What to do once the vault is unlocked (opening a session that uses it).
     after_unlock: Option<Action>,
+    /// Which window the master password prompt answers.
+    master_for: Option<MasterFor>,
     /// Macro buttons above the status bar.
     buttons: buttonbar::ButtonBarUi,
     /// What is typed goes to every connected pane of the current tab.
@@ -702,6 +710,14 @@ const IMPORT_FOLDER: &str = "SecureCRT";
 const STATUS_TIME: std::time::Duration = std::time::Duration::from_secs(8);
 
 /// What the user picked in the session tree.
+/// A window that asked for the master password (to change a button or a
+/// shortcut that types from the vault).
+#[derive(Clone, Copy)]
+enum MasterFor {
+    Buttons,
+    Keymap,
+}
+
 enum TreeAction {
     Connect(Session),
     /// Connect (if needed) and open an SFTP browser.
@@ -791,6 +807,7 @@ impl PrzmApp {
             keyword_editor: None,
             vault: vault::VaultUi::new(),
             after_unlock: None,
+            master_for: None,
             buttons,
             broadcast: false,
             confirm_broadcast: false,
@@ -1452,6 +1469,26 @@ impl PrzmApp {
         let ctx2 = ctx.clone();
         let waker: Waker = Arc::new(move || ctx2.request_repaint());
         let env = self.env();
+        // A button's Only when: the end of the line at the cursor must
+        // match, or
+        // nothing is typed (and the vault is not asked for).
+        if let Action::Macro(press) = &action {
+            let line = self.tab().pane().term.screen().text_before_cursor();
+            match buttonbar::guard_allows(&press.only_when, &line) {
+                Ok(true) => {}
+                Ok(false) => {
+                    self.notice = Some(format!(
+                        "Nothing sent: the prompt at the cursor does not end with {}",
+                        press.only_when
+                    ));
+                    return;
+                }
+                Err(e) => {
+                    self.notice = Some(format!("Nothing sent: {e}."));
+                    return;
+                }
+            }
+        }
         if let Some(why) = self.needs_unlock(&action, &env) {
             self.vault.ask_unlock(why);
             self.after_unlock = Some(action);
@@ -1578,6 +1615,8 @@ impl PrzmApp {
                 }
             }
             Action::ToggleSessions => self.sessions_hidden = !self.sessions_hidden,
+            Action::Zoom(points) => self.tab_mut().pane_mut().view.zoom(points),
+            Action::ZoomReset => self.tab_mut().pane_mut().view.reset_zoom(),
             Action::NewGroup(tabs) => {
                 // Made once it is named; Cancel leaves the tabs as they are.
                 self.group_rename = Some(GroupName {
@@ -2060,6 +2099,7 @@ impl PrzmApp {
         let step = |by: usize| mine[(at + by) % mine.len()];
         let n = mine.len().max(1);
         use przmterm_session::keymap::Does;
+        let binding_guard = binding.only_when.trim().to_string();
         Some(match binding.does().ok()? {
             Does::Command(id) => match id {
                 "new_tab" => Action::NewTab,
@@ -2077,6 +2117,9 @@ impl PrzmApp {
                 "disconnect" => Action::DisconnectTab(t),
                 "send_break" => Action::SendBreak,
                 "toggle_sessions" => Action::ToggleSessions,
+                "zoom_in" => Action::Zoom(1.0),
+                "zoom_out" => Action::Zoom(-1.0),
+                "zoom_reset" => Action::ZoomReset,
                 "toggle_buttons" => Action::ToggleButtons,
                 "toggle_log" => Action::ToggleLog,
                 "run_script" => Action::RunScript(t),
@@ -2091,10 +2134,12 @@ impl PrzmApp {
             Does::Send(text) => Action::Macro(buttonbar::Press {
                 chunks: przmterm_session::buttons::parse_send(text),
                 script: None,
+                only_when: binding_guard,
             }),
             Does::Script(name) => Action::Macro(buttonbar::Press {
                 chunks: Vec::new(),
                 script: Some(name.to_string()),
+                only_when: String::new(),
             }),
             Does::Button(id) => match self.buttons.press(id) {
                 Some(press) => Action::Macro(press),
@@ -3557,6 +3602,18 @@ impl PrzmApp {
             if std::mem::take(&mut editor.unlock_request) {
                 self.vault
                     .ask_unlock("Unlock the vault to list its entries.".into());
+                self.master_for = Some(MasterFor::Keymap);
+            }
+            if std::mem::take(&mut editor.master_request) {
+                if przmterm_session::vault::vault_path(&dir).is_file() {
+                    self.vault.ask_master(
+                        "This shortcut types from the vault: enter the master password to change it."
+                            .into(),
+                    );
+                    self.master_for = Some(MasterFor::Keymap);
+                } else {
+                    editor.master_given();
+                }
             }
             if let keymap::KeymapResult::Closed = result {
                 self.keymap_editor = None;
@@ -3782,6 +3839,7 @@ impl PrzmApp {
                 } else {
                     for pane in &mut tab.panes {
                         pane.view.font_size = size;
+                        pane.view.zoom_base = None;
                         pane.view.font_name = name.clone();
                         pane.view.cursor = cursor;
                         pane.view.cursor_blink = blink;
@@ -4349,7 +4407,7 @@ fn browser_menu(ui: &mut egui::Ui, enabled: bool, shell: Option<&str>) -> Option
     let mut picked = None;
     ui.add_enabled_ui(enabled, |ui| {
         ui.menu_button("File Browser", |ui| {
-            crate::theme::menu(ui);
+            crate::theme::compact_menu(ui);
             if ui
                 .button("SFTP")
                 .on_hover_text("Browse and transfer files over SFTP")
@@ -4526,7 +4584,7 @@ fn folder_ui(
             "Right-click to add sessions, rename or set folder defaults"
         })
         .context_menu(|ui| {
-            crate::theme::menu(ui);
+            crate::theme::compact_menu(ui);
             if ui.button("New session here…").clicked() {
                 picked.push(TreeAction::NewSession(f.trail.clone()));
                 ui.close();
@@ -4608,7 +4666,7 @@ fn folder_ui(
             picked.push(TreeAction::Connect(s.clone()));
         }
         response.context_menu(|ui| {
-            crate::theme::menu(ui);
+            crate::theme::compact_menu(ui);
             if ui.button("Connect").clicked() {
                 picked.push(TreeAction::Connect(s.clone()));
                 ui.close();
@@ -4849,6 +4907,7 @@ impl eframe::App for PrzmApp {
             _ => None,
         };
         let mut open_update = false;
+        let mut reset_zoom = false;
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
                 let pane = self.tab().pane();
@@ -4885,6 +4944,21 @@ impl eframe::App for PrzmApp {
                 }
                 ui.separator();
                 ui.label(format!("{}×{}", s.cols(), s.rows()));
+                if let Some(base) = pane.view.zoom_base {
+                    let keys = self
+                        .shortcuts
+                        .label_for("zoom_reset")
+                        .map(|k| format!(" ({k})"))
+                        .unwrap_or_default();
+                    ui.separator();
+                    ui.label(format!("Zoom {} pt", pane.view.font_size));
+                    if icons::button(ui, icons::Icon::Reset, false)
+                        .on_hover_text(format!("Reset the zoom: back to {base} pt{keys}"))
+                        .clicked()
+                    {
+                        reset_zoom = true;
+                    }
+                }
                 ui.separator();
                 ui.label(&pane.label);
                 if pane.transport.is_closed() {
@@ -5009,6 +5083,9 @@ impl eframe::App for PrzmApp {
         });
         if open_update {
             self.update_window = true;
+        }
+        if reset_zoom {
+            self.tab_mut().pane_mut().view.reset_zoom();
         }
 
         if self.sessions_hidden {
@@ -5414,12 +5491,50 @@ impl eframe::App for PrzmApp {
         if std::mem::take(&mut self.buttons.unlock_request) {
             self.vault
                 .ask_unlock("Unlock the vault to list its entries.".into());
+            self.master_for = Some(MasterFor::Buttons);
+        }
+        if std::mem::take(&mut self.buttons.master_request) {
+            let vault = self
+                .config_dir
+                .as_deref()
+                .is_some_and(|d| przmterm_session::vault::vault_path(d).is_file());
+            if vault {
+                self.vault.ask_master(
+                    "This button types from the vault: enter the master password to change it."
+                        .into(),
+                );
+                self.master_for = Some(MasterFor::Buttons);
+            } else {
+                // No vault: nothing to protect.
+                self.buttons.master_given(self.config_dir.as_deref());
+            }
         }
         if let Some(dir) = self.config_dir.clone() {
-            match self.vault.show(&ctx, &dir) {
+            let event = self.vault.show(&ctx, &dir);
+            let master_for = match event {
+                vault::VaultEvent::None => None,
+                _ => self.master_for.take(),
+            };
+            let given = event == vault::VaultEvent::Unlocked;
+            match event {
                 vault::VaultEvent::Unlocked => actions.extend(self.after_unlock.take()),
                 vault::VaultEvent::Cancelled => self.after_unlock = None,
                 vault::VaultEvent::None => {}
+            }
+            match (master_for, given) {
+                (Some(MasterFor::Buttons), true) => self.buttons.master_given(Some(&dir)),
+                (Some(MasterFor::Buttons), false) => self.buttons.master_refused(),
+                (Some(MasterFor::Keymap), true) => {
+                    if let Some(editor) = &mut self.keymap_editor {
+                        editor.master_given();
+                    }
+                }
+                (Some(MasterFor::Keymap), false) => {
+                    if let Some(editor) = &mut self.keymap_editor {
+                        editor.master_refused();
+                    }
+                }
+                (None, _) => {}
             }
         }
         if let Some(notice) = self.vault.notice.take() {

@@ -265,6 +265,11 @@ When the button or shortcut is used, PrzmTerm asks for the master password
 if the vault is locked, then types the value. If the entry or the field is
 missing, nothing is sent. Triggers do not type vault entries.
 
+Give such a button or shortcut an `only_when` (below), so a stray press at
+the shell does not type the password where everyone can read it. In the
+app, changing a button or shortcut that types from the vault asks for the
+master password first.
+
 ## Button bar: `buttons.toml`
 
 Buttons come in groups. The bar shows one group at a time, chosen from the
@@ -284,6 +289,11 @@ send = 'copy run start\r\p\r'
 description = "Saves the running configuration"
 
 [[group.button]]
+label = "Enable"
+send = '{vault:Core switches}\r'
+only_when = '(?i)password:|senha:'
+
+[[group.button]]
 label = "Backup"
 script = "cisco-backup.rhai"
 tooltip = false
@@ -295,6 +305,7 @@ tooltip = false
 | `group.button.label` | text | — | The text on the button. |
 | `group.button.send` | text | `""` | What the button types into the session that has the keyboard, with the [escapes](#escapes-in-send). |
 | `group.button.script` | text | none | A script to run instead of sending text. A bare name is looked for in `<config>/scripts`. |
+| `group.button.only_when` | text | none | A regular expression for the end of the line at the cursor, right before the cursor: the prompt being answered. The button sends (or runs its script) only when it matches there, such as `(?i)password:` or `]#` for `[root@host ~]#` (`]` alone does not: the line ends with `#`). Trailing spaces are ignored. Otherwise nothing is sent and the status bar says why. |
 | `group.button.description` | text | none | Shown when the pointer rests on the button. |
 | `group.button.tooltip` | `true` or `false` | `true` | Show the description (or what the button sends) under the pointer. |
 
@@ -330,6 +341,7 @@ button = "Cisco/Interfaces"
 | `keys` | text | The keys, joined with `+`. The modifiers are `Cmd` (⌘ on macOS, Ctrl elsewhere), `Ctrl` (always the Control key), `Alt` (Option on macOS) and `Shift`. The key itself is a letter, a digit, or a name such as `F5`, `Tab`, `Enter`, `Space`, `Plus` or `PageUp`. |
 | `command` | text | An app command from the table below. |
 | `send` | text | Text to type, with the [escapes](#escapes-in-send). |
+| `only_when` | text | With `send`: type it only when the end of the line at the cursor matches this regular expression, as a button's [`only_when`](#button-bar-buttonstoml). |
 | `script` | text | A script to run. |
 | `button` | text | A button to press, as `Group/Label`. |
 
@@ -353,6 +365,13 @@ Each shortcut has `keys` and exactly one of `command`, `send`, `script` and
 | `disconnect` | Disconnect | — |
 | `send_break` | Send BREAK | `Cmd+Shift+B` |
 | `toggle_sessions` | Hide / show the session list | `Cmd+Shift+S` |
+| `zoom_in` | Zoom in: the active pane's font a point bigger, not saved (`Equals` also takes `+`) | `Cmd+Equals` |
+| `zoom_out` | Zoom out: a point smaller | `Cmd+Minus` |
+| `zoom_reset` | Reset the zoom: back to the pane's own size | `Cmd+0` |
+
+A `keymap.toml` that binds none of the three zoom commands (one written
+before they existed) gets their built-in keys, where no other shortcut
+uses them.
 | `toggle_buttons` | Hide / show the button bar | — |
 | `toggle_log` | Start / stop the log | — |
 | `run_script` | Run a script… | — |
