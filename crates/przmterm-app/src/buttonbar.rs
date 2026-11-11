@@ -13,8 +13,8 @@ pub struct Press {
     pub chunks: Vec<Chunk>,
     /// Run this script instead (a name in `<config>/scripts` or a path).
     pub script: Option<String>,
-    /// A regular expression the line at the cursor must match; empty:
-    /// always send.
+    /// A regular expression the end of the line at the cursor must match;
+    /// empty: always send.
     pub only_when: String,
 }
 
@@ -444,8 +444,8 @@ impl ButtonBarUi {
                         });
                         ui.end_row();
                         ui.label("Only when").on_hover_text(
-                            "A regular expression: the button sends only when the line \
-at the cursor matches it",
+                            "A regular expression for the end of the line, right before the \
+cursor (the prompt): the button sends only when it matches",
                         );
                         ui.add(
                             egui::TextEdit::singleline(&mut edit.button.only_when)
@@ -665,13 +665,17 @@ pub fn check_only_when(pattern: &str) -> Result<(), String> {
 }
 
 /// Whether `line` (the text before the cursor) lets a press with this
-/// Only when expression through. An invalid expression lets nothing
-/// through.
+/// Only when expression through. The expression must match the end of the
+/// line, right before the cursor (trailing spaces aside): `]#` lets
+/// `[root@host ~]#` through, `]` does not. An invalid expression lets
+/// nothing through.
 pub fn guard_allows(pattern: &str, line: &str) -> Result<bool, String> {
-    if pattern.trim().is_empty() {
+    let pattern = pattern.trim();
+    if pattern.is_empty() {
         return Ok(true);
     }
-    let re = fancy_regex::Regex::new(pattern.trim())
+    check_only_when(pattern)?;
+    let re = fancy_regex::Regex::new(&format!("(?:{pattern})\\s*$"))
         .map_err(|e| format!("Only when is not a valid regular expression: {e}"))?;
     re.is_match(line).map_err(|e| e.to_string())
 }
@@ -750,6 +754,18 @@ mod tests {
         assert_eq!(guard_allows(guard, "senha:"), Ok(true));
         assert_eq!(guard_allows(guard, "router#"), Ok(false));
         assert_eq!(guard_allows("(?i)password:", "PASSWORD:"), Ok(true));
+        // Only the end of the line, right before the cursor, counts.
+        let prompt = "[root@debug-server-01 ~]#";
+        assert_eq!(guard_allows("]", prompt), Ok(false));
+        assert_eq!(guard_allows("root", prompt), Ok(false));
+        for end in ["#", "]#", "~]#", "\\]#", "#$"] {
+            assert_eq!(guard_allows(end, prompt), Ok(true), "{end}");
+        }
+        assert_eq!(guard_allows("password:", "Password: old"), Ok(false));
+        assert_eq!(
+            guard_allows("(?i)password.*:", "[sudo] password for rodrigo:"),
+            Ok(true)
+        );
         assert!(guard_allows("(unclosed", "Password:").is_err());
         assert!(check_only_when("(unclosed").is_err());
         assert!(check_only_when("").is_ok());

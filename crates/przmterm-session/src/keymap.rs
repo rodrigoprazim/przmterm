@@ -54,7 +54,8 @@ pub struct Binding {
     /// A button to press: `Group/Label`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub button: String,
-    /// With `send`: a regular expression the line at the cursor must match
+    /// With `send`: a regular expression the end of the line at the cursor
+    /// must match
     /// for the text to be sent, as a button's `only_when`. Empty: always.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub only_when: String,

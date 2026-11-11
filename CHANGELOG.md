@@ -10,8 +10,9 @@ All notable changes to PrzmTerm are recorded here. The format follows
 ### Added
 
 - *Only when* on buttons and on shortcuts that send text (`only_when` in
-  `buttons.toml` and `keymap.toml`): a regular expression the line at the
-  cursor must match, such as `(?i)password:|senha:`. Pressed at any other
+  `buttons.toml` and `keymap.toml`): a regular expression the prompt
+  must end with, right before the cursor, such as `(?i)password:|senha:`
+  or `]#`. Pressed at any other
   prompt, nothing is typed and the status bar says why, so a button that
   types a vault password does not show it at the shell by mistake. The
   button dialog warns when a button types from the vault without one.

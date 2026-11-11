@@ -1463,7 +1463,8 @@ impl PrzmApp {
         let ctx2 = ctx.clone();
         let waker: Waker = Arc::new(move || ctx2.request_repaint());
         let env = self.env();
-        // A button's Only when: the line at the cursor must match, or
+        // A button's Only when: the end of the line at the cursor must
+        // match, or
         // nothing is typed (and the vault is not asked for).
         if let Action::Macro(press) = &action {
             let line = self.tab().pane().term.screen().text_before_cursor();
@@ -1471,7 +1472,7 @@ impl PrzmApp {
                 Ok(true) => {}
                 Ok(false) => {
                     self.notice = Some(format!(
-                        "Nothing sent: the line at the cursor does not match {}",
+                        "Nothing sent: the prompt at the cursor does not end with {}",
                         press.only_when
                     ));
                     return;

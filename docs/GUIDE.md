@@ -302,8 +302,11 @@ name, and the vault is unlocked first if it is locked. Shortcuts that send
 text take the same.
 
 **Only when** keeps a button from typing at the wrong place: a regular
-expression that the line at the cursor (up to the cursor) must match, such
-as `(?i)password:|senha:` for a button that types a password. Pressed
+expression for the prompt the button answers, matched at the end of the
+line, right before the cursor (trailing spaces aside). `(?i)password:|senha:`
+suits a button that types a password; `]#` matches `[root@host ~]#`, while
+`]` alone does not, since that line ends with `#`. `.*` reaches further
+back: `(?i)password.*:` also matches `[sudo] password for root:`. Pressed
 anywhere else, the button sends nothing and the status bar says so, and the
 vault is not even asked for. The check is made when the button is pressed;
 `(?i)` makes it ignore case. The dialog warns when a button types from the

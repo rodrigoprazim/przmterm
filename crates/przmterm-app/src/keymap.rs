@@ -906,8 +906,8 @@ impl KeymapEditor {
                     ui.end_row();
                     if edit.kind == Kind::Send {
                         ui.label("Only when").on_hover_text(
-                            "A regular expression: the text is sent only when the line \
-at the cursor matches it",
+                            "A regular expression for the end of the line, right before the \
+cursor (the prompt): the text is sent only when it matches",
                         );
                         ui.add(
                             egui::TextEdit::singleline(&mut edit.only_when)
