@@ -104,6 +104,7 @@ never to those files.
 | Split: grid / side by side / stacked | Ctrl+Shift+G / D / E | ⌘⇧G / D / E |
 | Copy / paste | Ctrl+Shift+C / Ctrl+Shift+V | ⌘C / ⌘V |
 | Hide / show the session list | Ctrl+Shift+S | ⌘⇧S |
+| Zoom the font in / out, reset | Ctrl+wheel, Ctrl+= / Ctrl+- / Ctrl+0 | ⌘+wheel or pinch, ⌘= / ⌘- / ⌘0 |
 
 A sample configuration is in [examples/config](examples/config). Try it with
 `PRZMTERM_HOME=examples/config cargo run`.

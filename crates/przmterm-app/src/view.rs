@@ -199,6 +199,9 @@ pub struct ViewOutput {
     pub paste: Option<String>,
 }
 
+/// How much a wheel or pinch zoom grows before the font takes a point.
+const ZOOM_STEP: f32 = 1.25;
+
 /// A pane's font and cursor.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Look {
@@ -213,6 +216,11 @@ pub struct Look {
 
 pub struct TerminalView {
     pub font_size: f32,
+    /// The size before zooming (⌘ and the wheel, a pinch, ⌘+ and ⌘−);
+    /// `None` when not zoomed. Zooming is not saved.
+    pub zoom_base: Option<f32>,
+    /// Wheel and pinch zoom not yet a whole point.
+    zoom_accum: f32,
     /// The installed font family chosen (`None`: the built-in one).
     pub font_name: Option<String>,
     /// The egui family that draws it, set by the app each frame.
@@ -246,6 +254,8 @@ impl Default for TerminalView {
     fn default() -> Self {
         Self {
             font_size: 14.0,
+            zoom_base: None,
+            zoom_accum: 1.0,
             font_name: None,
             family: egui::FontFamily::Monospace,
             cursor: CursorShape::Block,
@@ -307,12 +317,34 @@ impl TerminalView {
 
     pub fn set_look(&mut self, look: &Look) {
         self.font_size = look.font_size;
+        self.zoom_base = None;
         self.font_name = look.font_name.clone();
         self.cursor = look.cursor;
         self.cursor_blink = look.cursor_blink;
         self.cursor_color = look.cursor_color;
         self.background = look.background;
         self.foreground = look.foreground;
+    }
+
+    /// Zooms by `points` (negative: smaller), within the font sizes.
+    pub fn zoom(&mut self, points: f32) {
+        let (min, max) = (
+            f32::from(*przmterm_session::FONT_SIZES.start()),
+            f32::from(*przmterm_session::FONT_SIZES.end()),
+        );
+        let base = *self.zoom_base.get_or_insert(self.font_size);
+        self.font_size = (self.font_size + points).round().clamp(min, max);
+        if self.font_size == base {
+            self.zoom_base = None;
+        }
+    }
+
+    /// Back to the size before zooming.
+    pub fn reset_zoom(&mut self) {
+        if let Some(base) = self.zoom_base.take() {
+            self.font_size = base;
+        }
+        self.zoom_accum = 1.0;
     }
 
     /// The colours of plain text and the background.
@@ -643,6 +675,20 @@ impl TerminalView {
         }
 
         if response.hovered() {
+            // ⌘ (Ctrl) and the wheel, or a pinch: the font, a point for
+            // every quarter bigger or smaller.
+            let zoom = ui.input(|i| i.zoom_delta());
+            if zoom != 1.0 {
+                self.zoom_accum *= zoom;
+                while self.zoom_accum >= ZOOM_STEP {
+                    self.zoom_accum /= ZOOM_STEP;
+                    self.zoom(1.0);
+                }
+                while self.zoom_accum <= 1.0 / ZOOM_STEP {
+                    self.zoom_accum *= ZOOM_STEP;
+                    self.zoom(-1.0);
+                }
+            }
             let dy = ui.input(|i| i.smooth_scroll_delta.y);
             self.scroll_accum += dy;
             let lines = (self.scroll_accum / cell_h).trunc();

@@ -21,8 +21,15 @@ All notable changes to PrzmTerm are recorded here. The format follows
   while the vault is open, so its *Only when* cannot be taken off by
   someone else at the keyboard. Pressing it does not ask.
 
+- Zoom: ⌘ (Ctrl) and the wheel, a pinch on a trackpad, or ⌘= and ⌘-
+  change the font of a pane, a point at a time, without saving it. While a
+  pane is zoomed, the status bar shows its size and **Reset**; ⌘0 (Ctrl+0)
+  resets too. New commands `zoom_in`, `zoom_out` and `zoom_reset`.
+
 ### Changed
 
+- ⌘+, ⌘- and ⌘0 (Ctrl elsewhere) zoom the terminal's font instead of
+  the whole window.
 - The right-click menus of a button, a session and a folder (and the
   *File Browser* submenu) are half as wide.
 

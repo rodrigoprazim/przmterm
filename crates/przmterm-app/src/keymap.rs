@@ -17,7 +17,7 @@ pub struct Command {
     pub default: Option<&'static str>,
 }
 
-pub const COMMANDS: [Command; 24] = [
+pub const COMMANDS: [Command; 27] = [
     Command {
         id: "new_tab",
         label: "New tab (same session)",
@@ -92,6 +92,21 @@ pub const COMMANDS: [Command; 24] = [
         id: "toggle_sessions",
         label: "Hide / show the session list",
         default: Some("Cmd+Shift+S"),
+    },
+    Command {
+        id: "zoom_in",
+        label: "Zoom in (bigger font in this pane)",
+        default: Some("Cmd+Equals"),
+    },
+    Command {
+        id: "zoom_out",
+        label: "Zoom out (smaller font in this pane)",
+        default: Some("Cmd+Minus"),
+    },
+    Command {
+        id: "zoom_reset",
+        label: "Reset zoom (the pane's own font size)",
+        default: Some("Cmd+0"),
     },
     Command {
         id: "toggle_buttons",
@@ -200,6 +215,13 @@ impl Keys {
     }
 
     fn matches(&self, key: Key, mods: Modifiers) -> bool {
+        // `=` also stands for `+`, the same key with Shift on most
+        // layouts: ⌘+ zooms in whether Shift is held or not.
+        if self.key == Key::Equals && key == Key::Plus {
+            return mods.alt == self.mods.alt
+                && mods.ctrl == self.mods.ctrl
+                && mods.mac_cmd == self.mods.mac_cmd;
+        }
         key == self.key
             && mods.alt == self.mods.alt
             && mods.ctrl == self.mods.ctrl
@@ -292,8 +314,9 @@ impl Shortcuts {
             Some(Err(e)) => (defaults(), vec![e]),
             _ => (defaults(), Vec::new()),
         };
-        let (bindings, more) = compile(&keymap);
+        let (mut bindings, more) = compile(&keymap);
         errors.extend(more);
+        add_zoom_keys(&mut bindings);
         Shortcuts { bindings, errors }
     }
 
@@ -333,6 +356,36 @@ impl Shortcuts {
             .iter()
             .find(|(_, b)| b.command == id)
             .map(|(k, _)| k.label())
+    }
+}
+
+/// The zoom commands came after keymap files were written: a file that
+/// binds none of them gets their built-in keys, where those are free.
+fn add_zoom_keys(bindings: &mut Vec<(Keys, Binding)>) {
+    const ZOOM: [&str; 3] = ["zoom_in", "zoom_out", "zoom_reset"];
+    if bindings
+        .iter()
+        .any(|(_, b)| ZOOM.contains(&b.command.as_str()))
+    {
+        return;
+    }
+    for c in COMMANDS.iter().filter(|c| ZOOM.contains(&c.id)) {
+        let Some(keys) = c
+            .default
+            .and_then(|d| Chord::parse(d).and_then(|c| Keys::from_chord(&c)).ok())
+        else {
+            continue;
+        };
+        if !bindings.iter().any(|(k, _)| *k == keys) {
+            bindings.push((
+                keys,
+                Binding {
+                    keys: keys.chord().text(),
+                    command: c.id.into(),
+                    ..Default::default()
+                },
+            ));
+        }
     }
 }
 
@@ -1021,6 +1074,31 @@ mod tests {
         for c in &COMMANDS {
             assert!(command(c.id).is_some());
         }
+    }
+
+    #[test]
+    fn older_files_get_free_zoom_keys_and_equals_takes_plus() {
+        let (mut rows, _) = compile(&Keymap {
+            bindings: vec![Binding {
+                keys: "Cmd+0".into(),
+                send: "zero".into(),
+                ..Default::default()
+            }],
+            ..Keymap::default()
+        });
+        add_zoom_keys(&mut rows);
+        let commands: Vec<&str> = rows.iter().map(|(_, b)| b.command.as_str()).collect();
+        assert_eq!(commands, ["", "zoom_in", "zoom_out"]);
+        // A file that binds one of them keeps its own choice.
+        let before = rows.len();
+        add_zoom_keys(&mut rows);
+        assert_eq!(rows.len(), before);
+        let (keys, _) = &rows[1];
+        let mut plus = keys.mods;
+        plus.shift = true;
+        assert!(keys.matches(Key::Plus, plus));
+        assert!(keys.matches(Key::Equals, keys.mods));
+        assert!(!keys.matches(Key::Minus, keys.mods));
     }
 
     #[test]

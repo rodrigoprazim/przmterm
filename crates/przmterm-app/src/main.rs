@@ -63,6 +63,9 @@ fn main() -> eframe::Result {
             let fonts = fonts::TermFonts::new(&cc.egui_ctx);
             let mut app = PrzmApp::new(fonts);
             theme::apply(&cc.egui_ctx, app.prefs.look);
+            // ⌘+, ⌘− and ⌘0 zoom the terminal's font (shortcuts), not the
+            // whole window.
+            cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
             app.look_shown = app.prefs.look;
             app.menu_bar = appmenu::install(&cc.egui_ctx);
             update::clean_up();
@@ -567,6 +570,9 @@ enum Action {
     SessionOptions(usize),
     FontTab(usize),
     ToggleSessions,
+    /// The font of the active pane, by points (not saved).
+    Zoom(f32),
+    ZoomReset,
     /// Puts these tabs in a new group.
     NewGroup(Vec<usize>),
     /// Puts the tab in this group (`None`: out of its group).
@@ -1609,6 +1615,8 @@ impl PrzmApp {
                 }
             }
             Action::ToggleSessions => self.sessions_hidden = !self.sessions_hidden,
+            Action::Zoom(points) => self.tab_mut().pane_mut().view.zoom(points),
+            Action::ZoomReset => self.tab_mut().pane_mut().view.reset_zoom(),
             Action::NewGroup(tabs) => {
                 // Made once it is named; Cancel leaves the tabs as they are.
                 self.group_rename = Some(GroupName {
@@ -2109,6 +2117,9 @@ impl PrzmApp {
                 "disconnect" => Action::DisconnectTab(t),
                 "send_break" => Action::SendBreak,
                 "toggle_sessions" => Action::ToggleSessions,
+                "zoom_in" => Action::Zoom(1.0),
+                "zoom_out" => Action::Zoom(-1.0),
+                "zoom_reset" => Action::ZoomReset,
                 "toggle_buttons" => Action::ToggleButtons,
                 "toggle_log" => Action::ToggleLog,
                 "run_script" => Action::RunScript(t),
@@ -3828,6 +3839,7 @@ impl PrzmApp {
                 } else {
                     for pane in &mut tab.panes {
                         pane.view.font_size = size;
+                        pane.view.zoom_base = None;
                         pane.view.font_name = name.clone();
                         pane.view.cursor = cursor;
                         pane.view.cursor_blink = blink;
@@ -4895,6 +4907,7 @@ impl eframe::App for PrzmApp {
             _ => None,
         };
         let mut open_update = false;
+        let mut reset_zoom = false;
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
                 let pane = self.tab().pane();
@@ -4931,6 +4944,22 @@ impl eframe::App for PrzmApp {
                 }
                 ui.separator();
                 ui.label(format!("{}×{}", s.cols(), s.rows()));
+                if let Some(base) = pane.view.zoom_base {
+                    let keys = self
+                        .shortcuts
+                        .label_for("zoom_reset")
+                        .map(|k| format!(" ({k})"))
+                        .unwrap_or_default();
+                    ui.separator();
+                    ui.label(format!("Zoom {} pt", pane.view.font_size));
+                    if ui
+                        .small_button("Reset")
+                        .on_hover_text(format!("Back to {base} pt{keys}"))
+                        .clicked()
+                    {
+                        reset_zoom = true;
+                    }
+                }
                 ui.separator();
                 ui.label(&pane.label);
                 if pane.transport.is_closed() {
@@ -5055,6 +5084,9 @@ impl eframe::App for PrzmApp {
         });
         if open_update {
             self.update_window = true;
+        }
+        if reset_zoom {
+            self.tab_mut().pane_mut().view.reset_zoom();
         }
 
         if self.sessions_hidden {
