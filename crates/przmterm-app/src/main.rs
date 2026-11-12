@@ -995,7 +995,7 @@ impl PrzmApp {
                 .map(|dir| vec![dir])
         } else {
             rfd::FileDialog::new()
-                .set_title("SecureCRT export (.xml) or session files (.ini)")
+                .set_title("SecureCRT export (.xml), session, keyword or button bar files (.ini)")
                 .add_filter("SecureCRT", &["xml", "ini"])
                 .pick_files()
         };
@@ -3546,13 +3546,16 @@ impl PrzmApp {
         };
         let result = securecrt::parse_any(paths).and_then(|report| {
             let n = securecrt::write(&dir, IMPORT_FOLDER, &report)?;
-            let mut lines = vec![if n == 0 && !report.keyword_sets.is_empty() {
-                "Keywords imported.".to_string()
-            } else if n == 0 {
-                "No sessions found.".to_string()
-            } else {
-                format!("Imported {n} session(s) into the folder {IMPORT_FOLDER}.")
-            }];
+            let buttons: usize = report.button_groups.iter().map(|g| g.buttons.len()).sum();
+            let mut lines = vec![
+                if n == 0 && (!report.keyword_sets.is_empty() || buttons > 0) {
+                    "Imported.".to_string()
+                } else if n == 0 {
+                    "No sessions found.".to_string()
+                } else {
+                    format!("Imported {n} session(s) into the folder {IMPORT_FOLDER}.")
+                },
+            ];
             if !report.keyword_sets.is_empty() {
                 let names: Vec<&str> = report
                     .keyword_sets
@@ -3563,6 +3566,18 @@ impl PrzmApp {
                     "Imported keyword set(s): {}. Sessions that used them in SecureCRT \
                      highlight with them here too.",
                     names.join(", ")
+                ));
+            }
+            if buttons > 0 {
+                let groups: Vec<&str> = report
+                    .button_groups
+                    .iter()
+                    .map(|g| g.name.as_str())
+                    .collect();
+                lines.push(format!(
+                    "Imported {buttons} button(s) into the button group(s) {} (buttons already \
+                     there were left as they were).",
+                    groups.join(", ")
                 ));
             }
             lines.extend(
@@ -3576,6 +3591,10 @@ impl PrzmApp {
         });
         self.import_result = Some(result.unwrap_or_else(|e| vec![format!("Import failed: {e}")]));
         self.reload_sessions();
+        // Imported button groups.
+        let visible = self.buttons.visible;
+        self.buttons = buttonbar::ButtonBarUi::load(Some(&dir));
+        self.buttons.visible = visible;
     }
 
     /// The session editor and the delete confirmation.
@@ -5633,7 +5652,8 @@ impl eframe::App for PrzmApp {
                             if ui
                                 .button("Import from SecureCRT…")
                                 .on_hover_text(
-                                    "An XML export, session .ini files or keyword lists (.ini)",
+                                    "An XML export, session .ini files, keyword lists or the \
+                                     button bars (ButtonBarV5.ini, in SecureCRT's Config folder)",
                                 )
                                 .clicked()
                             {
@@ -5643,7 +5663,8 @@ impl eframe::App for PrzmApp {
                             if ui
                                 .button("Import a SecureCRT Sessions folder…")
                                 .on_hover_text(
-                                    "SecureCRT's Config/Sessions folder, with its sub-folders",
+                                    "SecureCRT's Config/Sessions folder, with its sub-folders, \
+                                     and the button bars next to it",
                                 )
                                 .clicked()
                             {

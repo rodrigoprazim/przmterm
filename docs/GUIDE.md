@@ -611,3 +611,12 @@ przm import-securecrt export.xml --into SecureCRT
 Passwords are not imported: SecureCRT keeps them encrypted, and PrzmTerm asks
 at the first login and can save them in the system keychain. Logon scripts,
 port forwards and RDP or local-shell sessions are listed in the summary.
+
+The button bars come along too: pick `ButtonBarV5.ini` from SecureCRT's
+`Config` folder with the other files, or import the `Sessions` folder (the
+bars next to it are read). Each bar becomes a button group (buttons already
+there are left alone). Send String buttons keep their text and escapes. Send
+Credentials buttons type the password of the [vault](#passwords-keychain-and-vault)
+entry of the same name, so add that entry; like buttons whose label says
+they type a password, they send only at a password prompt (*Only when*).
+Buttons for menu functions, scripts or programs are listed as skipped.

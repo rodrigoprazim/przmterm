@@ -21,6 +21,7 @@ use przmterm_core::serial::{FlowControl, Parity};
 
 use przmterm_core::keywords::{Keyword, KeywordSet, format_color};
 
+use crate::buttons::{ButtonTab, MacroButton};
 use crate::{DEFAULT_KEEPALIVE, LogSettings, SessionSettings, TerminalSettings};
 
 /// Scrollback above this many lines is capped on import (SecureCRT allows
@@ -53,6 +54,8 @@ pub struct Report {
     pub sessions: Vec<Imported>,
     /// Keyword highlighting lists (`Keywords/*.ini`), by name.
     pub keyword_sets: Vec<(String, KeywordSet)>,
+    /// Button bars (`ButtonBarV5.ini`), as button groups.
+    pub button_groups: Vec<ButtonTab>,
     /// Sessions left out, with the reason.
     pub skipped: Vec<(String, String)>,
     /// Things worth telling, e.g. "12 saved passwords were not imported".
@@ -65,6 +68,11 @@ pub struct Report {
     /// Sessions without a host (or serial port): written, but not listed
     /// until that is filled in.
     incomplete: Vec<String>,
+    /// Buttons that type a SecureCRT credential: the vault needs an entry
+    /// of the same name.
+    credentials: Vec<String>,
+    /// Buttons whose label says they type a password, in plain text.
+    plain_passwords: Vec<String>,
 }
 
 impl Report {
@@ -89,6 +97,25 @@ impl Report {
                  (SecureCRT stores it encrypted); they connect to their host and stop there: {}.",
                 self.scripted.len(),
                 self.scripted.join(", ")
+            ));
+        }
+        if !self.credentials.is_empty() {
+            self.notes.push(format!(
+                "{} button(s) type a SecureCRT credential, which cannot be imported \
+                 (SecureCRT stores it encrypted): they type the password of the vault \
+                 entry of the same name ({}), so add those entries to the vault. They send \
+                 only at a password prompt (Only when).",
+                self.credentials.len(),
+                self.credentials.join(", ")
+            ));
+        }
+        if !self.plain_passwords.is_empty() {
+            self.notes.push(format!(
+                "{} button(s) seem to type a password written in the button ({}): they \
+                 send only at a password prompt (Only when), but anyone who opens the \
+                 button sees it; keep the password in the vault instead ({{vault:entry}}).",
+                self.plain_passwords.len(),
+                self.plain_passwords.join(", ")
             ));
         }
         if !self.incomplete.is_empty() {
@@ -484,7 +511,124 @@ fn text_field<'a>(f: &'a Fields, key: &str) -> Option<&'a str> {
 
 /// Reads one session `.ini`. `None` for files that are not sessions
 /// (folder data, the default session).
+/// A prompt that asks for a password, for the Only when of imported
+/// buttons that type one.
+const PASSWORD_PROMPT: &str = "(?i)(password|senha|passcode).*:";
+
+/// Whether a button's label says it types a password.
+fn looks_like_password(label: &str) -> bool {
+    let label = label.to_lowercase();
+    ["password", "passwd", "senha", "secret"]
+        .iter()
+        .any(|w| label.contains(w))
+}
+
+/// Reads SecureCRT's button bars (`ButtonBarV5.ini` in its Config folder):
+/// a list per bar, `Z:"<bar>"=<count>`, of buttons
+/// `<function>,<argument>,<label>,…`. Send String buttons keep their text
+/// (the same escapes as PrzmTerm's: `\r`, `\n`, `\t`, `\p`…); Send
+/// Credentials buttons type the vault entry of the same name; other
+/// functions are left out and reported.
+pub fn parse_button_bars(text: &str, report: &mut Report) {
+    let mut fields: Vec<(&String, &Value)> = Vec::new();
+    let parsed = ini_fields(text);
+    for (name, value) in &parsed {
+        fields.push((name, value));
+    }
+    // In the file's order: the bars are listed as written.
+    fields.sort_by_key(|(name, _)| text.find(&format!("Z:\"{name}\"")).unwrap_or(usize::MAX));
+    for (bar, value) in fields {
+        let Value::List(items) = value else { continue };
+        let mut group = ButtonTab {
+            name: clean_name(bar),
+            buttons: Vec::new(),
+        };
+        for item in items {
+            if let Some(button) = convert_button(bar, item, report) {
+                group.buttons.push(button);
+            }
+        }
+        if !group.buttons.is_empty() {
+            report.button_groups.push(group);
+        }
+    }
+}
+
+/// One button of a bar; `None` (and a note) for what PrzmTerm cannot do.
+fn convert_button(bar: &str, item: &str, report: &mut Report) -> Option<MacroButton> {
+    let parts: Vec<&str> = item.trim().split(',').collect();
+    if parts.len() < 3 {
+        return None;
+    }
+    // Commas in the argument: the fields after it are always seven.
+    let (function, argument, label, field) = if parts.len() > 9 {
+        let end = parts.len() - 7;
+        (
+            parts[0],
+            parts[1..end].join(","),
+            parts[end],
+            parts.get(end + 2),
+        )
+    } else {
+        (parts[0], parts[1].to_string(), parts[2], parts.get(4))
+    };
+    let label = if label.trim().is_empty() {
+        argument.chars().take(20).collect()
+    } else {
+        label.trim().to_string()
+    };
+    let shown = format!("{bar}/{label}");
+    // The file doubles backslashes: `\\n` is the escape `\n`.
+    let text = argument.replace("\\\\", "\\");
+    match function.trim() {
+        "SEND" => {
+            let mut button = MacroButton {
+                label: label.clone(),
+                send: text,
+                ..MacroButton::default()
+            };
+            if looks_like_password(&label) {
+                button.only_when = PASSWORD_PROMPT.to_string();
+                report.plain_passwords.push(shown);
+            }
+            Some(button)
+        }
+        "CREDENTIALS" => {
+            let entry = text.trim();
+            if entry.is_empty() {
+                return None;
+            }
+            let what = match field.map(|f| f.trim()) {
+                Some("username") => ":username",
+                _ => "",
+            };
+            report.credentials.push(entry.to_string());
+            Some(MacroButton {
+                label,
+                send: format!("{{vault:{entry}{what}}}\\r"),
+                only_when: if what.is_empty() {
+                    PASSWORD_PROMPT.to_string()
+                } else {
+                    String::new()
+                },
+                ..MacroButton::default()
+            })
+        }
+        other => {
+            report.skipped.push((
+                format!("button {shown}"),
+                format!("{other} buttons have no equivalent in PrzmTerm"),
+            ));
+            None
+        }
+    }
+}
+
 pub fn parse_ini(name: &str, text: &str, folder: Vec<String>, report: &mut Report) {
+    if name.to_ascii_lowercase().starts_with("buttonbar") {
+        parse_button_bars(text, report);
+        return;
+    }
     if let Some(set) = parse_keyword_ini(name, text) {
         report.keyword_sets.push(set);
         return;
@@ -508,11 +652,40 @@ pub fn parse_paths(paths: &[PathBuf]) -> Result<Report, String> {
     for path in paths {
         if path.is_dir() {
             scan_dir(path, &mut Vec::new(), &mut report)?;
+            // SecureCRT's Sessions folder: its button bars are next to it.
+            let parent = path.parent().filter(|_| {
+                path.file_name()
+                    .is_some_and(|n| n.eq_ignore_ascii_case("sessions"))
+            });
+            for file in parent.map(button_bar_files).unwrap_or_default() {
+                read_ini(&file, Vec::new(), &mut report)?;
+            }
         } else {
             read_ini(path, Vec::new(), &mut report)?;
         }
     }
     Ok(report.finish())
+}
+
+/// The button bar files in a SecureCRT Config folder, the newest version
+/// only (`ButtonBarV5.ini` over `ButtonBarV4.ini`).
+fn button_bar_files(dir: &Path) -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                        let n = n.to_ascii_lowercase();
+                        n.starts_with("buttonbar") && n.ends_with(".ini")
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    files.sort();
+    files.pop().into_iter().collect()
 }
 
 fn read_ini(path: &Path, folder: Vec<String>, report: &mut Report) -> Result<(), String> {
@@ -616,7 +789,41 @@ pub fn write(config_dir: &Path, into: &str, report: &Report) -> Result<usize, St
     for (name, set) in &report.keyword_sets {
         crate::write_keyword_set(config_dir, name, set).map_err(|e| e.to_string())?;
     }
+    write_buttons(config_dir, &report.button_groups)?;
     Ok(report.sessions.len())
+}
+
+/// Adds the imported button groups to `buttons.toml`: into the group of
+/// the same name, without the buttons it already has (same label and
+/// text), so importing twice adds nothing.
+fn write_buttons(config_dir: &Path, groups: &[ButtonTab]) -> Result<(), String> {
+    if groups.is_empty() {
+        return Ok(());
+    }
+    let mut bar = crate::buttons::read_buttons(config_dir).map_err(|e| e.to_string())?;
+    for group in groups {
+        let index = match bar.tabs.iter().position(|t| t.name == group.name) {
+            Some(i) => i,
+            None => {
+                bar.tabs.push(ButtonTab {
+                    name: group.name.clone(),
+                    buttons: Vec::new(),
+                });
+                bar.tabs.len() - 1
+            }
+        };
+        let target = &mut bar.tabs[index];
+        for button in &group.buttons {
+            let known = target
+                .buttons
+                .iter()
+                .any(|b| b.label == button.label && b.send == button.send);
+            if !known {
+                target.buttons.push(button.clone());
+            }
+        }
+    }
+    crate::buttons::write_buttons(config_dir, &bar).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -771,6 +978,50 @@ Z:\"Port Forward Table V3\"=00000000\r\n";
             "{:?}",
             r.notes
         );
+    }
+
+    #[test]
+    fn reads_button_bars() {
+        // Fictional bars in the layout of SecureCRT's ButtonBarV5.ini.
+        let ini = "D:\"Sort Alphabetically\"=00000001\r\n\
+Z:\"Lab\"=00000003\r\n \
+SEND,Fict-Pass-1\\\\n,Password,,,1,2,,\r\n \
+CREDENTIALS,LAB_ADMIN,Lab login,,password,1,1,,\r\n \
+MENU,MENU_TAB_CLONE,Clone,,,0,1,,\r\n\
+Z:\"Cisco\"=00000002\r\n \
+SEND,show running-config\\\\n,show run,,,0,1,,\r\n \
+SEND,echo a,b\\\\r\\\\p,echo,,,0,1,,\r\n";
+        let mut r = Report::default();
+        parse_ini("ButtonBarV5", ini, Vec::new(), &mut r);
+        let names: Vec<&str> = r.button_groups.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(names, ["Lab", "Cisco"]);
+        let lab = &r.button_groups[0].buttons;
+        assert_eq!(lab.len(), 2, "the menu function is left out");
+        assert_eq!(lab[0].send, "Fict-Pass-1\\n");
+        assert_eq!(lab[0].only_when, PASSWORD_PROMPT, "labelled as a password");
+        assert_eq!(lab[1].send, "{vault:LAB_ADMIN}\\r");
+        assert_eq!(lab[1].only_when, PASSWORD_PROMPT);
+        let cisco = &r.button_groups[1].buttons;
+        assert_eq!(cisco[0].send, "show running-config\\n");
+        assert_eq!(cisco[0].only_when, "");
+        assert_eq!(cisco[1].send, "echo a,b\\r\\p", "a comma in the text");
+        assert_eq!(cisco[1].label, "echo");
+        assert!(
+            r.skipped
+                .iter()
+                .any(|(n, why)| n == "button Lab/Clone" && why.contains("MENU"))
+        );
+        let r = r.finish();
+        assert!(r.notes.iter().any(|n| n.contains("LAB_ADMIN")));
+        assert!(r.notes.iter().any(|n| n.contains("Lab/Password")));
+
+        // Written into buttons.toml, once.
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "SecureCRT", &r).unwrap();
+        write(dir.path(), "SecureCRT", &r).unwrap();
+        let bar = crate::buttons::read_buttons(dir.path()).unwrap();
+        let cisco = bar.tabs.iter().find(|t| t.name == "Cisco").unwrap();
+        assert_eq!(cisco.buttons.len(), 2);
     }
 
     #[test]

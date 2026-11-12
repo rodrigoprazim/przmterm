@@ -23,6 +23,12 @@ All notable changes to PrzmTerm are recorded here. The format follows
   shows a green pulse while output comes in and a green bell once it stops
   (a command finished), until it is opened. Split panes show the same in
   their caption.
+- The SecureCRT import brings the button bars too (`ButtonBarV5.ini` in
+  SecureCRT's Config folder, picked with the other files or found next to a
+  Sessions folder): each bar becomes a button group. Send String buttons
+  keep their text; Send Credentials buttons type the vault entry of the same
+  name. Buttons that type a password send only at a password prompt;
+  functions PrzmTerm does not have are listed as skipped.
 - Folder colours: *Color* in a folder's right-click menu, in its settings
   and in the *New folder* dialog colours its icon and name in the session
   list (`color` in `folder.toml`; none by default).
