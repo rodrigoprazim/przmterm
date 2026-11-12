@@ -27,8 +27,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
   settings colours its icon and name in the session list (`color` in
   `folder.toml`; none by default).
 - Right-clicking the free space of the session list: new session, new
-  folder, expand all, collapse all, reload, SecureCRT imports, global
-  settings and showing the settings folder.
+  folder, expand all, collapse all, reload, global settings and showing
+  the settings folder.
 - *Settings problems*: the warning under the session list opens a list of
   the files with problems, what is wrong with each and what can be done
   (edit the session, remove unknown settings, open, show or delete the

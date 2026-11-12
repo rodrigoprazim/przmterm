@@ -864,8 +864,6 @@ enum TreeAction {
     ExpandAll(bool),
     /// Read the sessions again.
     Reload,
-    /// Import from SecureCRT: files (`false`) or a Sessions folder.
-    ImportSecureCrt(bool),
     GlobalSettings,
     /// Show the settings folder in the file manager.
     ShowSettingsFolder,
@@ -4873,17 +4871,6 @@ fn list_menu(ui: &mut egui::Ui, picked: &mut Vec<TreeAction>) {
     item(ui, "Collapse all", TreeAction::ExpandAll(false));
     item(ui, "Reload", TreeAction::Reload);
     ui.separator();
-    item(
-        ui,
-        "Import from SecureCRT…",
-        TreeAction::ImportSecureCrt(false),
-    );
-    item(
-        ui,
-        "Import a SecureCRT Sessions folder…",
-        TreeAction::ImportSecureCrt(true),
-    );
-    ui.separator();
     item(ui, "Global settings…", TreeAction::GlobalSettings);
     item(ui, "Show settings folder", TreeAction::ShowSettingsFolder);
 }
@@ -5868,9 +5855,6 @@ impl eframe::App for PrzmApp {
                                     TreeAction::Reload => {
                                         self.reload_sessions();
                                         self.notice = Some("Read the sessions again.".into());
-                                    }
-                                    TreeAction::ImportSecureCrt(folder) => {
-                                        self.pick_securecrt(folder)
                                     }
                                     TreeAction::GlobalSettings => {
                                         if let Some(dir) = &self.config_dir {

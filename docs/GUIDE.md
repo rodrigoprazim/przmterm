@@ -76,7 +76,7 @@ a folder to add a session or subfolder there, rename it, give it a colour
 (*Color*, also in its settings), edit the settings its sessions inherit, or
 delete it. Right-click the free space below the list for a new session or
 folder at the top level, *Expand all*, *Collapse all*, *Reload*, the
-SecureCRT imports, the global settings and the settings folder. Deleting a folder can keep what is in
+global settings and the settings folder. Deleting a folder can keep what is in
 it: its sessions and subfolders move up a level and keep the folder's
 settings (written into each), so they connect as before.
 
