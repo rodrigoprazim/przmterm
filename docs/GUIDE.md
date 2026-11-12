@@ -267,9 +267,14 @@ they move into this tab. To see one session twice, clone it first (*Clone
 Session* in the tab menu). In a split tab the **⋯** menu rearranges the
 panes, moves the active pane to a tab of its own or
 separates them all into tabs again. Each pane shows its session's name, and
-connected sessions have a green icon in the session list. A tab of a
-connection starts with a green dot while it is connected and a red one once
-it has ended; split panes show the same dot in their caption.
+connected sessions have a green icon in the session list (a terminal for
+SSH, a screen for Telnet, a cable for serial, a laptop for a local shell).
+
+A tab of a connection starts with an icon: a green plug while connected, a
+red unplugged one once the connection has ended. A tab you are not looking
+at tells you when output comes: a green pulse while it is coming in, then a
+green bell once it stops (the command you left running has finished, say)
+until you open the tab. Split panes show the same icon in their caption.
 
 In a split tab, **⇶ Send to all** in the status bar sends what you type to
 every pane of the tab (after a warning) until you turn it off.

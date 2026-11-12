@@ -206,6 +206,24 @@ fn tilde(path: &Path) -> String {
 }
 
 /// Human name of a settings key, for the confirmation.
+/// `reason` with its `key`s named as the form names them, capitalised:
+/// "`serial_port` is required" becomes "Serial port is required".
+fn readable(reason: &str) -> String {
+    let mut out = String::new();
+    let mut parts = reason.split('`');
+    if let Some(first) = parts.next() {
+        out.push_str(first);
+    }
+    for (i, part) in parts.enumerate() {
+        out.push_str(if i % 2 == 0 { field_label(part) } else { part });
+    }
+    let mut chars = out.chars();
+    chars
+        .next()
+        .map(|c| c.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+
 fn field_label(key: &str) -> &'static str {
     match key {
         "protocol" => "protocol",
@@ -631,6 +649,26 @@ impl Editor {
         })
     }
 
+    /// A session must connect with what it sets and inherits: one without
+    /// a serial port, say, would be saved but not listed.
+    fn check_session(&self, inherited: &SessionSettings) -> Result<(), String> {
+        let Target::Session { trail, .. } = &self.target else {
+            return Ok(());
+        };
+        let settings = inherited.overlay(&self.settings()?);
+        przmterm_session::Session::resolve(
+            self.name.trim(),
+            trail.clone(),
+            PathBuf::new(),
+            &settings,
+        )
+        .map(drop)
+        .map_err(|e| match e {
+            przmterm_session::SessionError::Invalid { reason, .. } => readable(&reason),
+            e => e.to_string(),
+        })
+    }
+
     /// Saves, or for the global defaults with changes, asks first.
     fn save_or_confirm(&mut self, config_dir: &Path) -> Result<Option<String>, String> {
         if self.target == Target::Global {
@@ -886,7 +924,10 @@ impl Editor {
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if crate::theme::primary_button(ui, "Save").clicked() || (enter && !popup) {
-                            match self.save_or_confirm(config_dir) {
+                            match self
+                                .check_session(&inherited)
+                                .and_then(|()| self.save_or_confirm(config_dir))
+                            {
                                 Ok(Some(msg)) => result = EditorResult::Saved(msg),
                                 Ok(None) => {}
                                 Err(e) => self.error = Some(e),
@@ -2128,6 +2169,31 @@ fn save_pick(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_session_that_cannot_connect_is_not_saved() {
+        let none = SessionSettings::default();
+        let mut e = Editor::new_session(&[]);
+        e.name = "console".into();
+        e.protocol = Some(Protocol::Serial);
+        assert_eq!(
+            e.check_session(&none),
+            Err("Serial port is required for serial".to_string())
+        );
+        e.serial_port = "COM3".into();
+        assert_eq!(e.check_session(&none), Ok(()));
+        e.protocol = Some(Protocol::Telnet);
+        assert!(e.check_session(&none).is_err(), "no host");
+        let inherited = SessionSettings {
+            host: Some("10.0.0.1".into()),
+            ..SessionSettings::default()
+        };
+        assert_eq!(
+            e.check_session(&inherited),
+            Ok(()),
+            "an inherited host does"
+        );
+    }
 
     #[test]
     fn serial_settings_survive_an_edit() {

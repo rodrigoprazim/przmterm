@@ -1,7 +1,25 @@
-//! Small icons drawn with lines, so they look the same on every system
-//! (fonts differ in which symbols they have and where they place them).
+//! The interface's icons: [Lucide](https://lucide.dev) (ISC licence, in
+//! `assets/fonts/Lucide-LICENSE.txt`), from a font cut down to the icons
+//! used here (`scripts/lucide-icons.py`). Being a font, an icon takes any
+//! colour and looks the same on every system.
 
-use eframe::egui::{self, Color32, Pos2, Rect, Sense, Shape, Stroke, Vec2};
+use eframe::egui::{self, Color32, FontFamily, FontId, Pos2, Rect, Sense, Vec2};
+
+/// The font family of the icons.
+const FAMILY: &str = "lucide-icons";
+
+/// Adds the icon font to `fonts`, as a family of its own.
+pub fn add_font(fonts: &mut egui::FontDefinitions) {
+    fonts.font_data.insert(
+        FAMILY.into(),
+        std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
+            "../../../assets/fonts/lucide-icons.ttf"
+        ))),
+    );
+    fonts
+        .families
+        .insert(FontFamily::Name(FAMILY.into()), vec![FAMILY.into()]);
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Icon {
@@ -21,18 +39,103 @@ pub enum Icon {
     Up,
     /// Opens a list.
     ChevronDown,
-    /// Something that can be dragged: two columns of three dots.
+    /// Something that can be dragged.
     Grip,
     /// A folder of sessions.
     Folder,
-    /// A session: a small screen with a prompt.
+    /// An SSH session: a terminal.
     Session,
-    /// Split side by side: a frame cut down the middle.
+    /// A Telnet session: a screen.
+    Telnet,
+    /// A serial session: a cable.
+    Serial,
+    /// A local shell: a laptop.
+    Local,
+    /// Split side by side.
     SplitColumns,
     /// Split one above the other.
     SplitRows,
     /// More actions: three dots.
     More,
+    /// A connection that is up.
+    Connected,
+    /// A connection that has ended.
+    Disconnected,
+    /// Output coming in now (a tab not looked at).
+    Busy,
+    /// Output came in and stopped (a tab not looked at): a command ended.
+    Done,
+}
+
+impl Icon {
+    /// The icon's character in the Lucide font.
+    fn glyph(self) -> char {
+        let code = match self {
+            Icon::ChevronLeft => 0xE06E,
+            Icon::ChevronRight => 0xE06F,
+            Icon::ChevronDown => 0xE06D,
+            Icon::Reload => 0xE149,
+            Icon::Reset => 0xE148,
+            Icon::Lock => 0xE10B,
+            Icon::Unlock => 0xE10C,
+            Icon::Gear => 0xE154,
+            Icon::Plus => 0xE13D,
+            Icon::Close => 0xE1B2,
+            Icon::Up => 0xE04A,
+            Icon::Grip => 0xE0EB,
+            Icon::Folder => 0xE0D7,
+            Icon::Session => 0xE20A,
+            Icon::Telnet => 0xE11D,
+            Icon::Serial => 0xE4E3,
+            Icon::Local => 0xE1CD,
+            Icon::SplitColumns => 0xE098,
+            Icon::SplitRows => 0xE439,
+            Icon::More => 0xE0B6,
+            Icon::Connected => 0xE37F,
+            Icon::Disconnected => 0xE45D,
+            Icon::Busy => 0xE038,
+            Icon::Done => 0xE42B,
+        };
+        char::from_u32(code).unwrap_or('?')
+    }
+
+    /// The icon of a session of `protocol`.
+    pub fn of_protocol(protocol: przmterm_core::Protocol) -> Icon {
+        match protocol {
+            przmterm_core::Protocol::Ssh => Icon::Session,
+            przmterm_core::Protocol::Telnet => Icon::Telnet,
+            przmterm_core::Protocol::Serial => Icon::Serial,
+            przmterm_core::Protocol::Local => Icon::Local,
+        }
+    }
+
+    #[cfg(test)]
+    const ALL: [Icon; 24] = [
+        Icon::ChevronLeft,
+        Icon::ChevronRight,
+        Icon::Reload,
+        Icon::Lock,
+        Icon::Unlock,
+        Icon::Gear,
+        Icon::Plus,
+        Icon::Close,
+        Icon::Reset,
+        Icon::Up,
+        Icon::ChevronDown,
+        Icon::Grip,
+        Icon::Folder,
+        Icon::Session,
+        Icon::Telnet,
+        Icon::Serial,
+        Icon::Local,
+        Icon::SplitColumns,
+        Icon::SplitRows,
+        Icon::More,
+        Icon::Connected,
+        Icon::Disconnected,
+        Icon::Busy,
+        Icon::Done,
+    ];
 }
 
 /// Size of an icon button: all of them match.
@@ -60,171 +163,23 @@ pub fn button(ui: &mut egui::Ui, icon: Icon, selected: bool) -> egui::Response {
     response
 }
 
-/// Draws `icon` centred in `rect` in `color`, in a box of 12 points
+/// Draws `icon` centred in `rect` in `color`, about 12 points big
 /// whatever the size of `rect`.
 pub fn draw(painter: &egui::Painter, icon: Icon, rect: Rect, color: Color32) {
     draw_scaled(painter, icon, rect, color, 1.0);
 }
 
-/// [`draw`], `scale` times as big (lines too).
+/// [`draw`], `scale` times as big.
 pub fn draw_scaled(painter: &egui::Painter, icon: Icon, rect: Rect, color: Color32, scale: f32) {
-    let c = rect.center();
-    let s = 6.0 * scale;
-    let stroke = Stroke::new(1.5 * scale, color);
-    let p = |x: f32, y: f32| Pos2::new(c.x + x * s, c.y + y * s);
-    match icon {
-        Icon::ChevronLeft => {
-            painter.add(Shape::line(
-                vec![p(0.35, -0.7), p(-0.35, 0.0), p(0.35, 0.7)],
-                stroke,
-            ));
-        }
-        Icon::ChevronRight => {
-            painter.add(Shape::line(
-                vec![p(-0.35, -0.7), p(0.35, 0.0), p(-0.35, 0.7)],
-                stroke,
-            ));
-        }
-        Icon::Up => {
-            painter.add(Shape::line(
-                vec![p(-0.6, -0.05), p(0.0, -0.7), p(0.6, -0.05)],
-                stroke,
-            ));
-            painter.line_segment([p(0.0, -0.65), p(0.0, 0.75)], stroke);
-        }
-        Icon::ChevronDown => {
-            painter.add(Shape::line(
-                vec![p(-0.6, -0.3), p(0.0, 0.35), p(0.6, -0.3)],
-                stroke,
-            ));
-        }
-        Icon::Reset => {
-            // An arc turning left, back to where it started.
-            let r = 0.65;
-            let (a0, a1) = (-0.85 * std::f32::consts::PI, 0.6 * std::f32::consts::PI);
-            let points: Vec<Pos2> = (0..=24)
-                .map(|i| {
-                    let a = a0 + (a1 - a0) * i as f32 / 24.0;
-                    p(r * a.cos(), r * a.sin())
-                })
-                .collect();
-            painter.add(Shape::line(points, stroke));
-            let tip = p(r * a0.cos(), r * a0.sin());
-            let along = Vec2::new(a0.sin(), -a0.cos()) * s * 0.5;
-            let out = Vec2::new(a0.cos(), a0.sin()) * s * 0.38;
-            painter.add(Shape::convex_polygon(
-                vec![tip + along, tip - out, tip + out],
-                color,
-                Stroke::NONE,
-            ));
-        }
-        Icon::Plus => {
-            painter.line_segment([p(-0.75, 0.0), p(0.75, 0.0)], stroke);
-            painter.line_segment([p(0.0, -0.75), p(0.0, 0.75)], stroke);
-        }
-        Icon::Close => {
-            let stroke = Stroke::new(1.6 * scale, color);
-            painter.line_segment([p(-0.55, -0.55), p(0.55, 0.55)], stroke);
-            painter.line_segment([p(-0.55, 0.55), p(0.55, -0.55)], stroke);
-        }
-        Icon::Reload => {
-            // Most of a circle, open at the top right, ending in an arrow
-            // head that points along it.
-            let r = 0.75;
-            let (a0, a1) = (-0.25 * std::f32::consts::PI, 1.35 * std::f32::consts::PI);
-            let points: Vec<Pos2> = (0..=28)
-                .map(|i| {
-                    let a = a0 + (a1 - a0) * i as f32 / 28.0;
-                    p(r * a.cos(), r * a.sin())
-                })
-                .collect();
-            painter.add(Shape::line(points, stroke));
-            // The head at the start of the arc, pointing back (clockwise).
-            let tip = p(r * a0.cos(), r * a0.sin());
-            let along = Vec2::new(a0.sin(), -a0.cos()) * s * 0.55; // tangent
-            let out = Vec2::new(a0.cos(), a0.sin()) * s * 0.4; // radial
-            painter.add(Shape::convex_polygon(
-                vec![tip + along, tip - out, tip + out],
-                color,
-                Stroke::NONE,
-            ));
-        }
-        Icon::Lock | Icon::Unlock => {
-            let body = Rect::from_min_max(p(-0.7, -0.05), p(0.7, 0.85));
-            painter.rect_filled(body, 1.5 * scale, color);
-            // The shackle: an arch over the body, lifted to one side when
-            // open.
-            let lift = if icon == Icon::Unlock { -0.35 } else { 0.0 };
-            let shift = if icon == Icon::Unlock { 0.45 } else { 0.0 };
-            let arch: Vec<Pos2> = (0..=16)
-                .map(|i| {
-                    let a = std::f32::consts::PI * (1.0 + i as f32 / 16.0);
-                    p(shift + 0.42 * a.cos(), lift - 0.4 + 0.45 * a.sin())
-                })
-                .collect();
-            let mut shackle = vec![p(shift - 0.42, -0.05)];
-            shackle.extend(arch);
-            if icon == Icon::Lock {
-                shackle.push(p(0.42, -0.05));
-            }
-            painter.add(Shape::line(shackle, stroke));
-        }
-        Icon::Grip => {
-            for x in [-0.3, 0.3] {
-                for y in [-0.6, 0.0, 0.6] {
-                    painter.circle_filled(p(x, y), 1.1 * scale, color);
-                }
-            }
-        }
-        Icon::SplitColumns | Icon::SplitRows => {
-            let frame = Rect::from_min_max(p(-0.95, -0.8), p(0.95, 0.8));
-            let thin = Stroke::new(1.2 * scale, color);
-            painter.rect_stroke(frame, 2.0 * scale, thin, egui::StrokeKind::Middle);
-            if matches!(icon, Icon::SplitColumns) {
-                painter.line_segment([p(0.0, -0.8), p(0.0, 0.8)], thin);
-            } else {
-                painter.line_segment([p(-0.95, 0.0), p(0.95, 0.0)], thin);
-            }
-        }
-        Icon::More => {
-            for x in [-0.6, 0.0, 0.6] {
-                painter.circle_filled(p(x, 0.0), 1.1 * scale, color);
-            }
-        }
-        Icon::Folder => {
-            // A tab on the top left, then the body.
-            let outline = vec![
-                p(-0.85, -0.55),
-                p(-0.3, -0.55),
-                p(-0.15, -0.35),
-                p(0.85, -0.35),
-                p(0.85, 0.65),
-                p(-0.85, 0.65),
-            ];
-            painter.add(Shape::closed_line(outline, Stroke::new(1.3 * scale, color)));
-        }
-        Icon::Session => {
-            let line = Stroke::new(1.2 * scale, color);
-            let screen = egui::Rect::from_min_max(p(-0.85, -0.6), p(0.85, 0.6));
-            painter.rect_stroke(screen, 1.5 * scale, line, egui::StrokeKind::Middle);
-            // `>_`
-            painter.add(Shape::line(
-                vec![p(-0.5, -0.25), p(-0.2, 0.0), p(-0.5, 0.25)],
-                line,
-            ));
-            painter.line_segment([p(-0.05, 0.3), p(0.45, 0.3)], line);
-        }
-        Icon::Gear => {
-            let teeth = 8;
-            let thick = Stroke::new(2.4 * scale, color);
-            for i in 0..teeth {
-                let a = i as f32 / teeth as f32 * std::f32::consts::TAU;
-                let (sin, cos) = a.sin_cos();
-                painter.line_segment([p(0.5 * cos, 0.5 * sin), p(0.92 * cos, 0.92 * sin)], thick);
-            }
-            painter.circle_stroke(c, 0.5 * s, thick);
-        }
-    }
+    // The glyph fills about 20 of the font's 24 units, centred.
+    let font = FontId::new(14.0 * scale, FontFamily::Name(FAMILY.into()));
+    let galley = painter.layout_no_wrap(icon.glyph().to_string(), font, color);
+    let size = galley.size();
+    let pos = Pos2::new(
+        rect.center().x - size.x / 2.0,
+        rect.center().y - size.y / 2.0,
+    );
+    painter.galley(pos, galley, color);
 }
 
 /// A button the size of egui's own, with a dot of `dot` colour before
@@ -274,4 +229,20 @@ pub fn dot_button(
         ui.painter().galley(text_pos, galley, color);
     }
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use skrifa::MetadataProvider as _;
+
+    #[test]
+    fn the_font_has_every_icon() {
+        let font =
+            skrifa::FontRef::new(include_bytes!("../../../assets/fonts/lucide-icons.ttf")).unwrap();
+        let charmap = font.charmap();
+        for icon in Icon::ALL {
+            assert!(charmap.map(icon.glyph()).is_some(), "{icon:?}");
+        }
+    }
 }

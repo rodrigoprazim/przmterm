@@ -42,3 +42,12 @@ your own use of the products. Do not copy, decompile or paraphrase another
 vendor's code, icons, help text or other assets, and do not use their product
 names in PrzmTerm's branding. Reading another product's documented file
 formats to import user data is fine.
+
+## Icons
+
+The interface's icons are [Lucide](https://lucide.dev) (ISC licence), from
+a font cut down to the icons in use: `assets/fonts/lucide-icons.ttf`. To
+add one, put its Lucide name in `scripts/lucide-icons.py`, run it on the
+`lucide-static` npm package (the script says how) and add the icon with its
+code point to `Icon` in `crates/przmterm-app/src/icons.rs`; a test checks
+that the font has every icon.

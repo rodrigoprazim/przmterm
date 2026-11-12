@@ -18,8 +18,13 @@ All notable changes to PrzmTerm are recorded here. The format follows
 - Deleting a folder can keep its sessions (checked by default): they and
   its subfolders move up a level, with the folder's settings written into
   each, so they connect as before.
-- A connection's tab shows a green dot while connected and a red one once
-  it has ended (instead of ○); split panes show it in their caption.
+- A connection's tab starts with an icon: a green plug while connected, a
+  red unplugged plug once it has ended (instead of ○). A tab not looked at
+  shows a green pulse while output comes in and a green bell once it stops
+  (a command finished), until it is opened. Split panes show the same in
+  their caption.
+- The session list shows each session's kind: a terminal for SSH, a screen
+  for Telnet, a cable for serial, a laptop for a local shell.
 
 ### Changed
 
@@ -32,9 +37,14 @@ All notable changes to PrzmTerm are recorded here. The format follows
   `~/.config/przmterm`.
 - A session open in a tab has a green icon in the session list instead of
   a green dot before its name.
+- The interface's icons are [Lucide](https://lucide.dev)'s (ISC licence),
+  from a small font, instead of drawn lines.
 
 ### Fixed
 
+- A session that could not connect (a serial one without a serial port,
+  say) was saved but not listed: the session dialog now says what is
+  missing instead of saving it.
 - Windows: no console window opens with PrzmTerm.
 - A maximized window flickered as the mouse moved on some Windows
   computers: PrzmTerm now draws with Direct3D 12 on Windows and asks for

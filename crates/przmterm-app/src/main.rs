@@ -186,8 +186,77 @@ pub fn cursor_label(shape: przmterm_session::CursorShape) -> &'static str {
 /// The × shows on the active tab and under the pointer. Returns the tab's
 /// response (click selects, right-click opens its menu) and whether × was
 /// clicked.
-/// The colour of a connection's dot: green while connected, red once it
-/// has ended.
+/// What a connection's tab shows before its title.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Status {
+    /// Connected, nothing new: a plug, green.
+    Connected,
+    /// Output coming in now in a tab not looked at: a pulse, green.
+    Busy,
+    /// Output came in and stopped (a command ended) in a tab not looked
+    /// at: a bell, green.
+    Done,
+    /// The connection ended: an unplugged plug, red.
+    Disconnected,
+}
+
+/// Output this recent counts as still coming in.
+const BUSY_FOR: std::time::Duration = std::time::Duration::from_millis(1500);
+
+impl Status {
+    /// The status of a pane, `None` for one without a connection.
+    fn of(pane: &Pane) -> Option<Status> {
+        pane.origin.as_ref()?;
+        Some(if pane.transport.is_closed() {
+            Status::Disconnected
+        } else if !pane.unseen {
+            Status::Connected
+        } else if pane.last_output.is_some_and(|t| t.elapsed() < BUSY_FOR) {
+            Status::Busy
+        } else {
+            Status::Done
+        })
+    }
+
+    /// A tab's status: the most telling of its panes'.
+    fn of_tab(tab: &Tab) -> Option<Status> {
+        let all: Vec<Status> = tab.panes.iter().filter_map(Status::of).collect();
+        [
+            Status::Disconnected,
+            Status::Done,
+            Status::Busy,
+            Status::Connected,
+        ]
+        .into_iter()
+        .find(|s| all.contains(s))
+    }
+
+    fn icon(self) -> icons::Icon {
+        match self {
+            Status::Connected => icons::Icon::Connected,
+            Status::Busy => icons::Icon::Busy,
+            Status::Done => icons::Icon::Done,
+            Status::Disconnected => icons::Icon::Disconnected,
+        }
+    }
+
+    fn hint(self) -> &'static str {
+        match self {
+            Status::Connected => "Connected",
+            Status::Busy => "Connected, new output coming in",
+            Status::Done => "Connected, new output (it stopped)",
+            Status::Disconnected => "Disconnected",
+        }
+    }
+
+    fn draw(self, ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect) {
+        let color = status_color(ui, self != Status::Disconnected);
+        icons::draw(painter, self.icon(), rect, color);
+    }
+}
+
+/// The colour of a connection's status: green while connected, red once
+/// it has ended.
 fn status_color(ui: &egui::Ui, connected: bool) -> egui::Color32 {
     match (connected, ui.visuals().dark_mode) {
         (true, true) => egui::Color32::from_rgb(70, 190, 100),
@@ -197,14 +266,13 @@ fn status_color(ui: &egui::Ui, connected: bool) -> egui::Color32 {
     }
 }
 
-/// A tab; `status`: a connection's tab, `Some(true)` while it is connected
-/// (a green dot), `Some(false)` once it has ended (a red one).
+/// A tab; `status`: a connection's tab, its icon before the title.
 fn tab_widget(
     ui: &mut egui::Ui,
     title: &str,
     active: bool,
     locked: bool,
-    status: Option<bool>,
+    status: Option<Status>,
     group: Option<egui::Color32>,
     ink: view::Ink,
 ) -> (egui::Response, bool) {
@@ -220,7 +288,7 @@ fn tab_widget(
         .layout_no_wrap(title.to_string(), font, text_color);
     let (pad, close_w, height) = (12.0, 22.0, 32.0);
     let lock_w = if locked { 18.0 } else { 0.0 };
-    let dot_w = if status.is_some() { 14.0 } else { 0.0 };
+    let dot_w = if status.is_some() { 18.0 } else { 0.0 };
     let width = pad + lock_w + dot_w + galley.size().x + 6.0 + close_w + 6.0;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
     let close_rect = egui::Rect::from_center_size(
@@ -262,12 +330,12 @@ fn tab_widget(
             icons::draw(painter, icons::Icon::Lock, lock_rect, text_color);
             x += lock_w;
         }
-        if let Some(connected) = status {
-            painter.circle_filled(
-                egui::pos2(x + 4.0, rect.center().y),
-                4.0,
-                status_color(ui, connected),
+        if let Some(status) = status {
+            let icon = egui::Rect::from_center_size(
+                egui::pos2(x + 6.0, rect.center().y),
+                egui::vec2(14.0, 14.0),
             );
+            status.draw(ui, painter, icon);
             x += dot_w;
         }
         painter.galley(
@@ -2959,6 +3027,12 @@ impl PrzmApp {
 
     /// The tabs of the current window, with + at the end.
     fn tab_bar(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        // The active tab is on screen: its output has been seen.
+        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+            for pane in &mut tab.panes {
+                pane.unseen = false;
+            }
+        }
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
             let mut last_group = None;
@@ -2979,14 +3053,17 @@ impl PrzmApp {
                 if title.chars().count() > 28 {
                     title = title.chars().take(27).collect::<String>() + "…";
                 }
-                // A connection's tab: green while connected, red once ended.
-                let status = tab
-                    .pane()
-                    .origin
-                    .is_some()
-                    .then(|| !tab.pane().transport.is_closed());
-                if status == Some(true) && !tab.pane().transport.weak_algorithms().is_empty() {
+                // A connection's tab: green while connected (busy, done),
+                // red once ended.
+                let status = Status::of_tab(tab);
+                if status.is_some_and(|s| s != Status::Disconnected)
+                    && !tab.pane().transport.weak_algorithms().is_empty()
+                {
                     title = format!("⚠ {title}");
+                }
+                if status == Some(Status::Busy) {
+                    // To turn into Done when the output stops.
+                    ui.ctx().request_repaint_after(BUSY_FOR / 3);
                 }
                 // The session and where it is connected; a split tab
                 // lists each of its sessions.
@@ -3003,6 +3080,10 @@ impl PrzmApp {
                     format!("{}\nRight-click for more", names.join("\n"))
                 } else {
                     format!("{}\nRight-click for more", describe(tab.pane()))
+                };
+                let hover = match status {
+                    Some(s) => format!("{}\n{hover}", s.hint()),
+                    None => hover,
                 };
                 let color = tab
                     .group
@@ -3101,15 +3182,15 @@ impl PrzmApp {
                         (visuals.faint_bg_color, visuals.weak_text_color())
                     };
                     ui.painter().rect_filled(caption, 0.0, fill);
-                    // Its connection's dot, as on tabs.
+                    // Its connection's status, as on tabs.
                     let mut left = caption.left() + 6.0;
-                    if pane.origin.is_some() {
-                        ui.painter().with_clip_rect(caption).circle_filled(
-                            egui::pos2(left + 3.5, caption.center().y),
-                            3.5,
-                            status_color(ui, !pane.transport.is_closed()),
+                    if let Some(status) = Status::of(pane) {
+                        let icon = egui::Rect::from_center_size(
+                            egui::pos2(left + 6.0, caption.center().y),
+                            egui::vec2(12.0, 12.0),
                         );
-                        left += 12.0;
+                        status.draw(ui, &ui.painter().with_clip_rect(caption), icon);
+                        left += 16.0;
                     }
                     ui.painter().with_clip_rect(caption).text(
                         egui::pos2(left, caption.center().y),
@@ -4575,15 +4656,26 @@ fn session_matches(s: &Session, filter: &str) -> bool {
 /// One row of the session list: a grip while dragging is on, a folder icon
 /// for folders, then the text. It reaches the list's right edge, so it is
 /// easy to hit and to drop onto.
-/// A row of the session list; `open`: a session connected in a tab, whose
-/// icon is green.
+/// What a row of the session list is.
+#[derive(Clone, Copy)]
+enum RowKind {
+    Folder,
+    /// A session of this protocol; `open`: connected in a tab, its icon
+    /// green.
+    Session {
+        protocol: przmterm_core::Protocol,
+        open: bool,
+    },
+}
+
+/// A row of the session list.
 fn tree_row(
     ui: &mut egui::Ui,
     drag: bool,
-    folder: bool,
-    open: bool,
+    kind: RowKind,
     text: egui::WidgetText,
 ) -> egui::Response {
+    let folder = matches!(kind, RowKind::Folder);
     let galley = text.into_galley(
         ui,
         Some(egui::TextWrapMode::Extend),
@@ -4626,22 +4718,21 @@ fn tree_row(
             );
             x += ICON;
         }
-        if folder {
-            icons::draw(painter, icons::Icon::Folder, icon_rect(x), color);
-        } else {
-            let icon_color = if !open {
-                ui.visuals().weak_text_color()
-            } else if ui.visuals().dark_mode {
-                egui::Color32::from_rgb(70, 190, 100)
-            } else {
-                egui::Color32::from_rgb(30, 140, 60)
-            };
-            icons::draw(
-                painter,
-                icons::Icon::Session,
-                icon_rect(x).shrink2(egui::vec2(1.0, 0.0)),
-                icon_color,
-            );
+        match kind {
+            RowKind::Folder => icons::draw(painter, icons::Icon::Folder, icon_rect(x), color),
+            RowKind::Session { protocol, open } => {
+                let icon_color = if open {
+                    status_color(ui, true)
+                } else {
+                    ui.visuals().weak_text_color()
+                };
+                icons::draw(
+                    painter,
+                    icons::Icon::of_protocol(protocol),
+                    icon_rect(x),
+                    icon_color,
+                );
+            }
         }
         x += ICON + 2.0;
         let y = rect.center().y - galley.size().y / 2.0;
@@ -4690,7 +4781,7 @@ fn folder_ui(
         }
         let (_, header, _) = state
             .show_header(ui, |ui| {
-                tree_row(ui, drag, true, false, f.name.clone().into())
+                tree_row(ui, drag, RowKind::Folder, f.name.clone().into())
             })
             .body(|ui| folder_ui(ui, f, picked, drag, filter, open));
         let r = header.inner;
@@ -4774,7 +4865,11 @@ fn folder_ui(
         }
         // Sessions connected in a tab get a green icon.
         let is_open = open.contains(&s.path);
-        let response = tree_row(ui, drag, false, is_open, s.name.clone().into());
+        let kind = RowKind::Session {
+            protocol: s.protocol,
+            open: is_open,
+        };
+        let response = tree_row(ui, drag, kind, s.name.clone().into());
         if drag {
             drag_item(ui, &response, &s.path, &s.name);
         }
