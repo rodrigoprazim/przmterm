@@ -53,8 +53,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The oldest Ubuntu still offered: the programs need the C library
+          # of the system they are built on, or newer (22.04 and later).
           - name: linux-x86_64
-            os: ubuntu-latest
+            os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
           - name: macos-universal
             os: macos-latest
@@ -147,6 +149,9 @@ jobs:
               cp target/${{ matrix.target }}/release/przmterm target/${{ matrix.target }}/release/przm "$dir/"
               tar czf "$dir.tar.gz" "$dir"
               echo "ASSET=$dir.tar.gz" >> "$GITHUB_ENV"
+              # And the Debian / Ubuntu package.
+              scripts/linux-deb.sh "$version" target/${{ matrix.target }}/release "$dir.deb"
+              echo "DEB=$dir.deb" >> "$GITHUB_ENV"
               ;;
           esac
 
@@ -180,6 +185,12 @@ jobs:
         with:
           name: release-${{ matrix.name }}-setup
           path: ${{ env.SETUP }}
+
+      - uses: actions/upload-artifact@v7
+        if: startsWith(matrix.name, 'linux')
+        with:
+          name: release-${{ matrix.name }}-deb
+          path: ${{ env.DEB }}
 
   publish:
     name: Publish release

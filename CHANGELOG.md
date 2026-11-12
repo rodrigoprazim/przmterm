@@ -9,6 +9,10 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Added
 
+- A Debian / Ubuntu package (`…-linux-x86_64.deb`) next to the `.tar.gz`:
+  PrzmTerm in the applications menu with its icon, `przmterm` and `przm` in
+  /usr/bin. A copy installed from it updates itself with the new package,
+  asking for an administrator's password.
 - A Windows setup program (`…-windows-x86_64-setup.exe`) that installs for
   everyone (needs an administrator) or for the current user only (no
   administrator), with a Start menu entry, an optional desktop icon, `przm`
@@ -65,6 +69,9 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Fixed
 
+- The Linux build needed the C library of Ubuntu 26.04 (it was built on
+  the newest Ubuntu): it is built on Ubuntu 22.04 again, so it runs on
+  Ubuntu 22.04, Debian 12 and newer.
 - Importing SecureCRT's Config folder read the session templates
   (`Default.ini`, `Default_RDP.ini`, `Default_LocalShell.ini`) as sessions:
   its Sessions folder is now read as the top level, without them, and only

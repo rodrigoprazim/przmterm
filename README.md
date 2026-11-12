@@ -43,8 +43,12 @@ longer want your sessions (see
   allow it, or hosts on your network cannot be reached. The command line is
   inside the app; to type `przm` in Terminal:
   `sudo ln -s /Applications/PrzmTerm.app/Contents/MacOS/przm /usr/local/bin/przm`.
-- **Linux:** unpack the `.tar.gz`; x86_64, needs a desktop with OpenGL or
-  Vulkan.
+- **Linux** (x86_64, Ubuntu 22.04, Debian 12 or newer, a desktop with
+  OpenGL or Vulkan): on Ubuntu and Debian, open the `.deb` (or
+  `sudo apt install ./przmterm-…-linux-x86_64.deb`); it puts PrzmTerm in the
+  applications menu and `przm` on the PATH. Elsewhere, unpack the
+  `.tar.gz` and run `przmterm`. For serial ports, add yourself to the
+  `dialout` group (`sudo usermod -aG dialout $USER`, then log in again).
 
 *Check for Updates…* (the PrzmTerm menu on macOS, the **+** menu elsewhere)
 looks for a newer release on GitHub; PrzmTerm also looks when it starts and
@@ -53,7 +57,8 @@ shows a newer version in the status bar. The window shows what is new.
 checksums below, and replaces this copy: PrzmTerm.app on macOS, the
 programs in their folder elsewhere; a copy installed with the Windows
 setup program is updated by the new one, for everyone or for you as
-before. When it cannot (no right to write
+before, and one installed from the `.deb` by the new package (Linux asks
+for your password). When it cannot (no right to write
 there), the checked file is left in Downloads and opened. *Skip This
 Version* stops a release from being announced at start. Nothing is
 downloaded or installed until you click.

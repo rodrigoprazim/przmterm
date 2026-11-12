@@ -55,7 +55,9 @@ downloads `SHA256SUMS.txt` and `SHA256SUMS.txt.asc`, checks the signature
 with the release key built into the app (`docs/release-key.asc`), then
 downloads the file for the system (`-macos-universal.dmg`,
 `-windows-x86_64.zip`, `-linux-x86_64.tar.gz`; `-windows-x86_64-setup.exe`
-for a copy installed with the setup program, which then runs it silently)
+for a copy installed with the setup program, which then runs it silently;
+`-linux-x86_64.deb` for one installed from the package, installed with
+`pkexec dpkg -i`)
 and compares its checksum.
 Only then is it installed. So releases must keep these asset names and be
 signed: an unsigned release can be downloaded by hand but not installed

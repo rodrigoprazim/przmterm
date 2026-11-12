@@ -56,7 +56,11 @@ fn asset_suffixes() -> &'static [&'static str] {
             &["-windows-x86_64.zip"]
         }
     } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-        &["-linux-x86_64.tar.gz"]
+        if installed_by_deb() {
+            &[DEB_SUFFIX, "-linux-x86_64.tar.gz"]
+        } else {
+            &["-linux-x86_64.tar.gz"]
+        }
     } else {
         &[]
     }
@@ -72,6 +76,24 @@ fn exe_dir() -> Option<PathBuf> {
 /// uninstaller lies next to it.
 fn installed_by_setup() -> bool {
     cfg!(windows) && exe_dir().is_some_and(|d| d.join("unins000.exe").is_file())
+}
+
+/// The end of the Debian / Ubuntu package's name.
+const DEB_SUFFIX: &str = "-linux-x86_64.deb";
+
+/// Linux: this copy came from the `.deb` (dpkg knows the package and the
+/// program is in /usr/bin).
+fn installed_by_deb() -> bool {
+    cfg!(target_os = "linux")
+        && exe_dir().is_some_and(|d| d == Path::new("/usr/bin"))
+        && Path::new("/var/lib/dpkg/info/przmterm.list").is_file()
+}
+
+/// Whether `file` is a Debian package.
+fn is_deb(file: &Path) -> bool {
+    file.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.ends_with(DEB_SUFFIX))
 }
 
 /// Whether `program` is a setup program to run rather than PrzmTerm itself.
@@ -207,6 +229,9 @@ pub enum Place {
     /// Windows: the folder the setup program installed into; the new
     /// setup program installs over it.
     Setup(PathBuf),
+    /// Linux: the `.deb`'s /usr/bin; the new package installs over it
+    /// (`pkexec dpkg -i`, which asks for an administrator's password).
+    Deb(PathBuf),
 }
 
 /// Where this copy would be updated, or `None` to only download: copies
@@ -221,6 +246,8 @@ pub fn place() -> Option<Place> {
         (bundle.extension()? == "app").then(|| Place::Bundle(bundle.to_path_buf()))
     } else if installed_by_setup() {
         Some(Place::Setup(dir))
+    } else if installed_by_deb() {
+        Some(Place::Deb(dir))
     } else {
         Some(Place::Folder(dir))
     }
@@ -385,6 +412,9 @@ fn fetch_and_install(
     if cfg!(target_os = "macos") {
         // Opening the disk image shows PrzmTerm.app to drag to Applications.
         let _ = std::process::Command::new("open").arg(&saved).spawn();
+    } else if is_deb(&saved) {
+        // The system's software installer opens it.
+        let _ = crate::desktop::open_text(&saved);
     } else {
         let _ = crate::desktop::reveal(&saved);
     }
@@ -417,6 +447,16 @@ fn install(file: &Path, place: &Place, work: &Path) -> Result<PathBuf, String> {
         // A release without a setup program: its files, if they can be
         // written.
         Place::Setup(dir) => install_folder(file, dir),
+        Place::Deb(dir) if is_deb(file) => {
+            run(
+                "pkexec",
+                &["dpkg".as_ref(), "-i".as_ref(), file.as_os_str()],
+            )
+            .map_err(|e| format!("the package was not installed ({e})"))?;
+            Ok(dir.join(PROGRAMS[0]))
+        }
+        // /usr/bin is not ours to write: left in Downloads.
+        Place::Deb(_) => Err("this copy came from the .deb, and the release has none".into()),
     }
 }
 
@@ -689,6 +729,7 @@ mod tests {
                 "-windows-x86_64.zip",
                 SETUP_SUFFIX,
                 "-linux-x86_64.tar.gz",
+                DEB_SUFFIX,
             ]
             .iter()
             .map(|suffix| format!("przmterm-{tag}{suffix}"))
@@ -737,6 +778,16 @@ mod tests {
         let mut draft = release("v9.0.0", false);
         draft.draft = true;
         assert_eq!(newest("1.0.0", &[draft]), None);
+    }
+
+    #[test]
+    fn tells_the_debian_package_apart() {
+        assert!(is_deb(Path::new(
+            "/tmp/przmterm-1.0.0-rc.4-linux-x86_64.deb"
+        )));
+        assert!(!is_deb(Path::new(
+            "/tmp/przmterm-1.0.0-rc.4-linux-x86_64.tar.gz"
+        )));
     }
 
     #[test]

@@ -1,0 +1,16 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: PrzmTerm
+Source: https://github.com/rodrigoprazim/przmterm
+
+Files: *
+Copyright: Rodrigo Prazim and the PrzmTerm contributors
+License: MIT or Apache-2.0
+ PrzmTerm is licensed under either of the MIT licence or the Apache
+ License 2.0, at your option. The full texts are in LICENSE-MIT and
+ LICENSE-APACHE at https://github.com/rodrigoprazim/przmterm.
+
+Files: usr/bin/*
+Copyright: The Inter Project Authors; Lucide Icons and Contributors
+License: OFL-1.1 and ISC
+ Built into the programs, beside PrzmTerm's own code: the Inter fonts
+ (SIL Open Font License 1.1) and the Lucide icons (ISC licence).
