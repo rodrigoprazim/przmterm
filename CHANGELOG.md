@@ -15,6 +15,12 @@ All notable changes to PrzmTerm are recorded here. The format follows
   on the PATH and an uninstaller. A copy installed with it updates itself
   through the new setup program, the same way it was installed.
 
+- Deleting a folder can keep its sessions (checked by default): they and
+  its subfolders move up a level, with the folder's settings written into
+  each, so they connect as before.
+- A connection's tab shows a green dot while connected and a red one once
+  it has ended (instead of ○); split panes show it in their caption.
+
 ### Changed
 
 - Windows: the desktop app is `PrzmTerm.exe` (`przm.exe` stays). A 1.0.0-rc.3

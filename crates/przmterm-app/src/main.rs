@@ -186,11 +186,25 @@ pub fn cursor_label(shape: przmterm_session::CursorShape) -> &'static str {
 /// The × shows on the active tab and under the pointer. Returns the tab's
 /// response (click selects, right-click opens its menu) and whether × was
 /// clicked.
+/// The colour of a connection's dot: green while connected, red once it
+/// has ended.
+fn status_color(ui: &egui::Ui, connected: bool) -> egui::Color32 {
+    match (connected, ui.visuals().dark_mode) {
+        (true, true) => egui::Color32::from_rgb(70, 190, 100),
+        (true, false) => egui::Color32::from_rgb(30, 150, 60),
+        (false, true) => egui::Color32::from_rgb(225, 85, 75),
+        (false, false) => egui::Color32::from_rgb(200, 50, 45),
+    }
+}
+
+/// A tab; `status`: a connection's tab, `Some(true)` while it is connected
+/// (a green dot), `Some(false)` once it has ended (a red one).
 fn tab_widget(
     ui: &mut egui::Ui,
     title: &str,
     active: bool,
     locked: bool,
+    status: Option<bool>,
     group: Option<egui::Color32>,
     ink: view::Ink,
 ) -> (egui::Response, bool) {
@@ -206,7 +220,8 @@ fn tab_widget(
         .layout_no_wrap(title.to_string(), font, text_color);
     let (pad, close_w, height) = (12.0, 22.0, 32.0);
     let lock_w = if locked { 18.0 } else { 0.0 };
-    let width = pad + lock_w + galley.size().x + 6.0 + close_w + 6.0;
+    let dot_w = if status.is_some() { 14.0 } else { 0.0 };
+    let width = pad + lock_w + dot_w + galley.size().x + 6.0 + close_w + 6.0;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
     let close_rect = egui::Rect::from_center_size(
         egui::pos2(rect.right() - 6.0 - close_w / 2.0, rect.center().y),
@@ -246,6 +261,14 @@ fn tab_widget(
             );
             icons::draw(painter, icons::Icon::Lock, lock_rect, text_color);
             x += lock_w;
+        }
+        if let Some(connected) = status {
+            painter.circle_filled(
+                egui::pos2(x + 4.0, rect.center().y),
+                4.0,
+                status_color(ui, connected),
+            );
+            x += dot_w;
         }
         painter.galley(
             egui::pos2(x, rect.center().y - galley.size().y / 2.0),
@@ -793,6 +816,8 @@ enum Deletion {
         dir: PathBuf,
         name: String,
         sessions: usize,
+        /// Its sessions move up a level instead of going with it.
+        keep: bool,
     },
 }
 
@@ -2954,9 +2979,13 @@ impl PrzmApp {
                 if title.chars().count() > 28 {
                     title = title.chars().take(27).collect::<String>() + "…";
                 }
-                if tab.pane().transport.is_closed() && tab.pane().origin.is_some() {
-                    title = format!("○ {title}");
-                } else if !tab.pane().transport.weak_algorithms().is_empty() {
+                // A connection's tab: green while connected, red once ended.
+                let status = tab
+                    .pane()
+                    .origin
+                    .is_some()
+                    .then(|| !tab.pane().transport.is_closed());
+                if status == Some(true) && !tab.pane().transport.weak_algorithms().is_empty() {
                     title = format!("⚠ {title}");
                 }
                 // The session and where it is connected; a split tab
@@ -2984,6 +3013,7 @@ impl PrzmApp {
                     &title,
                     i == self.active_tab,
                     tab.lock.is_some(),
+                    status,
                     color,
                     tab.pane().view.ink(),
                 );
@@ -3071,15 +3101,20 @@ impl PrzmApp {
                         (visuals.faint_bg_color, visuals.weak_text_color())
                     };
                     ui.painter().rect_filled(caption, 0.0, fill);
-                    let dot = if pane.origin.is_some() && pane.transport.is_closed() {
-                        "○ "
-                    } else {
-                        ""
-                    };
+                    // Its connection's dot, as on tabs.
+                    let mut left = caption.left() + 6.0;
+                    if pane.origin.is_some() {
+                        ui.painter().with_clip_rect(caption).circle_filled(
+                            egui::pos2(left + 3.5, caption.center().y),
+                            3.5,
+                            status_color(ui, !pane.transport.is_closed()),
+                        );
+                        left += 12.0;
+                    }
                     ui.painter().with_clip_rect(caption).text(
-                        caption.left_center() + egui::vec2(6.0, 0.0),
+                        egui::pos2(left, caption.center().y),
                         egui::Align2::LEFT_CENTER,
-                        format!("{dot}{}", pane_name(pane)),
+                        pane_name(pane),
                         egui::FontId::proportional(12.0),
                         text,
                     );
@@ -4133,14 +4168,38 @@ impl PrzmApp {
             let mut keep_open = true;
             let (title, question) = match &deletion {
                 Deletion::Session(s) => ("Delete session", format!("Delete “{}”?", s.name)),
-                Deletion::Folder { name, sessions, .. } => (
+                Deletion::Folder {
+                    name,
+                    sessions,
+                    keep,
+                    ..
+                } => (
                     "Delete folder",
-                    match sessions {
-                        0 => format!("Delete the folder “{name}”?"),
-                        1 => format!("Delete the folder “{name}” and the session in it?"),
-                        n => format!("Delete the folder “{name}” and the {n} sessions in it?"),
+                    match (sessions, keep) {
+                        (0, _) | (_, true) => format!("Delete the folder “{name}”?"),
+                        (1, false) => {
+                            format!("Delete the folder “{name}” and the session in it?")
+                        }
+                        (n, false) => {
+                            format!("Delete the folder “{name}” and the {n} sessions in it?")
+                        }
                     },
                 ),
+            };
+            // Where kept sessions go: the folder above, or the top level.
+            let above = match &deletion {
+                Deletion::Folder { dir, .. } => dir
+                    .parent()
+                    .filter(|p| {
+                        self.config_dir
+                            .as_ref()
+                            .is_none_or(|c| *p != c.join(przmterm_session::SESSIONS_DIR))
+                    })
+                    .and_then(|p| p.file_name())
+                    .map_or("the top level".to_string(), |n| {
+                        format!("“{}”", n.to_string_lossy())
+                    }),
+                Deletion::Session(_) => String::new(),
             };
             egui::Window::new(title)
                 .pivot(egui::Align2::CENTER_CENTER)
@@ -4149,6 +4208,26 @@ impl PrzmApp {
                 .resizable(false)
                 .show(ctx, |ui| {
                     ui.label(question);
+                    if let Some(Deletion::Folder { sessions, keep, .. }) = &mut self.confirm_delete
+                        && *sessions > 0
+                    {
+                        ui.add_space(4.0);
+                        let what = if *sessions == 1 {
+                            "Keep the session in it".to_string()
+                        } else {
+                            format!("Keep the {sessions} sessions in it")
+                        };
+                        ui.checkbox(keep, what);
+                        ui.weak(if *keep {
+                            format!(
+                                "They move up to {above}, with the folder's settings, \
+                                 and its subfolders with them."
+                            )
+                        } else {
+                            "They are deleted with the folder.".to_string()
+                        });
+                        ui.add_space(4.0);
+                    }
                     if ui.input(|i| i.key_pressed(Key::Escape)) {
                         keep_open = false;
                     }
@@ -4162,6 +4241,16 @@ impl PrzmApp {
                                         }
                                         std::fs::remove_file(&s.path)
                                             .map(|_| s.name.clone())
+                                            .map_err(|e| e.to_string())
+                                    }
+                                    Deletion::Folder {
+                                        dir,
+                                        name,
+                                        keep,
+                                        sessions,
+                                    } if *keep && *sessions > 0 => {
+                                        przmterm_session::dissolve_folder(dir)
+                                            .map(|_| format!("{name}; its sessions moved up"))
                                             .map_err(|e| e.to_string())
                                     }
                                     Deletion::Folder { dir, name, .. } => {
@@ -5470,6 +5559,7 @@ impl eframe::App for PrzmApp {
                                             dir,
                                             name,
                                             sessions,
+                                            keep: true,
                                         })
                                     }
                                     TreeAction::Export(path, name) => self.export(&path, &name),

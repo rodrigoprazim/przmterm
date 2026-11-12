@@ -72,8 +72,10 @@ the [configuration reference](CONFIG.md).
 
 Sessions can also be created and edited from the app: **+** next to
 *Sessions*, or right-click a session for Edit, Duplicate and Delete. Right-click
-a folder to add a session or subfolder there, rename it, or edit the settings
-its sessions inherit.
+a folder to add a session or subfolder there, rename it, edit the settings
+its sessions inherit, or delete it. Deleting a folder can keep what is in
+it: its sessions and subfolders move up a level and keep the folder's
+settings (written into each), so they connect as before.
 
 Global defaults live in `defaults.toml` (⚙ next to *Sessions* in the app).
 Changing them asks which existing sessions take the new values: those that
@@ -265,7 +267,9 @@ they move into this tab. To see one session twice, clone it first (*Clone
 Session* in the tab menu). In a split tab the **⋯** menu rearranges the
 panes, moves the active pane to a tab of its own or
 separates them all into tabs again. Each pane shows its session's name, and
-connected sessions have a green icon in the session list.
+connected sessions have a green icon in the session list. A tab of a
+connection starts with a green dot while it is connected and a red one once
+it has ended; split panes show the same dot in their caption.
 
 In a split tab, **⇶ Send to all** in the status bar sends what you type to
 every pane of the tab (after a warning) until you turn it off.

@@ -1394,6 +1394,62 @@ pub fn delete_folder(dir: &Path) -> Result<(), SessionError> {
     })
 }
 
+/// Deletes the folder `dir` but keeps what is in it: its sessions and
+/// subfolders move up into the folder above. They keep this folder's
+/// settings, written into each of them where they set nothing of their own,
+/// so they connect as before. Nothing moves if a name is taken above.
+/// Returns how many sessions and folders moved.
+pub fn dissolve_folder(dir: &Path) -> Result<usize, SessionError> {
+    let invalid = |path: &Path, reason: String| SessionError::Invalid {
+        path: path.to_path_buf(),
+        reason,
+    };
+    let io = |path: &Path| {
+        let path = path.to_path_buf();
+        move |source| SessionError::Io { path, source }
+    };
+    let parent = dir
+        .parent()
+        .ok_or_else(|| invalid(dir, "not a folder".into()))?;
+    let own = read_session_settings(&dir.join(FOLDER_FILE))?;
+    let mut items = Vec::new();
+    for entry in fs::read_dir(dir).map_err(io(dir))?.flatten() {
+        let name = entry.file_name();
+        if name == FOLDER_FILE {
+            continue;
+        }
+        let target = parent.join(&name);
+        if target.exists() {
+            return Err(invalid(
+                &target,
+                format!(
+                    "“{}” is already in the folder above",
+                    Path::new(&name)
+                        .file_stem()
+                        .unwrap_or(&name)
+                        .to_string_lossy()
+                ),
+            ));
+        }
+        items.push((entry.path(), target));
+    }
+    let keep_settings = own != SessionSettings::default();
+    for (from, to) in &items {
+        if keep_settings {
+            if from.is_dir() {
+                let sub = read_session_settings(&from.join(FOLDER_FILE))?;
+                write_folder_settings(from, &own.overlay(&sub))?;
+            } else if from.extension().is_some_and(|e| e == "toml") {
+                let session = read_session_settings(from)?;
+                fs::write(from, own.overlay(&session).to_toml()).map_err(io(from))?;
+            }
+        }
+        fs::rename(from, to).map_err(io(from))?;
+    }
+    fs::remove_dir_all(dir).map_err(io(dir))?;
+    Ok(items.len())
+}
+
 /// Writes a folder's own settings (`folder.toml`); empty settings remove the file.
 pub fn write_folder_settings(dir: &Path, settings: &SessionSettings) -> Result<(), SessionError> {
     let path = dir.join(FOLDER_FILE);
@@ -2061,6 +2117,48 @@ mod tests {
         assert_eq!(target("a"), "a:22");
         assert_eq!(target("b"), "me@b:22", "keeps its host and user");
         assert_eq!(target("c"), "c:22");
+    }
+
+    #[test]
+    fn dissolving_a_folder_moves_its_contents_up_with_its_settings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write(
+            dir,
+            "sessions/Lab/folder.toml",
+            "username = 'ops'\nport = 2222",
+        );
+        write(dir, "sessions/Lab/r1.toml", "host = 'r1'");
+        write(
+            dir,
+            "sessions/Lab/r2.toml",
+            "host = 'r2'\nusername = 'admin'",
+        );
+        write(dir, "sessions/Lab/Core/folder.toml", "port = 22");
+        write(dir, "sessions/Lab/Core/c1.toml", "host = 'c1'");
+        let sessions = dir.join(SESSIONS_DIR);
+        assert_eq!(dissolve_folder(&sessions.join("Lab")).unwrap(), 3);
+        assert!(!sessions.join("Lab").exists());
+        let r1 = read_session_settings(&sessions.join("r1.toml")).unwrap();
+        assert_eq!(
+            (r1.host.as_deref(), r1.username.as_deref(), r1.port),
+            (Some("r1"), Some("ops"), Some(2222))
+        );
+        let r2 = read_session_settings(&sessions.join("r2.toml")).unwrap();
+        assert_eq!(r2.username.as_deref(), Some("admin"), "its own value stays");
+        let core = read_session_settings(&sessions.join("Core").join(FOLDER_FILE)).unwrap();
+        assert_eq!(
+            (core.username.as_deref(), core.port),
+            (Some("ops"), Some(22))
+        );
+        assert!(sessions.join("Core/c1.toml").is_file());
+
+        // A name taken above: nothing moves.
+        write(dir, "sessions/Edge/r1.toml", "host = 'other'");
+        write(dir, "sessions/Edge/e1.toml", "host = 'e1'");
+        assert!(dissolve_folder(&sessions.join("Edge")).is_err());
+        assert!(sessions.join("Edge/e1.toml").is_file());
+        assert!(!sessions.join("e1.toml").exists());
     }
 
     #[test]
