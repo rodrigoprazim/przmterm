@@ -74,6 +74,8 @@ fn main() -> eframe::Result {
             // Linux: the menu entry it belongs to (the .desktop file's name).
             .with_app_id("io.github.rodrigoprazim.przmterm")
             .with_inner_size([1100.0, 700.0])
+            // Opens filling the screen; the size above is for un-maximizing.
+            .with_maximized(true)
             .with_min_inner_size([480.0, 320.0])
             .with_icon(
                 eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/icon-256.png"))

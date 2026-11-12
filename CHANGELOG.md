@@ -54,6 +54,7 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Changed
 
+- PrzmTerm opens maximized.
 - Windows: the desktop app is `PrzmTerm.exe` (`przm.exe` stays). A 1.0.0-rc.3
   copy unpacked from the `.zip` cannot install this update itself: it
   leaves the file in Downloads.
