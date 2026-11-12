@@ -72,8 +72,11 @@ the [configuration reference](CONFIG.md).
 
 Sessions can also be created and edited from the app: **+** next to
 *Sessions*, or right-click a session for Edit, Duplicate and Delete. Right-click
-a folder to add a session or subfolder there, rename it, edit the settings
-its sessions inherit, or delete it. Deleting a folder can keep what is in
+a folder to add a session or subfolder there, rename it, give it a colour
+(*Color*, also in its settings), edit the settings its sessions inherit, or
+delete it. Right-click the free space below the list for a new session or
+folder at the top level, *Expand all*, *Collapse all*, *Reload*, the
+SecureCRT imports, the global settings and the settings folder. Deleting a folder can keep what is in
 it: its sessions and subfolders move up a level and keep the folder's
 settings (written into each), so they connect as before.
 

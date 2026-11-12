@@ -23,6 +23,12 @@ All notable changes to PrzmTerm are recorded here. The format follows
   shows a green pulse while output comes in and a green bell once it stops
   (a command finished), until it is opened. Split panes show the same in
   their caption.
+- Folder colours: *Color* in a folder's right-click menu and in its
+  settings colours its icon and name in the session list (`color` in
+  `folder.toml`; none by default).
+- Right-clicking the free space of the session list: new session, new
+  folder, expand all, collapse all, reload, SecureCRT imports, global
+  settings and showing the settings folder.
 - *Settings problems*: the warning under the session list opens a list of
   the files with problems, what is wrong with each and what can be done
   (edit the session, remove unknown settings, open, show or delete the
@@ -48,6 +54,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Fixed
 
+- The new folder and rename dialogs: the name field reaches the dialog's
+  edge.
 - A folder made while there were no sessions yet was not shown: the list
   said "No sessions yet" until a session existed.
 - A session that could not connect (a serial one without a serial port,

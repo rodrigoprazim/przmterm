@@ -763,6 +763,8 @@ struct PrzmApp {
     master_for: Option<MasterFor>,
     /// The settings files with problems, and what to do about them.
     problems: problems::Problems,
+    /// Open (`true`) or close every folder of the session list next frame.
+    tree_expand: Option<bool>,
     /// Macro buttons above the status bar.
     buttons: buttonbar::ButtonBarUi,
     /// What is typed goes to every connected pane of the current tab.
@@ -856,6 +858,17 @@ enum TreeAction {
     Move(PathBuf, PathBuf),
     /// Export a session file or folder to a `.przm` file (path, name).
     Export(PathBuf, String),
+    /// Set or take away a folder's colour.
+    FolderColor(PathBuf, Option<String>),
+    /// Open (`true`) or close every folder.
+    ExpandAll(bool),
+    /// Read the sessions again.
+    Reload,
+    /// Import from SecureCRT: files (`false`) or a Sessions folder.
+    ImportSecureCrt(bool),
+    GlobalSettings,
+    /// Show the settings folder in the file manager.
+    ShowSettingsFolder,
 }
 
 /// Drag-and-drop payload: the session file being moved.
@@ -930,6 +943,7 @@ impl PrzmApp {
             after_unlock: None,
             master_for: None,
             problems: problems::Problems::default(),
+            tree_expand: None,
             buttons,
             broadcast: false,
             confirm_broadcast: false,
@@ -968,6 +982,25 @@ impl PrzmApp {
             bundle_dialog: None,
             folder_dialog: None,
             quitting: false,
+        }
+    }
+
+    /// Asks for SecureCRT files (an XML export, session or keyword .ini
+    /// files), or with `folder` for a Sessions folder, and imports them.
+    fn pick_securecrt(&mut self, folder: bool) {
+        let picked = if folder {
+            rfd::FileDialog::new()
+                .set_title("SecureCRT Sessions folder")
+                .pick_folder()
+                .map(|dir| vec![dir])
+        } else {
+            rfd::FileDialog::new()
+                .set_title("SecureCRT export (.xml) or session files (.ini)")
+                .add_filter("SecureCRT", &["xml", "ini"])
+                .pick_files()
+        };
+        if let Some(paths) = picked {
+            self.import_securecrt(&paths);
         }
     }
 
@@ -3680,7 +3713,7 @@ impl PrzmApp {
                     Kind::Export => {
                         ui.horizontal(|ui| {
                             ui.label("Into the folder");
-                            editor::name_field(ui, folder, "Imported");
+                            editor::name_field(ui, folder, "Imported", 280.0);
                         });
                         ui.weak("Nothing is replaced: a folder that exists gets a new (2).");
                     }
@@ -4263,12 +4296,15 @@ impl PrzmApp {
                 .collapsible(false)
                 .resizable(false)
                 .show(ctx, |ui| {
-                    let edit = editor::name_field(ui, &mut dialog.value, "Folder name");
+                    ui.set_width(360.0);
+                    let edit =
+                        editor::name_field(ui, &mut dialog.value, "Folder name", f32::INFINITY);
                     edit.request_focus();
                     let enter = ui.input(|i| i.key_pressed(Key::Enter));
                     if let Some(err) = &dialog.error {
                         ui.colored_label(ui.visuals().error_fg_color, err);
                     }
+                    ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if theme::primary_button(ui, "OK").clicked() || enter {
@@ -4714,7 +4750,8 @@ fn session_matches(s: &Session, filter: &str) -> bool {
 /// What a row of the session list is.
 #[derive(Clone, Copy)]
 enum RowKind {
-    Folder,
+    /// A folder, in its colour if it has one.
+    Folder(Option<egui::Color32>),
     /// A session of this protocol; `open`: connected in a tab, its icon
     /// green.
     Session {
@@ -4730,7 +4767,7 @@ fn tree_row(
     kind: RowKind,
     text: egui::WidgetText,
 ) -> egui::Response {
-    let folder = matches!(kind, RowKind::Folder);
+    let folder = matches!(kind, RowKind::Folder(_));
     let galley = text.into_galley(
         ui,
         Some(egui::TextWrapMode::Extend),
@@ -4760,7 +4797,10 @@ fn tree_row(
         if response.hovered() || response.dragged() {
             painter.rect_filled(rect, visuals.corner_radius, visuals.weak_bg_fill);
         }
-        let color = visuals.text_color();
+        let color = match kind {
+            RowKind::Folder(Some(c)) => c,
+            _ => visuals.text_color(),
+        };
         let mut x = rect.left() + pad + arrow;
         let icon_rect =
             |x: f32| egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(ICON, height));
@@ -4774,7 +4814,7 @@ fn tree_row(
             x += ICON;
         }
         match kind {
-            RowKind::Folder => icons::draw(painter, icons::Icon::Folder, icon_rect(x), color),
+            RowKind::Folder(_) => icons::draw(painter, icons::Icon::Folder, icon_rect(x), color),
             RowKind::Session { protocol, open } => {
                 let icon_color = if open {
                     status_color(ui, true)
@@ -4816,6 +4856,38 @@ fn drag_item(ui: &egui::Ui, response: &egui::Response, path: &std::path::Path, n
     }
 }
 
+/// The menu of the session list's free space: what the list as a whole
+/// can do.
+fn list_menu(ui: &mut egui::Ui, picked: &mut Vec<TreeAction>) {
+    crate::theme::compact_menu(ui);
+    let mut item = |ui: &mut egui::Ui, text: &str, action: TreeAction| {
+        if ui.button(text).clicked() {
+            picked.push(action);
+            ui.close();
+        }
+    };
+    item(ui, "New session…", TreeAction::NewSession(Vec::new()));
+    item(ui, "New folder…", TreeAction::NewFolder(PathBuf::new()));
+    ui.separator();
+    item(ui, "Expand all", TreeAction::ExpandAll(true));
+    item(ui, "Collapse all", TreeAction::ExpandAll(false));
+    item(ui, "Reload", TreeAction::Reload);
+    ui.separator();
+    item(
+        ui,
+        "Import from SecureCRT…",
+        TreeAction::ImportSecureCrt(false),
+    );
+    item(
+        ui,
+        "Import a SecureCRT Sessions folder…",
+        TreeAction::ImportSecureCrt(true),
+    );
+    ui.separator();
+    item(ui, "Global settings…", TreeAction::GlobalSettings);
+    item(ui, "Show settings folder", TreeAction::ShowSettingsFolder);
+}
+
 fn folder_ui(
     ui: &mut egui::Ui,
     folder: &Folder,
@@ -4823,6 +4895,7 @@ fn folder_ui(
     drag: bool,
     filter: &str,
     open: &std::collections::HashSet<PathBuf>,
+    expand: Option<bool>,
 ) {
     for f in &folder.folders {
         if !filter.is_empty() && !f.all_sessions().iter().any(|s| session_matches(s, filter)) {
@@ -4833,12 +4906,15 @@ fn folder_ui(
             egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true);
         if !filter.is_empty() {
             state.set_open(true); // show every match while searching
+        } else if let Some(open) = expand {
+            state.set_open(open); // Expand all, Collapse all
         }
         let (_, header, _) = state
             .show_header(ui, |ui| {
-                tree_row(ui, drag, RowKind::Folder, f.name.clone().into())
+                let color = theme::folder_color(f.own.color.as_deref());
+                tree_row(ui, drag, RowKind::Folder(color), f.name.clone().into())
             })
-            .body(|ui| folder_ui(ui, f, picked, drag, filter, open));
+            .body(|ui| folder_ui(ui, f, picked, drag, filter, open, expand));
         let r = header.inner;
         // A click on the name opens or closes it, like the arrow.
         if r.clicked()
@@ -4895,6 +4971,12 @@ fn folder_ui(
                 picked.push(TreeAction::FolderSettings(f.trail.clone()));
                 ui.close();
             }
+            ui.menu_button("Color", |ui| {
+                if let Some(color) = theme::color_swatches(ui, f.own.color.as_deref()) {
+                    picked.push(TreeAction::FolderColor(f.dir.clone(), color));
+                    ui.close();
+                }
+            });
             if ui
                 .button("Export folder…")
                 .on_hover_text("Save this folder and its sessions to a file to share")
@@ -5537,13 +5619,7 @@ impl eframe::App for PrzmApp {
                                 .clicked()
                             {
                                 ui.close();
-                                if let Some(paths) = rfd::FileDialog::new()
-                                    .set_title("SecureCRT export (.xml) or session files (.ini)")
-                                    .add_filter("SecureCRT", &["xml", "ini"])
-                                    .pick_files()
-                                {
-                                    self.import_securecrt(&paths);
-                                }
+                                self.pick_securecrt(false);
                             }
                             if ui
                                 .button("Import a SecureCRT Sessions folder…")
@@ -5553,12 +5629,7 @@ impl eframe::App for PrzmApp {
                                 .clicked()
                             {
                                 ui.close();
-                                if let Some(dir) = rfd::FileDialog::new()
-                                    .set_title("SecureCRT Sessions folder")
-                                    .pick_folder()
-                                {
-                                    self.import_securecrt(&[dir]);
-                                }
+                                self.pick_securecrt(true);
                             }
                             ui.separator();
                             if ui.button("Appearance…").clicked() {
@@ -5605,6 +5676,7 @@ impl eframe::App for PrzmApp {
                         // Rows as close as a file tree's.
                         ui.spacing_mut().item_spacing.y = 0.0;
                         ui.spacing_mut().interact_size.y = 22.0;
+                        let mut picked = Vec::new();
                         // Empty folders are shown too: one just made has no
                         // sessions yet.
                         if self.sessions.root.all_sessions().is_empty()
@@ -5616,7 +5688,6 @@ impl eframe::App for PrzmApp {
                             };
                             ui.weak(hint);
                         } else {
-                            let mut picked = Vec::new();
                             let drag = self.drag_unlocked;
                             // Always shown while unlocked, so the tree does not move mid-drag.
                             if drag {
@@ -5662,7 +5733,47 @@ impl eframe::App for PrzmApp {
                                 .filter_map(|p| p.origin.as_ref().map(|o| o.path.clone()))
                                 .filter(|p| !p.as_os_str().is_empty())
                                 .collect();
-                            folder_ui(ui, &self.sessions.root, &mut picked, drag, &filter, &open);
+                            folder_ui(
+                                ui,
+                                &self.sessions.root,
+                                &mut picked,
+                                drag,
+                                &filter,
+                                &open,
+                                self.tree_expand.take(),
+                            );
+                        }
+                        if !self.sessions.errors.is_empty() {
+                            ui.separator();
+                            let n = self.sessions.errors.len();
+                            let text = if n == 1 {
+                                "1 file with a problem".to_string()
+                            } else {
+                                format!("{n} files with problems")
+                            };
+                            let warn = ui.visuals().warn_fg_color;
+                            if icons::icon_text_button(
+                                ui,
+                                icons::Icon::Warning,
+                                warn,
+                                &text,
+                                None,
+                                Some(warn),
+                            )
+                            .on_hover_text("See which and fix them")
+                            .clicked()
+                            {
+                                self.problems.open = true;
+                            }
+                        }
+                        // The free space below: right-click for what the
+                        // list as a whole can do.
+                        if self.config_dir.is_some() {
+                            let room = ui.available_size().max(egui::vec2(0.0, 40.0));
+                            let (_, rest) = ui.allocate_exact_size(room, egui::Sense::click());
+                            rest.context_menu(|ui| list_menu(ui, &mut picked));
+                        }
+                        {
                             for p in picked {
                                 match p {
                                     TreeAction::Connect(s) => {
@@ -5700,6 +5811,12 @@ impl eframe::App for PrzmApp {
                                         self.editor = Some(Editor::new_session(&trail))
                                     }
                                     TreeAction::NewFolder(parent) => {
+                                        // An empty path: the top level.
+                                        let parent = if parent.as_os_str().is_empty() {
+                                            self.sessions.root.dir.clone()
+                                        } else {
+                                            parent
+                                        };
                                         self.name_dialog = Some(NameDialog {
                                             title: "New folder",
                                             dir: parent,
@@ -5738,32 +5855,39 @@ impl eframe::App for PrzmApp {
                                                 Some(format!("Forgot the password for {account}."));
                                         }
                                     }
+                                    TreeAction::FolderColor(dir, color) => {
+                                        if let Err(e) = przmterm_session::set_folder_color(
+                                            &dir,
+                                            color.as_deref(),
+                                        ) {
+                                            self.notice = Some(format!("Cannot set the colour: {e}"));
+                                        }
+                                        self.reload_sessions();
+                                    }
+                                    TreeAction::ExpandAll(open) => self.tree_expand = Some(open),
+                                    TreeAction::Reload => {
+                                        self.reload_sessions();
+                                        self.notice = Some("Read the sessions again.".into());
+                                    }
+                                    TreeAction::ImportSecureCrt(folder) => {
+                                        self.pick_securecrt(folder)
+                                    }
+                                    TreeAction::GlobalSettings => {
+                                        if let Some(dir) = &self.config_dir {
+                                            self.editor = Some(Editor::global(dir));
+                                        }
+                                    }
+                                    TreeAction::ShowSettingsFolder => {
+                                        if let Some(dir) = &self.config_dir
+                                            && let Err(e) = desktop::reveal(dir)
+                                        {
+                                            self.notice = Some(format!("Cannot show it: {e}"));
+                                        }
+                                    }
                                 }
                             }
                         }
-                        if !self.sessions.errors.is_empty() {
-                            ui.separator();
-                            let n = self.sessions.errors.len();
-                            let text = if n == 1 {
-                                "1 file with a problem".to_string()
-                            } else {
-                                format!("{n} files with problems")
-                            };
-                            let warn = ui.visuals().warn_fg_color;
-                            if icons::icon_text_button(
-                                ui,
-                                icons::Icon::Warning,
-                                warn,
-                                &text,
-                                None,
-                                Some(warn),
-                            )
-                            .on_hover_text("See which and fix them")
-                            .clicked()
-                            {
-                                self.problems.open = true;
-                            }
-                        }
+
                     });
             });
 

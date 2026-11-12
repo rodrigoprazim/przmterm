@@ -334,6 +334,10 @@ pub struct SessionSettings {
     /// SSH: forward X11 to the local display (`ssh -X`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub x11_forwarding: Option<bool>,
+    /// `folder.toml` only: the folder's colour in the session list,
+    /// `#rrggbb`. Not passed down to what is inside.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
     /// Keyword set used to highlight the output (`<config>/keywords/<name>.toml`);
     /// `""` turns an inherited one off.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -598,6 +602,8 @@ impl SessionSettings {
             auto_reconnect: pick(&self.auto_reconnect, &over.auto_reconnect),
             jump_host: pick(&self.jump_host, &over.jump_host),
             legacy_algorithms: pick(&self.legacy_algorithms, &over.legacy_algorithms),
+            // A folder's own: what is inside does not take it.
+            color: over.color.clone(),
             x11_forwarding: pick(&self.x11_forwarding, &over.x11_forwarding),
             keywords: pick(&self.keywords, &over.keywords),
             logon_script: pick(&self.logon_script, &over.logon_script),
@@ -1446,7 +1452,9 @@ pub fn dissolve_folder(dir: &Path) -> Result<usize, SessionError> {
     let parent = dir
         .parent()
         .ok_or_else(|| invalid(dir, "not a folder".into()))?;
-    let own = read_session_settings(&dir.join(FOLDER_FILE))?;
+    let mut own = read_session_settings(&dir.join(FOLDER_FILE))?;
+    // The folder's colour goes with it.
+    own.color = None;
     let mut items = Vec::new();
     for entry in fs::read_dir(dir).map_err(io(dir))?.flatten() {
         let name = entry.file_name();
@@ -1483,6 +1491,14 @@ pub fn dissolve_folder(dir: &Path) -> Result<usize, SessionError> {
     }
     fs::remove_dir_all(dir).map_err(io(dir))?;
     Ok(items.len())
+}
+
+/// Sets the colour of the folder `dir` in the session list (`#rrggbb`), or
+/// takes it away; its other settings stay.
+pub fn set_folder_color(dir: &Path, color: Option<&str>) -> Result<(), SessionError> {
+    let mut own = read_session_settings(&dir.join(FOLDER_FILE))?;
+    own.color = color.map(str::to_string);
+    write_folder_settings(dir, &own)
 }
 
 /// Writes a folder's own settings (`folder.toml`); empty settings remove the file.
@@ -2152,6 +2168,25 @@ mod tests {
         assert_eq!(target("a"), "a:22");
         assert_eq!(target("b"), "me@b:22", "keeps its host and user");
         assert_eq!(target("c"), "c:22");
+    }
+
+    #[test]
+    fn a_folder_colour_is_its_own() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write(dir, "sessions/Lab/folder.toml", "username = 'ops'");
+        write(dir, "sessions/Lab/Core/r1.toml", "host = 'r1'");
+        let lab = dir.join("sessions/Lab");
+        set_folder_color(&lab, Some("#46a758")).unwrap();
+        let tree = SessionTree::load(dir);
+        let lab_folder = &tree.root.folders[0];
+        assert_eq!(lab_folder.own.color.as_deref(), Some("#46a758"));
+        assert_eq!(lab_folder.own.username.as_deref(), Some("ops"), "kept");
+        assert_eq!(lab_folder.folders[0].own.color, None);
+        assert_eq!(lab_folder.folders[0].settings.color, None, "not inherited");
+        set_folder_color(&lab, None).unwrap();
+        let text = std::fs::read_to_string(lab.join(FOLDER_FILE)).unwrap();
+        assert!(!text.contains("color"), "{text}");
     }
 
     #[test]

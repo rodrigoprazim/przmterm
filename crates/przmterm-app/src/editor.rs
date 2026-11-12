@@ -125,6 +125,8 @@ pub struct Editor {
     identity_file: String,
     serial_port: String,
     baud_rate: String,
+    /// A folder's colour in the session list (`#rrggbb`).
+    color: Option<String>,
     data_bits: Option<u8>,
     parity: Option<Parity>,
     stop_bits: Option<u8>,
@@ -485,6 +487,7 @@ impl Editor {
             username: text(&s.username),
             credential: s.credential.clone(),
             vault_names: None,
+            color: s.color.clone(),
             known_vault_names: None,
             vault_request: false,
             unlock_request: false,
@@ -671,6 +674,7 @@ impl Editor {
                     }
                 },
             },
+            color: self.color.clone(),
             ..SessionSettings::default()
         })
     }
@@ -1029,12 +1033,20 @@ impl Editor {
             Page::General => grid(ui, "editor-general", |ui| {
                 if self.target != Target::Global {
                     ui.label(if session { "Name" } else { "Folder name" });
-                    ui.vertical(|ui| name_field(ui, &mut self.name, ""));
+                    ui.vertical(|ui| name_field(ui, &mut self.name, "", 280.0));
                     ui.end_row();
                 }
                 if let Target::Session { trail, .. } = &mut self.target {
                     ui.label("Folder");
                     folder_picker(ui, root, trail);
+                    ui.end_row();
+                }
+                if matches!(self.target, Target::Folder { .. }) {
+                    ui.label("Color")
+                        .on_hover_text("The folder's colour in the session list");
+                    if let Some(color) = crate::theme::color_swatches(ui, self.color.as_deref()) {
+                        self.color = color;
+                    }
                     ui.end_row();
                 }
 
@@ -1941,13 +1953,15 @@ impl Editor {
 
 /// A text field for a session or folder name. Characters a file name cannot
 /// have (`/ \ : * ? " < > |`) are dropped as they are typed, with a note.
-pub fn name_field(ui: &mut egui::Ui, value: &mut String, hint: &str) -> egui::Response {
+/// A field for a session, folder or set name, `width` wide
+/// (`f32::INFINITY`: to the edge).
+pub fn name_field(ui: &mut egui::Ui, value: &mut String, hint: &str, width: f32) -> egui::Response {
     let id = ui.make_persistent_id(("name-field-dropped", hint));
     let response = ui
         .add(
             egui::TextEdit::singleline(value)
                 .hint_text(hint)
-                .desired_width(280.0),
+                .desired_width(width),
         )
         .on_hover_text("Not allowed: / \\ : * ? \" < > |");
     if response.changed() && przmterm_session::strip_forbidden(value) {
