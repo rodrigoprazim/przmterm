@@ -48,6 +48,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Fixed
 
+- A folder made while there were no sessions yet was not shown: the list
+  said "No sessions yet" until a session existed.
 - A session that could not connect (a serial one without a serial port,
   say) was saved but not listed: the session dialog now says what is
   missing instead of saving it.

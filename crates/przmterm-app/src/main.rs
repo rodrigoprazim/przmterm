@@ -5605,7 +5605,11 @@ impl eframe::App for PrzmApp {
                         // Rows as close as a file tree's.
                         ui.spacing_mut().item_spacing.y = 0.0;
                         ui.spacing_mut().interact_size.y = 22.0;
-                        if self.sessions.root.all_sessions().is_empty() {
+                        // Empty folders are shown too: one just made has no
+                        // sessions yet.
+                        if self.sessions.root.all_sessions().is_empty()
+                            && self.sessions.root.folders.is_empty()
+                        {
                             let hint = match &self.config_dir {
                                 Some(_) => "No sessions yet.\n+ › New session… adds one.",
                                 None => "No configuration directory.",
