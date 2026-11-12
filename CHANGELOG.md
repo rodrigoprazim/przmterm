@@ -23,9 +23,9 @@ All notable changes to PrzmTerm are recorded here. The format follows
   shows a green pulse while output comes in and a green bell once it stops
   (a command finished), until it is opened. Split panes show the same in
   their caption.
-- Folder colours: *Color* in a folder's right-click menu and in its
-  settings colours its icon and name in the session list (`color` in
-  `folder.toml`; none by default).
+- Folder colours: *Color* in a folder's right-click menu, in its settings
+  and in the *New folder* dialog colours its icon and name in the session
+  list (`color` in `folder.toml`; none by default).
 - Right-clicking the free space of the session list: new session, new
   folder, expand all, collapse all, reload, global settings and showing
   the settings folder.
@@ -54,8 +54,11 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Fixed
 
-- The new folder and rename dialogs: the name field reaches the dialog's
-  edge.
+- Small dialogs (new or renamed folder, tab and button group names, script
+  prompts, the master password prompt, vault entries, the master password
+  change, SFTP names and passwords, file transfers, imports, the settings
+  folder, send to group): their text fields reach the dialog's edge, and
+  long messages wrap inside it.
 - A folder made while there were no sessions yet was not shown: the list
   said "No sessions yet" until a session existed.
 - A session that could not connect (a serial one without a serial port,

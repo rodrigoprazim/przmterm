@@ -881,6 +881,8 @@ struct NameDialog {
     rename: bool,
     value: String,
     error: Option<String>,
+    /// A new folder's colour (`#rrggbb`), none by default.
+    color: Option<String>,
 }
 
 /// What the close confirmation would close.
@@ -1412,8 +1414,10 @@ impl PrzmApp {
                 "New group"
             };
             window(title).show(ctx, |ui| {
-                ui.add(egui::TextEdit::singleline(&mut naming.name).desired_width(240.0))
+                ui.set_width(theme::DIALOG_WIDTH);
+                ui.add(egui::TextEdit::singleline(&mut naming.name).desired_width(f32::INFINITY))
                     .request_focus();
+                ui.add_space(8.0);
                 buttons(ui, "OK", true, &mut answer);
             });
             if enter {
@@ -1460,6 +1464,7 @@ impl PrzmApp {
                 .collect();
             let mut answer = None;
             window("Send to group").show(ctx, |ui| {
+                ui.set_width(420.0);
                 ui.label(format!(
                     "To {} connected session{} of {name}:",
                     targets.len(),
@@ -1469,7 +1474,7 @@ impl PrzmApp {
                     egui::TextEdit::multiline(text)
                         .font(egui::TextStyle::Monospace)
                         .desired_rows(3)
-                        .desired_width(380.0)
+                        .desired_width(f32::INFINITY)
                         .hint_text("one command per line"),
                 )
                 .request_focus();
@@ -3017,27 +3022,29 @@ impl PrzmApp {
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
-                ui.set_max_width(460.0);
+                ui.set_width(460.0);
                 ui.label(
                     "Where PrzmTerm keeps sessions, defaults, buttons, keywords, scripts \
                      and the password vault. A synced folder (iCloud Drive, Dropbox, \
                      OneDrive) shares them between computers.",
                 );
                 ui.add_space(6.0);
+                // The field up to Browse…, which ends at the dialog's edge.
                 ui.horizontal(|ui| {
-                    ui.add_enabled(
-                        !forced,
-                        egui::TextEdit::singleline(typed).desired_width(340.0),
-                    );
-                    if ui
-                        .add_enabled(!forced, egui::Button::new("Browse…"))
-                        .clicked()
-                        && let Some(dir) = rfd::FileDialog::new()
-                            .set_title("Folder for the PrzmTerm settings")
-                            .pick_folder()
-                    {
-                        *typed = dir.display().to_string();
-                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let browse = ui.add_enabled(!forced, egui::Button::new("Browse…"));
+                        ui.add_enabled(
+                            !forced,
+                            egui::TextEdit::singleline(typed).desired_width(ui.available_width()),
+                        );
+                        if browse.clicked()
+                            && let Some(dir) = rfd::FileDialog::new()
+                                .set_title("Folder for the PrzmTerm settings")
+                                .pick_folder()
+                        {
+                            *typed = dir.display().to_string();
+                        }
+                    });
                 });
                 ui.add_space(2.0);
                 if problem {
@@ -3644,9 +3651,11 @@ impl PrzmApp {
                 .collapsible(false)
                 .resizable(false)
                 .show(ctx, |ui| {
-                    ui.add(egui::TextEdit::singleline(name).desired_width(260.0))
+                    ui.set_width(theme::DIALOG_WIDTH);
+                    ui.add(egui::TextEdit::singleline(name).desired_width(f32::INFINITY))
                         .request_focus();
                     ui.weak("Only the tab changes; the session keeps its name.");
+                    ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if theme::primary_button(ui, "OK").clicked() || enter {
@@ -3679,6 +3688,7 @@ impl PrzmApp {
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
+                ui.set_width(420.0);
                 ui.label(format!(
                     "Made {} with PrzmTerm {}: {} session(s){}.",
                     bundle.created,
@@ -3711,7 +3721,7 @@ impl PrzmApp {
                     Kind::Export => {
                         ui.horizontal(|ui| {
                             ui.label("Into the folder");
-                            editor::name_field(ui, folder, "Imported", 280.0);
+                            editor::name_field(ui, folder, "Imported", f32::INFINITY);
                         });
                         ui.weak("Nothing is replaced: a folder that exists gets a new (2).");
                     }
@@ -3899,11 +3909,12 @@ impl PrzmApp {
                 .collapsible(false)
                 .resizable(false)
                 .show(ctx, |ui| {
+                    ui.set_width(theme::DIALOG_WIDTH);
                     ui.label(&prompt.question);
                     let field = ui.add(
                         egui::TextEdit::singleline(&mut prompt.answer)
                             .password(prompt.secret)
-                            .desired_width(300.0),
+                            .desired_width(f32::INFINITY),
                     );
                     if !prompt.focused {
                         if field.has_focus() {
@@ -4299,6 +4310,16 @@ impl PrzmApp {
                         editor::name_field(ui, &mut dialog.value, "Folder name", f32::INFINITY);
                     edit.request_focus();
                     let enter = ui.input(|i| i.key_pressed(Key::Enter));
+                    if !dialog.rename {
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            ui.label("Color");
+                            if let Some(color) = theme::color_swatches(ui, dialog.color.as_deref())
+                            {
+                                dialog.color = color;
+                            }
+                        });
+                    }
                     if let Some(err) = &dialog.error {
                         ui.colored_label(ui.visuals().error_fg_color, err);
                     }
@@ -4310,6 +4331,16 @@ impl PrzmApp {
                                     przmterm_session::rename_folder(&dialog.dir, &dialog.value)
                                 } else {
                                     przmterm_session::create_folder(&dialog.dir, &dialog.value)
+                                        .and_then(|dir| {
+                                            match &dialog.color {
+                                                Some(color) => przmterm_session::set_folder_color(
+                                                    &dir,
+                                                    Some(color),
+                                                ),
+                                                None => Ok(()),
+                                            }
+                                            .map(|()| dir)
+                                        })
                                 };
                                 match result {
                                     Ok(_) => done = Some(dialog.value.trim().to_string()),
@@ -5529,6 +5560,7 @@ impl eframe::App for PrzmApp {
                                     rename: false,
                                     value: String::new(),
                                     error: None,
+                                    color: None,
                                 });
                                 ui.close();
                             }
@@ -5810,6 +5842,7 @@ impl eframe::App for PrzmApp {
                                             rename: false,
                                             value: String::new(),
                                             error: None,
+                                            color: None,
                                         })
                                     }
                                     TreeAction::RenameFolder(dir, name) => {
@@ -5819,6 +5852,7 @@ impl eframe::App for PrzmApp {
                                             rename: true,
                                             value: name,
                                             error: None,
+                                            color: None,
                                         })
                                     }
                                     TreeAction::FolderSettings(trail) => {

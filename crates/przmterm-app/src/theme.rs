@@ -526,6 +526,10 @@ fn style_with(style: &mut egui::Style, pal: &Palette, dark: bool) {
     }
 }
 
+/// The width of a small dialog's content (a name, a password): its text
+/// fields reach the dialog's edge and longer messages wrap inside it.
+pub const DIALOG_WIDTH: f32 = 360.0;
+
 /// The colours a folder can have in the session list, by name.
 pub const FOLDER_COLORS: [(&str, &str); 8] = [
     ("Red", "#e5534b"),

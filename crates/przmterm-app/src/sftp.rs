@@ -780,18 +780,19 @@ impl SftpBrowser {
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
+                ui.set_width(crate::theme::DIALOG_WIDTH);
                 match ask {
                     Ask::Password { why, text } => {
                         ui.label(why.as_str());
                         ui.add(
                             egui::TextEdit::singleline(&mut **text)
                                 .password(true)
-                                .desired_width(260.0),
+                                .desired_width(f32::INFINITY),
                         )
                         .request_focus();
                     }
                     Ask::NewFolder(name) | Ask::Rename { to: name, .. } => {
-                        ui.add(egui::TextEdit::singleline(name).desired_width(260.0))
+                        ui.add(egui::TextEdit::singleline(name).desired_width(f32::INFINITY))
                             .request_focus();
                     }
                     Ask::Delete(items) => {
