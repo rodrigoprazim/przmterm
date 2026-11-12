@@ -564,15 +564,17 @@ the prompt it answers, so a stray press does not show it on screen.",
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
+                ui.set_width(crate::theme::DIALOG_WIDTH);
                 ui.add(
                     egui::TextEdit::singleline(&mut edit.name)
                         .hint_text("Cisco, Huawei, Linux…")
-                        .desired_width(240.0),
+                        .desired_width(f32::INFINITY),
                 )
                 .request_focus();
                 if let Some(err) = &edit.error {
                     ui.colored_label(ui.visuals().error_fg_color, err);
                 }
+                ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if crate::theme::primary_button(ui, "OK").clicked() || enter {

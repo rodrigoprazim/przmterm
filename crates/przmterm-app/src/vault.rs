@@ -173,12 +173,12 @@ impl VaultUi {
     }
 
     /// The master password field, with the focus when it should have it.
-    fn master_field(&mut self, ui: &mut egui::Ui, hint: &str) -> egui::Response {
+    fn master_field(&mut self, ui: &mut egui::Ui, hint: &str, width: f32) -> egui::Response {
         let response = ui.add(
             egui::TextEdit::singleline(&mut self.master)
                 .password(true)
                 .hint_text(hint)
-                .desired_width(260.0),
+                .desired_width(width),
         );
         // Asked until it sticks: the menu that opened the window may still
         // hold the focus on the first frame.
@@ -217,9 +217,9 @@ impl VaultUi {
                 .collapsible(false)
                 .auto_sized()
                 .show(ctx, |ui| {
-                    ui.set_max_width(260.0);
+                    ui.set_width(crate::theme::DIALOG_WIDTH);
                     ui.label(&why);
-                    let field = self.master_field(ui, "Master password");
+                    let field = self.master_field(ui, "Master password", f32::INFINITY);
                     if field.lost_focus() && enter {
                         done = Some(true);
                     }
@@ -288,7 +288,7 @@ impl VaultUi {
             } else if exists {
                 ui.set_max_width(260.0);
                 ui.label("The vault is locked.");
-                let field = self.master_field(ui, "Master password");
+                let field = self.master_field(ui, "Master password", 260.0);
                 let mut go = field.lost_focus() && enter;
                 if let Some(err) = &self.error {
                     ui.colored_label(ui.visuals().error_fg_color, err);
@@ -337,7 +337,7 @@ impl VaultUi {
             .spacing([12.0, 6.0])
             .show(ui, |ui| {
                 ui.label("Master password");
-                self.master_field(ui, &format!("at least {MIN_MASTER_LEN} characters"));
+                self.master_field(ui, &format!("at least {MIN_MASTER_LEN} characters"), 260.0);
                 ui.end_row();
                 ui.label("Again");
                 let again = ui.add(
@@ -509,6 +509,7 @@ impl VaultUi {
         .collapsible(false)
         .resizable(false)
         .show(ctx, |ui| {
+            ui.set_width(420.0);
             egui::Grid::new("vault-entry")
                 .num_columns(2)
                 .spacing([12.0, 6.0])
@@ -517,7 +518,7 @@ impl VaultUi {
                     let name = ui.add(
                         egui::TextEdit::singleline(&mut edit.entry.name)
                             .hint_text("NOC, Lab admin…")
-                            .desired_width(260.0),
+                            .desired_width(f32::INFINITY),
                     );
                     if !edit.focused {
                         name.request_focus();
@@ -528,7 +529,7 @@ impl VaultUi {
                     ui.add(
                         egui::TextEdit::singleline(&mut edit.entry.username)
                             .hint_text("asked at login when empty")
-                            .desired_width(260.0),
+                            .desired_width(f32::INFINITY),
                     );
                     ui.end_row();
                     ui.label("Password");
@@ -536,7 +537,7 @@ impl VaultUi {
                         egui::TextEdit::singleline(&mut edit.entry.password)
                             .password(!edit.show)
                             .hint_text("asked at login when empty")
-                            .desired_width(260.0),
+                            .desired_width(f32::INFINITY),
                     );
                     ui.end_row();
                     ui.label("Key passphrase")
@@ -545,7 +546,7 @@ impl VaultUi {
                         egui::TextEdit::singleline(&mut edit.entry.passphrase)
                             .password(!edit.show)
                             .hint_text("for encrypted key files")
-                            .desired_width(260.0),
+                            .desired_width(f32::INFINITY),
                     );
                     ui.end_row();
                     ui.label("");
@@ -655,6 +656,7 @@ impl VaultUi {
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
+                ui.set_width(crate::theme::DIALOG_WIDTH + 40.0);
                 egui::Grid::new("vault-master")
                     .num_columns(2)
                     .spacing([12.0, 6.0])
@@ -673,7 +675,7 @@ impl VaultUi {
                                 egui::TextEdit::singleline(value)
                                     .password(true)
                                     .hint_text(hint)
-                                    .desired_width(240.0),
+                                    .desired_width(f32::INFINITY),
                             );
                             ui.end_row();
                         }

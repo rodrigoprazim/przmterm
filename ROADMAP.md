@@ -201,6 +201,9 @@ and, when a device is at hand, a serial console (Xmodem or Ymodem).
 - [x] Signed releases: checksums signed with GPG, macOS (universal) ad-hoc
   signed; Windows signed when SignPath (or another free route) is in place
   (not required for 1.0)
+- [x] Windows setup program, for everyone or for the current user only
+  (no administrator needed)
+- [x] Debian / Ubuntu package (`.deb`), beside the `.tar.gz`
 - [x] User guide and scripting reference: [docs/GUIDE.md](docs/GUIDE.md)
   and [docs/SCRIPTING.md](docs/SCRIPTING.md)
 - [x] Buttons and shortcuts that type a password can require the prompt

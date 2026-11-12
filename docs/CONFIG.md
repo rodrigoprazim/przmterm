@@ -30,8 +30,11 @@ PrzmTerm looks for the settings folder (`<config>` below) in this order:
    | System | Folder |
    | --- | --- |
    | Linux | `~/.config/przmterm` |
-   | macOS | `~/Library/Application Support/przmterm` |
-   | Windows | `%APPDATA%\przmterm` |
+   | macOS | `~/Library/Application Support/PrzmTerm` |
+   | Windows | `%APPDATA%\PrzmTerm` |
+
+   Before 1.0.0-rc.4 it was `przmterm` on macOS and Windows too; that
+   folder is renamed `PrzmTerm` when PrzmTerm or `przm` starts.
 
 ```text
 <config>/
@@ -73,9 +76,10 @@ example) are read as well.
 (written by a newer version, or misspelt) is left out, and the file is
 still used:
 
-- for `defaults.toml`, `folder.toml` and session files, the status line
-  under the session list counts the files with problems, and its tooltip
-  names the keys that were left out;
+- for `defaults.toml`, `folder.toml` and session files, a warning under
+  the session list counts the files with problems; clicking it lists each
+  file with what is wrong, and *Remove them* writes it again without the
+  unknown keys;
 - for `buttons.toml`, the note shows on the button bar;
 - for `keymap.toml`, the note shows in *Keyboard shortcuts…*;
 - for keyword sets, the note shows in the terminal of the session that
@@ -156,6 +160,7 @@ send = ' '
 | `jump_host` | text | none | SSH: connect through this server first. Either the name of another session or `user@host:port`. That session's own jump host is used too. |
 | `legacy_algorithms` | `true` or `false` | `false` | SSH: also offer old algorithms (SHA-1 key exchange, CBC, HMAC-SHA1, DSA) for old equipment. |
 | `x11_forwarding` | `true` or `false` | `false` | SSH: show remote graphical programs on this screen (`ssh -X`). |
+| `color` | `#rrggbb` | none | `folder.toml` only: the folder's colour in the session list (its icon and name). Not passed down to what is inside. |
 | `debug` | `true` or `false` | `false` | SSH: show each step of the connection and login (like `ssh -v`). |
 
 ### Serial port

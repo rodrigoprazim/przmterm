@@ -5,8 +5,8 @@ use std::io;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-/// Opens a text file in the system's default app for it (on macOS the
-/// default text editor, so a `.log` does not land in Console).
+/// Opens a file in the system's default app for it (a text file on macOS in
+/// the default text editor, so a `.log` does not land in Console).
 pub fn open_text(path: &Path) -> io::Result<()> {
     let mut cmd = if cfg!(target_os = "macos") {
         let mut c = Command::new("open");

@@ -525,3 +525,72 @@ fn style_with(style: &mut egui::Style, pal: &Palette, dark: bool) {
         w.open.corner_radius = radius;
     }
 }
+
+/// The width of a small dialog's content (a name, a password): its text
+/// fields reach the dialog's edge and longer messages wrap inside it.
+pub const DIALOG_WIDTH: f32 = 360.0;
+
+/// The colours a folder can have in the session list, by name.
+pub const FOLDER_COLORS: [(&str, &str); 8] = [
+    ("Red", "#e5534b"),
+    ("Orange", "#e0823d"),
+    ("Yellow", "#c9a227"),
+    ("Green", "#46a758"),
+    ("Teal", "#2ea5a0"),
+    ("Blue", "#4a8fe0"),
+    ("Purple", "#9b6ee6"),
+    ("Pink", "#d6609f"),
+];
+
+/// A folder's colour from its `#rrggbb`.
+pub fn folder_color(hex: Option<&str>) -> Option<Color32> {
+    let [r, g, b] = przmterm_session::parse_color(hex?)?;
+    Some(Color32::from_rgb(r, g, b))
+}
+
+/// A row of colour swatches, "none" first; returns the one clicked:
+/// `Some(None)` for none, `Some(Some(hex))` for a colour.
+pub fn color_swatches(ui: &mut egui::Ui, current: Option<&str>) -> Option<Option<String>> {
+    let mut picked = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        let none = std::iter::once(("None", None));
+        let colors = FOLDER_COLORS.iter().map(|(name, hex)| (*name, Some(*hex)));
+        for (name, hex) in none.chain(colors) {
+            let (rect, response) =
+                ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
+            let selected = current.map(str::to_ascii_lowercase) == hex.map(str::to_string);
+            let painter = ui.painter();
+            let center = rect.center();
+            match hex.and_then(|h| folder_color(Some(h))) {
+                Some(color) => {
+                    painter.circle_filled(center, 7.0, color);
+                }
+                None => {
+                    // No colour: a ring with a slash.
+                    let stroke = Stroke::new(1.5, p().text_weak);
+                    painter.circle_stroke(center, 6.5, stroke);
+                    painter.line_segment(
+                        [
+                            center + egui::vec2(-4.5, 4.5),
+                            center + egui::vec2(4.5, -4.5),
+                        ],
+                        stroke,
+                    );
+                }
+            }
+            if selected || response.hovered() {
+                let ring = if selected {
+                    p().text_strong
+                } else {
+                    p().text_weak
+                };
+                painter.circle_stroke(center, 9.5, Stroke::new(1.5, ring));
+            }
+            if response.on_hover_text(name).clicked() {
+                picked = Some(hex.map(str::to_string));
+            }
+        }
+    });
+    picked
+}

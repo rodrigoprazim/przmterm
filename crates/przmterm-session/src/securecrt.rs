@@ -21,6 +21,7 @@ use przmterm_core::serial::{FlowControl, Parity};
 
 use przmterm_core::keywords::{Keyword, KeywordSet, format_color};
 
+use crate::buttons::{ButtonTab, MacroButton};
 use crate::{DEFAULT_KEEPALIVE, LogSettings, SessionSettings, TerminalSettings};
 
 /// Scrollback above this many lines is capped on import (SecureCRT allows
@@ -53,6 +54,8 @@ pub struct Report {
     pub sessions: Vec<Imported>,
     /// Keyword highlighting lists (`Keywords/*.ini`), by name.
     pub keyword_sets: Vec<(String, KeywordSet)>,
+    /// Button bars (`ButtonBarV5.ini`), as button groups.
+    pub button_groups: Vec<ButtonTab>,
     /// Sessions left out, with the reason.
     pub skipped: Vec<(String, String)>,
     /// Things worth telling, e.g. "12 saved passwords were not imported".
@@ -62,6 +65,14 @@ pub struct Report {
     capped: usize,
     /// Sessions that run a logon script (Expect/Send) after connecting.
     scripted: Vec<String>,
+    /// Sessions without a host (or serial port): written, but not listed
+    /// until that is filled in.
+    incomplete: Vec<String>,
+    /// Buttons that type a SecureCRT credential: the vault needs an entry
+    /// of the same name.
+    credentials: Vec<String>,
+    /// Buttons whose label says they type a password, in plain text.
+    plain_passwords: Vec<String>,
 }
 
 impl Report {
@@ -86,6 +97,34 @@ impl Report {
                  (SecureCRT stores it encrypted); they connect to their host and stop there: {}.",
                 self.scripted.len(),
                 self.scripted.join(", ")
+            ));
+        }
+        if !self.credentials.is_empty() {
+            self.notes.push(format!(
+                "{} button(s) type a SecureCRT credential, which cannot be imported \
+                 (SecureCRT stores it encrypted): they type the password of the vault \
+                 entry of the same name ({}), so add those entries to the vault. They send \
+                 only at a password prompt (Only when).",
+                self.credentials.len(),
+                self.credentials.join(", ")
+            ));
+        }
+        if !self.plain_passwords.is_empty() {
+            self.notes.push(format!(
+                "{} button(s) seem to type a password written in the button ({}): they \
+                 send only at a password prompt (Only when), but anyone who opens the \
+                 button sees it; keep the password in the vault instead ({{vault:entry}}).",
+                self.plain_passwords.len(),
+                self.plain_passwords.join(", ")
+            ));
+        }
+        if !self.incomplete.is_empty() {
+            self.notes.push(format!(
+                "{} session(s) have no host or serial port in SecureCRT: they were imported \
+                 but are not listed until one is filled in (the warning under the session \
+                 list opens them): {}.",
+                self.incomplete.len(),
+                self.incomplete.join(", ")
             ));
         }
         if self.capped > 0 {
@@ -214,6 +253,14 @@ fn convert(name: &str, f: &Fields, report: &mut Report) -> Option<SessionSetting
     }
     if number(f, "Use Login Script") == Some(1) {
         report.scripted.push(name.to_string());
+    }
+    let reachable = match protocol {
+        Protocol::Serial => s.serial_port.is_some(),
+        Protocol::Local => true,
+        _ => s.host.is_some(),
+    };
+    if !reachable {
+        report.incomplete.push(name.to_string());
     }
 
     let term_type = match text(f, "Emulation").unwrap_or("Xterm") {
@@ -464,7 +511,137 @@ fn text_field<'a>(f: &'a Fields, key: &str) -> Option<&'a str> {
 
 /// Reads one session `.ini`. `None` for files that are not sessions
 /// (folder data, the default session).
+/// A prompt that asks for a password, for the Only when of imported
+/// buttons that type one.
+const PASSWORD_PROMPT: &str = "(?i)(password|senha|passcode).*:";
+
+/// Whether a button's label says it types a password.
+fn looks_like_password(label: &str) -> bool {
+    let label = label.to_lowercase();
+    ["password", "passwd", "senha", "secret"]
+        .iter()
+        .any(|w| label.contains(w))
+}
+
+/// Reads SecureCRT's button bars (`ButtonBarV5.ini` in its Config folder):
+/// a list per bar, `Z:"<bar>"=<count>`, of buttons
+/// `<function>,<argument>,<label>,…`. Send String buttons keep their text
+/// (the same escapes as PrzmTerm's: `\r`, `\n`, `\t`, `\p`…); Send
+/// Credentials buttons type the vault entry of the same name; other
+/// functions are left out and reported.
+pub fn parse_button_bars(text: &str, report: &mut Report) {
+    let mut fields: Vec<(&String, &Value)> = Vec::new();
+    let parsed = ini_fields(text);
+    for (name, value) in &parsed {
+        fields.push((name, value));
+    }
+    // In the file's order: the bars are listed as written.
+    fields.sort_by_key(|(name, _)| text.find(&format!("Z:\"{name}\"")).unwrap_or(usize::MAX));
+    for (bar, value) in fields {
+        let Value::List(items) = value else { continue };
+        let mut group = ButtonTab {
+            name: clean_name(bar),
+            buttons: Vec::new(),
+        };
+        for item in items {
+            if let Some(button) = convert_button(bar, item, report) {
+                group.buttons.push(button);
+            }
+        }
+        if !group.buttons.is_empty() {
+            report.button_groups.push(group);
+        }
+    }
+}
+
+/// Splits a button's line into its fields: commas separate them, `\,` is
+/// a comma inside a field and `\\` a backslash (so `\\n` in the file is
+/// the escape `\n` of the text to send).
+fn button_fields(line: &str) -> Vec<String> {
+    let mut fields = vec![String::new()];
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        let field = fields.last_mut().expect("one at least");
+        match c {
+            '\\' => match chars.next() {
+                Some(next @ (',' | '\\')) => field.push(next),
+                Some(next) => {
+                    field.push('\\');
+                    field.push(next);
+                }
+                None => field.push('\\'),
+            },
+            ',' => fields.push(String::new()),
+            c => field.push(c),
+        }
+    }
+    fields
+}
+
+/// One button of a bar; `None` (and a note) for what PrzmTerm cannot do.
+fn convert_button(bar: &str, item: &str, report: &mut Report) -> Option<MacroButton> {
+    let parts = button_fields(item.trim_start());
+    if parts.len() < 3 {
+        return None;
+    }
+    let (function, argument, label) = (&parts[0], &parts[1], &parts[2]);
+    let field = parts.get(4);
+    let label = if label.trim().is_empty() {
+        argument.chars().take(20).collect()
+    } else {
+        label.trim().to_string()
+    };
+    let shown = format!("{bar}/{label}");
+    let text = argument.clone();
+    match function.trim() {
+        "SEND" => {
+            let mut button = MacroButton {
+                label: label.clone(),
+                send: text,
+                ..MacroButton::default()
+            };
+            if looks_like_password(&label) {
+                button.only_when = PASSWORD_PROMPT.to_string();
+                report.plain_passwords.push(shown);
+            }
+            Some(button)
+        }
+        "CREDENTIALS" => {
+            let entry = text.trim();
+            if entry.is_empty() {
+                return None;
+            }
+            let what = match field.map(|f| f.trim()) {
+                Some("username") => ":username",
+                _ => "",
+            };
+            report.credentials.push(entry.to_string());
+            Some(MacroButton {
+                label,
+                send: format!("{{vault:{entry}{what}}}\\r"),
+                only_when: if what.is_empty() {
+                    PASSWORD_PROMPT.to_string()
+                } else {
+                    String::new()
+                },
+                ..MacroButton::default()
+            })
+        }
+        other => {
+            report.skipped.push((
+                format!("button {shown}"),
+                format!("{other} buttons have no equivalent in PrzmTerm"),
+            ));
+            None
+        }
+    }
+}
+
 pub fn parse_ini(name: &str, text: &str, folder: Vec<String>, report: &mut Report) {
+    if name.to_ascii_lowercase().starts_with("buttonbar") {
+        parse_button_bars(text, report);
+        return;
+    }
     if let Some(set) = parse_keyword_ini(name, text) {
         report.keyword_sets.push(set);
         return;
@@ -488,11 +665,40 @@ pub fn parse_paths(paths: &[PathBuf]) -> Result<Report, String> {
     for path in paths {
         if path.is_dir() {
             scan_dir(path, &mut Vec::new(), &mut report)?;
+            // SecureCRT's Sessions folder: its button bars are next to it.
+            let parent = path.parent().filter(|_| {
+                path.file_name()
+                    .is_some_and(|n| n.eq_ignore_ascii_case("sessions"))
+            });
+            for file in parent.map(button_bar_files).unwrap_or_default() {
+                read_ini(&file, Vec::new(), &mut report)?;
+            }
         } else {
             read_ini(path, Vec::new(), &mut report)?;
         }
     }
     Ok(report.finish())
+}
+
+/// The button bar files in a SecureCRT Config folder, the newest version
+/// only (`ButtonBarV5.ini` over `ButtonBarV4.ini`).
+fn button_bar_files(dir: &Path) -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                        let n = n.to_ascii_lowercase();
+                        n.starts_with("buttonbar") && n.ends_with(".ini")
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    files.sort();
+    files.pop().into_iter().collect()
 }
 
 fn read_ini(path: &Path, folder: Vec<String>, report: &mut Report) -> Result<(), String> {
@@ -524,6 +730,13 @@ fn scan_dir(dir: &Path, trail: &mut Vec<String>, report: &mut Report) -> Result<
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("folder");
+            // SecureCRT's Sessions folder (a Config folder was picked): its
+            // sessions are the top level, and its Default*.ini templates
+            // stay out.
+            if trail.is_empty() && name.eq_ignore_ascii_case("sessions") {
+                scan_dir(&path, &mut Vec::new(), report)?;
+                continue;
+            }
             trail.push(clean_name(name));
             scan_dir(&path, trail, report)?;
             trail.pop();
@@ -531,6 +744,14 @@ fn scan_dir(dir: &Path, trail: &mut Vec<String>, report: &mut Report) -> Result<
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("ini"))
         {
+            // Of the button bar files, only the newest version.
+            let bar = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.to_ascii_lowercase().starts_with("buttonbar"));
+            if bar && !button_bar_files(dir).contains(&path) {
+                continue;
+            }
             read_ini(&path, trail.clone(), report)?;
         }
     }
@@ -555,22 +776,105 @@ pub fn parse_any(paths: &[PathBuf]) -> Result<Report, String> {
 
 // ---------------------------------------------------------------- writing
 
-/// Writes the imported sessions under `<config>/sessions/<into>/…`, keeping
-/// SecureCRT's folders. Names already taken get ` (2)`, ` (3)`…; jump hosts
-/// follow renamed sessions. Returns how many sessions were written.
-pub fn write(config_dir: &Path, into: &str, report: &Report) -> Result<usize, String> {
+/// What to do with an imported session or keyword set that is already
+/// there (same folder and name).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Existing {
+    /// Leave the one there; import the others. Importing again adds nothing.
+    #[default]
+    Skip,
+    /// Write the imported one over it.
+    Replace,
+    /// Import it under another name: ` (2)`, ` (3)`…
+    KeepBoth,
+}
+
+/// The folder an imported session goes to, below `sessions/`.
+fn target_folder(into: &str, s: &Imported) -> String {
     let into = into.trim().trim_matches('/');
+    std::iter::once(into)
+        .filter(|f| !f.is_empty())
+        .map(str::to_string)
+        .chain(s.folder.iter().cloned())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Whether the session `s` is already there when imported into `into`.
+pub fn session_exists(config_dir: &Path, into: &str, s: &Imported) -> bool {
+    config_dir
+        .join(crate::SESSIONS_DIR)
+        .join(target_folder(into, s))
+        .join(format!("{}.toml", s.name))
+        .exists()
+}
+
+/// Whether a keyword set of this name is already there.
+pub fn keyword_set_exists(config_dir: &Path, name: &str) -> bool {
+    crate::keyword_sets(config_dir).iter().any(|n| n == name)
+}
+
+/// How many of a button group's buttons are not in `buttons.toml` yet.
+pub fn new_buttons(config_dir: &Path, group: &ButtonTab) -> usize {
+    let bar = crate::buttons::read_buttons(config_dir).unwrap_or_default();
+    let there = bar.tabs.iter().find(|t| t.name == group.name);
+    group
+        .buttons
+        .iter()
+        .filter(|b| {
+            !there.is_some_and(|t| {
+                t.buttons
+                    .iter()
+                    .any(|o| o.label == b.label && o.send == b.send)
+            })
+        })
+        .count()
+}
+
+/// What an import wrote.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Written {
+    pub sessions: usize,
+    /// Sessions already there, left alone ([`Existing::Skip`]).
+    pub kept: usize,
+    pub keyword_sets: usize,
+    pub buttons: usize,
+}
+
+/// Writes the imported sessions under `<config>/sessions/<into>/…`, keeping
+/// SecureCRT's folders; names already taken get ` (2)`, ` (3)`…, and jump
+/// hosts follow renamed sessions. Returns how many sessions were written.
+pub fn write(config_dir: &Path, into: &str, report: &Report) -> Result<usize, String> {
+    write_with(config_dir, into, report, Existing::KeepBoth).map(|w| w.sessions)
+}
+
+/// [`write`], with `existing` deciding about what is already there.
+pub fn write_with(
+    config_dir: &Path,
+    into: &str,
+    report: &Report,
+    existing: Existing,
+) -> Result<Written, String> {
+    let mut written = Written::default();
     let mut taken: HashSet<(String, String)> = HashSet::new();
     let mut renamed: BTreeMap<String, String> = BTreeMap::new();
     let mut plan = Vec::new();
     for s in &report.sessions {
-        let folder = std::iter::once(into)
-            .filter(|f| !f.is_empty())
-            .map(str::to_string)
-            .chain(s.folder.iter().cloned())
-            .collect::<Vec<_>>()
-            .join("/");
+        let folder = target_folder(into, s);
         let dir = config_dir.join(crate::SESSIONS_DIR).join(&folder);
+        let there = dir.join(format!("{}.toml", s.name)).exists();
+        match existing {
+            Existing::Skip if there => {
+                written.kept += 1;
+                continue;
+            }
+            Existing::Replace if there => {
+                taken.insert((folder.clone(), s.name.clone()));
+                plan.push((folder, s.name.clone(), s.settings.clone()));
+                continue;
+            }
+            _ => {}
+        }
         let mut name = s.name.clone();
         let mut n = 2;
         while dir.join(format!("{name}.toml")).exists()
@@ -592,11 +896,56 @@ pub fn write(config_dir: &Path, into: &str, report: &Report) -> Result<usize, St
             settings.jump_host = Some(new.clone());
         }
         crate::write_session(config_dir, &folder, &name, &settings).map_err(|e| e.to_string())?;
+        written.sessions += 1;
     }
     for (name, set) in &report.keyword_sets {
+        // A set is referred to by its name: kept, or replaced.
+        if existing == Existing::Skip && keyword_set_exists(config_dir, name) {
+            continue;
+        }
         crate::write_keyword_set(config_dir, name, set).map_err(|e| e.to_string())?;
+        written.keyword_sets += 1;
     }
-    Ok(report.sessions.len())
+    written.buttons = report
+        .button_groups
+        .iter()
+        .map(|g| new_buttons(config_dir, g))
+        .sum();
+    write_buttons(config_dir, &report.button_groups)?;
+    Ok(written)
+}
+
+/// Adds the imported button groups to `buttons.toml`: into the group of
+/// the same name, without the buttons it already has (same label and
+/// text), so importing twice adds nothing.
+fn write_buttons(config_dir: &Path, groups: &[ButtonTab]) -> Result<(), String> {
+    if groups.is_empty() {
+        return Ok(());
+    }
+    let mut bar = crate::buttons::read_buttons(config_dir).map_err(|e| e.to_string())?;
+    for group in groups {
+        let index = match bar.tabs.iter().position(|t| t.name == group.name) {
+            Some(i) => i,
+            None => {
+                bar.tabs.push(ButtonTab {
+                    name: group.name.clone(),
+                    buttons: Vec::new(),
+                });
+                bar.tabs.len() - 1
+            }
+        };
+        let target = &mut bar.tabs[index];
+        for button in &group.buttons {
+            let known = target
+                .buttons
+                .iter()
+                .any(|b| b.label == button.label && b.send == button.send);
+            if !known {
+                target.buttons.push(button.clone());
+            }
+        }
+    }
+    crate::buttons::write_buttons(config_dir, &bar).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -739,6 +1088,62 @@ Z:\"Port Forward Table V3\"=00000000\r\n";
         assert_eq!(c.parity, Some(Parity::Even));
         assert_eq!(c.stop_bits, Some(2));
         assert_eq!(c.flow_control, Some(FlowControl::Hardware));
+
+        // No host: imported, and the report says it needs one.
+        parse_ini("blank", "D:\"Is Session\"=00000001\n", vec![], &mut r);
+        assert_eq!(r.sessions.len(), 3);
+        let r = r.finish();
+        assert!(
+            r.notes
+                .iter()
+                .any(|n| n.contains("no host") && n.contains("blank")),
+            "{:?}",
+            r.notes
+        );
+    }
+
+    #[test]
+    fn reads_button_bars() {
+        // Fictional bars in the layout of SecureCRT's ButtonBarV5.ini.
+        let ini = "D:\"Sort Alphabetically\"=00000001\r\n\
+Z:\"Lab\"=00000003\r\n \
+SEND,Fict-Pass-1\\\\n,Password,,,1,2,,\r\n \
+CREDENTIALS,LAB_ADMIN,Lab login,,password,1,1,,\r\n \
+MENU,MENU_TAB_CLONE,Clone,,,0,1,,\r\n\
+Z:\"Cisco\"=00000002\r\n \
+SEND,show running-config\\\\n,show run,,,0,1,,\r\n \
+SEND,teste\\,virgula\\\\r\\\\p,eco\\, dois,,,0,1,,\r\n";
+        let mut r = Report::default();
+        parse_ini("ButtonBarV5", ini, Vec::new(), &mut r);
+        let names: Vec<&str> = r.button_groups.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(names, ["Lab", "Cisco"]);
+        let lab = &r.button_groups[0].buttons;
+        assert_eq!(lab.len(), 2, "the menu function is left out");
+        assert_eq!(lab[0].send, "Fict-Pass-1\\n");
+        assert_eq!(lab[0].only_when, PASSWORD_PROMPT, "labelled as a password");
+        assert_eq!(lab[1].send, "{vault:LAB_ADMIN}\\r");
+        assert_eq!(lab[1].only_when, PASSWORD_PROMPT);
+        let cisco = &r.button_groups[1].buttons;
+        assert_eq!(cisco[0].send, "show running-config\\n");
+        assert_eq!(cisco[0].only_when, "");
+        assert_eq!(cisco[1].send, "teste,virgula\\r\\p", "`\\,` is a comma");
+        assert_eq!(cisco[1].label, "eco, dois");
+        assert!(
+            r.skipped
+                .iter()
+                .any(|(n, why)| n == "button Lab/Clone" && why.contains("MENU"))
+        );
+        let r = r.finish();
+        assert!(r.notes.iter().any(|n| n.contains("LAB_ADMIN")));
+        assert!(r.notes.iter().any(|n| n.contains("Lab/Password")));
+
+        // Written into buttons.toml, once.
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "SecureCRT", &r).unwrap();
+        write(dir.path(), "SecureCRT", &r).unwrap();
+        let bar = crate::buttons::read_buttons(dir.path()).unwrap();
+        let cisco = bar.tabs.iter().find(|t| t.name == "Cisco").unwrap();
+        assert_eq!(cisco.buttons.len(), 2);
     }
 
     #[test]
@@ -790,6 +1195,39 @@ Z:\"Keyword List V3\"=00000004\r\n \"no-\",00ffffff,00000000,00000001\r\n \
         let copy = all.iter().find(|s| s.name == "core-sw-01 (2)").unwrap();
         assert_eq!(copy.folder, ["SecureCRT", "Lab", "Core"]);
         assert_eq!(copy.jump_host.as_deref(), Some("bastion (2)"));
+    }
+
+    #[test]
+    fn importing_again_skips_or_replaces_what_is_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = parse_xml(XML).unwrap();
+        let first = write_with(dir.path(), "SecureCRT", &r, Existing::Skip).unwrap();
+        assert_eq!((first.sessions, first.kept), (2, 0));
+        assert!(
+            r.sessions
+                .iter()
+                .all(|s| session_exists(dir.path(), "SecureCRT", s))
+        );
+        let again = write_with(dir.path(), "SecureCRT", &r, Existing::Skip).unwrap();
+        assert_eq!((again.sessions, again.kept), (0, 2), "nothing doubled");
+        let replaced = write_with(dir.path(), "SecureCRT", &r, Existing::Replace).unwrap();
+        assert_eq!(replaced.sessions, 2);
+        let tree = crate::SessionTree::load(dir.path());
+        assert_eq!(tree.root.all_sessions().len(), 2);
+    }
+
+    #[test]
+    fn a_config_folder_is_read_as_its_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = dir.path().join("Config/Sessions");
+        std::fs::create_dir_all(sessions.join("Home")).unwrap();
+        for template in ["Default.ini", "Default_RDP.ini", "Default_LocalShell.ini"] {
+            std::fs::write(sessions.join(template), INI).unwrap();
+        }
+        std::fs::write(sessions.join("Home/VM.ini"), INI).unwrap();
+        let r = parse_any(&[dir.path().join("Config")]).unwrap();
+        assert_eq!(r.sessions.len(), 1, "the templates stay out");
+        assert_eq!(r.sessions[0].folder, ["Home"]);
     }
 
     #[test]

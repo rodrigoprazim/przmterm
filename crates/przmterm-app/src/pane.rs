@@ -144,6 +144,11 @@ pub struct Pane {
     last_sent: std::time::Instant,
     /// Output arrived since the connection started: the far end is up.
     heard: bool,
+    /// When output last arrived from the far end.
+    pub last_output: Option<std::time::Instant>,
+    /// Output arrived that nobody has seen: the pane was not on screen
+    /// (its tab not the active one). Cleared when it is.
+    pub unseen: bool,
     /// Watches the output for the session's triggers.
     triggers: Option<przmterm_term::triggers::TriggerEngine>,
     /// Macro text still to send, and when the next piece is due (`\p`).
@@ -270,6 +275,8 @@ impl Pane {
             launcher: None,
             last_sent: std::time::Instant::now(),
             heard: false,
+            last_output: None,
+            unseen: false,
             triggers: None,
             queue: VecDeque::new(),
             queue_at: None,
@@ -941,6 +948,8 @@ impl Pane {
                 Ok(n) => {
                     got = true;
                     self.heard = true;
+                    self.last_output = Some(std::time::Instant::now());
+                    self.unseen = true;
                     let now = std::time::Instant::now();
                     if let Some(t) = self.transfer.as_mut().filter(|t| t.in_band) {
                         t.engine.input(&buf[..n], now);

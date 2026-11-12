@@ -53,8 +53,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The oldest Ubuntu still offered: the programs need the C library
+          # of the system they are built on, or newer (22.04 and later).
           - name: linux-x86_64
-            os: ubuntu-latest
+            os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
           - name: macos-universal
             os: macos-latest
@@ -90,7 +92,9 @@ jobs:
         shell: bash
         run: |
           mkdir windows-bin
-          cp target/${{ matrix.target }}/release/przmterm.exe target/${{ matrix.target }}/release/przm.exe windows-bin/
+          # The desktop app is PrzmTerm.exe on Windows, as it is named there.
+          cp target/${{ matrix.target }}/release/przmterm.exe windows-bin/PrzmTerm.exe
+          cp target/${{ matrix.target }}/release/przm.exe windows-bin/
 
       - name: Upload the Windows binaries for signing
         id: unsigned
@@ -125,7 +129,7 @@ jobs:
           cp README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE "$dir/"
           case "${{ matrix.name }}" in
             windows-*)
-              cp windows-bin/przmterm.exe windows-bin/przm.exe "$dir/"
+              cp windows-bin/PrzmTerm.exe windows-bin/przm.exe "$dir/"
               7z a "$dir.zip" "$dir" > /dev/null
               echo "ASSET=$dir.zip" >> "$GITHUB_ENV"
               ;;
@@ -145,13 +149,48 @@ jobs:
               cp target/${{ matrix.target }}/release/przmterm target/${{ matrix.target }}/release/przm "$dir/"
               tar czf "$dir.tar.gz" "$dir"
               echo "ASSET=$dir.tar.gz" >> "$GITHUB_ENV"
+              # And the Debian / Ubuntu package.
+              scripts/linux-deb.sh "$version" target/${{ matrix.target }}/release "$dir.deb"
+              echo "DEB=$dir.deb" >> "$GITHUB_ENV"
               ;;
           esac
+
+      # The setup program: for everyone or for the current user only
+      # (packaging/windows/przmterm.iss), with the binaries signed above.
+      # It is not signed itself yet.
+      - name: Setup program (Windows)
+        if: startsWith(matrix.name, 'windows')
+        shell: pwsh
+        run: |
+          $version = "${{ needs.verify.outputs.version }}"
+          $numeric = ($version -split '[-+]')[0]
+          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --no-progress -y
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          & $iscc /Q "/DAppVersion=$version" "/DNumericVersion=$numeric" `
+            "/DBinDir=$PWD\windows-bin" "/DRepoDir=$PWD" "/DOutputDir=$PWD" `
+            packaging\windows\przmterm.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "SETUP=przmterm-$version-windows-x86_64-setup.exe" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
       - uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.name }}
           path: ${{ env.ASSET }}
+
+      - uses: actions/upload-artifact@v7
+        if: startsWith(matrix.name, 'windows')
+        with:
+          name: release-${{ matrix.name }}-setup
+          path: ${{ env.SETUP }}
+
+      - uses: actions/upload-artifact@v7
+        if: startsWith(matrix.name, 'linux')
+        with:
+          name: release-${{ matrix.name }}-deb
+          path: ${{ env.DEB }}
 
   publish:
     name: Publish release

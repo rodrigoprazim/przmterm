@@ -327,7 +327,7 @@ impl KeywordEditor {
     fn set_ui(&mut self, ui: &mut egui::Ui, close: &mut bool) {
         ui.horizontal(|ui| {
             ui.label("Name");
-            crate::editor::name_field(ui, &mut self.name, "Set name");
+            crate::editor::name_field(ui, &mut self.name, "Set name", 280.0);
             crate::theme::checkbox(ui, &mut self.set.match_case, "Match case");
             ui.add(
                 egui::TextEdit::singleline(&mut self.filter)

@@ -1,5 +1,9 @@
 //! PrzmTerm desktop application.
 
+// A window program on Windows: no console window opens with it. Debug
+// builds keep the console, for the logs.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod appmenu;
 mod atlas;
 mod buttonbar;
@@ -8,12 +12,14 @@ mod editor;
 mod fonts;
 mod grid;
 mod icons;
+mod importwizard;
 mod input;
 mod keymap;
 mod keywords;
 mod launcher;
 mod openpgp;
 mod pane;
+mod problems;
 mod scriptguide;
 mod sftp;
 mod theme;
@@ -34,6 +40,26 @@ use crate::editor::{Editor, EditorResult};
 use crate::pane::{Env, Pane};
 use przmterm_connect::Keychain;
 
+/// The graphics setup. A terminal needs little of the GPU, so the
+/// integrated one is asked for: on a laptop with two, drawing on the fast one
+/// and showing on the other made a maximized window flicker. On Windows,
+/// Direct3D 12 rather than Vulkan, for the same reason. `WGPU_BACKEND` and
+/// `WGPU_POWER_PREF` still choose otherwise.
+fn wgpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
+    use eframe::egui_wgpu::{WgpuConfiguration, WgpuSetupCreateNew, wgpu};
+    let mut setup = WgpuSetupCreateNew::without_display_handle();
+    setup.power_preference =
+        wgpu::PowerPreference::from_env().unwrap_or(wgpu::PowerPreference::LowPower);
+    if cfg!(windows) {
+        setup.instance_descriptor.backends =
+            wgpu::Backends::from_env().unwrap_or(wgpu::Backends::DX12);
+    }
+    WgpuConfiguration {
+        wgpu_setup: setup.into(),
+        ..Default::default()
+    }
+}
+
 fn main() -> eframe::Result {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -45,12 +71,17 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("PrzmTerm")
+            // Linux: the menu entry it belongs to (the .desktop file's name).
+            .with_app_id("io.github.rodrigoprazim.przmterm")
             .with_inner_size([1100.0, 700.0])
+            // Opens filling the screen; the size above is for un-maximizing.
+            .with_maximized(true)
             .with_min_inner_size([480.0, 320.0])
             .with_icon(
                 eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/icon-256.png"))
                     .unwrap_or_default(),
             ),
+        wgpu_options: wgpu_options(),
         ..Default::default()
     };
     eframe::run_native(
@@ -161,11 +192,93 @@ pub fn cursor_label(shape: przmterm_session::CursorShape) -> &'static str {
 /// The × shows on the active tab and under the pointer. Returns the tab's
 /// response (click selects, right-click opens its menu) and whether × was
 /// clicked.
+/// What a connection's tab shows before its title.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Status {
+    /// Connected, nothing new: a plug, green.
+    Connected,
+    /// Output coming in now in a tab not looked at: a pulse, green.
+    Busy,
+    /// Output came in and stopped (a command ended) in a tab not looked
+    /// at: a bell, green.
+    Done,
+    /// The connection ended: an unplugged plug, red.
+    Disconnected,
+}
+
+/// Output this recent counts as still coming in.
+const BUSY_FOR: std::time::Duration = std::time::Duration::from_millis(1500);
+
+impl Status {
+    /// The status of a pane, `None` for one without a connection.
+    fn of(pane: &Pane) -> Option<Status> {
+        pane.origin.as_ref()?;
+        Some(if pane.transport.is_closed() {
+            Status::Disconnected
+        } else if !pane.unseen {
+            Status::Connected
+        } else if pane.last_output.is_some_and(|t| t.elapsed() < BUSY_FOR) {
+            Status::Busy
+        } else {
+            Status::Done
+        })
+    }
+
+    /// A tab's status: the most telling of its panes'.
+    fn of_tab(tab: &Tab) -> Option<Status> {
+        let all: Vec<Status> = tab.panes.iter().filter_map(Status::of).collect();
+        [
+            Status::Disconnected,
+            Status::Done,
+            Status::Busy,
+            Status::Connected,
+        ]
+        .into_iter()
+        .find(|s| all.contains(s))
+    }
+
+    fn icon(self) -> icons::Icon {
+        match self {
+            Status::Connected => icons::Icon::Connected,
+            Status::Busy => icons::Icon::Busy,
+            Status::Done => icons::Icon::Done,
+            Status::Disconnected => icons::Icon::Disconnected,
+        }
+    }
+
+    fn hint(self) -> &'static str {
+        match self {
+            Status::Connected => "Connected",
+            Status::Busy => "Connected, new output coming in",
+            Status::Done => "Connected, new output (it stopped)",
+            Status::Disconnected => "Disconnected",
+        }
+    }
+
+    fn draw(self, ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect) {
+        let color = status_color(ui, self != Status::Disconnected);
+        icons::draw(painter, self.icon(), rect, color);
+    }
+}
+
+/// The colour of a connection's status: green while connected, red once
+/// it has ended.
+fn status_color(ui: &egui::Ui, connected: bool) -> egui::Color32 {
+    match (connected, ui.visuals().dark_mode) {
+        (true, true) => egui::Color32::from_rgb(70, 190, 100),
+        (true, false) => egui::Color32::from_rgb(30, 150, 60),
+        (false, true) => egui::Color32::from_rgb(225, 85, 75),
+        (false, false) => egui::Color32::from_rgb(200, 50, 45),
+    }
+}
+
+/// A tab; `status`: a connection's tab, its icon before the title.
 fn tab_widget(
     ui: &mut egui::Ui,
     title: &str,
     active: bool,
     locked: bool,
+    status: Option<Status>,
     group: Option<egui::Color32>,
     ink: view::Ink,
 ) -> (egui::Response, bool) {
@@ -181,7 +294,8 @@ fn tab_widget(
         .layout_no_wrap(title.to_string(), font, text_color);
     let (pad, close_w, height) = (12.0, 22.0, 32.0);
     let lock_w = if locked { 18.0 } else { 0.0 };
-    let width = pad + lock_w + galley.size().x + 6.0 + close_w + 6.0;
+    let dot_w = if status.is_some() { 18.0 } else { 0.0 };
+    let width = pad + lock_w + dot_w + galley.size().x + 6.0 + close_w + 6.0;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
     let close_rect = egui::Rect::from_center_size(
         egui::pos2(rect.right() - 6.0 - close_w / 2.0, rect.center().y),
@@ -221,6 +335,14 @@ fn tab_widget(
             );
             icons::draw(painter, icons::Icon::Lock, lock_rect, text_color);
             x += lock_w;
+        }
+        if let Some(status) = status {
+            let icon = egui::Rect::from_center_size(
+                egui::pos2(x + 6.0, rect.center().y),
+                egui::vec2(14.0, 14.0),
+            );
+            status.draw(ui, painter, icon);
+            x += dot_w;
         }
         painter.galley(
             egui::pos2(x, rect.center().y - galley.size().y / 2.0),
@@ -636,6 +758,8 @@ struct PrzmApp {
     status: Option<(String, std::time::Instant)>,
     /// What the last SecureCRT import did, shown until dismissed.
     import_result: Option<Vec<String>>,
+    /// What a SecureCRT import found, to choose from.
+    import_wizard: Option<importwizard::ImportWizard>,
     /// The keyword set editor, when open.
     keyword_editor: Option<keywords::KeywordEditor>,
     /// The password vault and its windows.
@@ -644,6 +768,10 @@ struct PrzmApp {
     after_unlock: Option<Action>,
     /// Which window the master password prompt answers.
     master_for: Option<MasterFor>,
+    /// The settings files with problems, and what to do about them.
+    problems: problems::Problems,
+    /// Open (`true`) or close every folder of the session list next frame.
+    tree_expand: Option<bool>,
     /// Macro buttons above the status bar.
     buttons: buttonbar::ButtonBarUi,
     /// What is typed goes to every connected pane of the current tab.
@@ -737,6 +865,15 @@ enum TreeAction {
     Move(PathBuf, PathBuf),
     /// Export a session file or folder to a `.przm` file (path, name).
     Export(PathBuf, String),
+    /// Set or take away a folder's colour.
+    FolderColor(PathBuf, Option<String>),
+    /// Open (`true`) or close every folder.
+    ExpandAll(bool),
+    /// Read the sessions again.
+    Reload,
+    GlobalSettings,
+    /// Show the settings folder in the file manager.
+    ShowSettingsFolder,
 }
 
 /// Drag-and-drop payload: the session file being moved.
@@ -751,6 +888,8 @@ struct NameDialog {
     rename: bool,
     value: String,
     error: Option<String>,
+    /// A new folder's colour (`#rrggbb`), none by default.
+    color: Option<String>,
 }
 
 /// What the close confirmation would close.
@@ -768,6 +907,8 @@ enum Deletion {
         dir: PathBuf,
         name: String,
         sessions: usize,
+        /// Its sessions move up a level instead of going with it.
+        keep: bool,
     },
 }
 
@@ -804,10 +945,13 @@ impl PrzmApp {
             notice: None,
             status: None,
             import_result: None,
+            import_wizard: None,
             keyword_editor: None,
             vault: vault::VaultUi::new(),
             after_unlock: None,
             master_for: None,
+            problems: problems::Problems::default(),
+            tree_expand: None,
             buttons,
             broadcast: false,
             confirm_broadcast: false,
@@ -847,6 +991,63 @@ impl PrzmApp {
             folder_dialog: None,
             quitting: false,
         }
+    }
+
+    /// Asks for SecureCRT files (an XML export, session or keyword .ini
+    /// files), or with `folder` for a Sessions folder, and imports them.
+    fn pick_securecrt(&mut self, folder: bool) {
+        let picked = if folder {
+            rfd::FileDialog::new()
+                .set_title("SecureCRT Sessions folder")
+                .pick_folder()
+                .map(|dir| vec![dir])
+        } else {
+            rfd::FileDialog::new()
+                .set_title("SecureCRT export (.xml), session, keyword or button bar files (.ini)")
+                .add_filter("SecureCRT", &["xml", "ini"])
+                .pick_files()
+        };
+        if let Some(paths) = picked {
+            self.import_securecrt(&paths);
+        }
+    }
+
+    /// Does what was chosen in the settings problems window.
+    fn fix_problem(&mut self, fix: problems::Fix, config_dir: &std::path::Path) {
+        use problems::Fix;
+        let done = match fix {
+            Fix::Edit(path) => {
+                match Editor::fix(&path, config_dir) {
+                    Some(editor) => self.editor = Some(editor),
+                    None => self.notice = Some(format!("{} is not a session.", path.display())),
+                }
+                return;
+            }
+            Fix::DropUnknown(path) => przmterm_session::drop_unknown_settings(&path)
+                .map(|()| "Removed the unknown settings.".to_string())
+                .map_err(|e| e.to_string()),
+            Fix::Delete(path) => std::fs::remove_file(&path)
+                .map(|()| format!("Deleted {}.", path.display()))
+                .map_err(|e| format!("{}: {e}", path.display())),
+            Fix::Reveal(path) => {
+                if let Err(e) = desktop::reveal(&path) {
+                    self.notice = Some(format!("Cannot show {}: {e}", path.display()));
+                }
+                return;
+            }
+            Fix::OpenText(path) => {
+                if let Err(e) = desktop::open_text(&path) {
+                    self.notice = Some(format!("Cannot open {}: {e}", path.display()));
+                }
+                return;
+            }
+            Fix::Reload => Ok("Read the settings again.".to_string()),
+        };
+        self.notice = Some(match done {
+            Ok(text) => text,
+            Err(e) => e,
+        });
+        self.reload_sessions();
     }
 
     fn reload_sessions(&mut self) {
@@ -1221,8 +1422,10 @@ impl PrzmApp {
                 "New group"
             };
             window(title).show(ctx, |ui| {
-                ui.add(egui::TextEdit::singleline(&mut naming.name).desired_width(240.0))
+                ui.set_width(theme::DIALOG_WIDTH);
+                ui.add(egui::TextEdit::singleline(&mut naming.name).desired_width(f32::INFINITY))
                     .request_focus();
+                ui.add_space(8.0);
                 buttons(ui, "OK", true, &mut answer);
             });
             if enter {
@@ -1269,6 +1472,7 @@ impl PrzmApp {
                 .collect();
             let mut answer = None;
             window("Send to group").show(ctx, |ui| {
+                ui.set_width(420.0);
                 ui.label(format!(
                     "To {} connected session{} of {name}:",
                     targets.len(),
@@ -1278,7 +1482,7 @@ impl PrzmApp {
                     egui::TextEdit::multiline(text)
                         .font(egui::TextStyle::Monospace)
                         .desired_rows(3)
-                        .desired_width(380.0)
+                        .desired_width(f32::INFINITY)
                         .hint_text("one command per line"),
                 )
                 .request_focus();
@@ -2163,30 +2367,43 @@ impl PrzmApp {
             .map(|n| n.to_string_lossy().into_owned());
         let logging = pane.log.is_some();
         // Shaped like the other status bar buttons: filled green while
-        // logging, red while not, with a dot that keeps the state readable
-        // without colour (full when logging, hollow-looking when not).
+        // logging, red while not, with an icon that keeps the state readable
+        // without colour (a file being written, or a plain one).
         let green = egui::Color32::from_rgb(40, 135, 65);
         let red = egui::Color32::from_rgb(160, 52, 52);
-        let (text, fill, dot) = if logging {
+        let (text, fill, icon, icon_color) = if logging {
             (
                 format!("Log  {}", short_name(name.as_deref().unwrap_or(""))),
                 green,
+                icons::Icon::Logging,
                 egui::Color32::WHITE,
             )
         } else {
-            ("Log".to_string(), red, egui::Color32::from_white_alpha(110))
+            (
+                "Log".to_string(),
+                red,
+                icons::Icon::NotLogging,
+                egui::Color32::from_white_alpha(170),
+            )
         };
-        let response = icons::dot_button(ui, dot, &text, Some(fill), Some(egui::Color32::WHITE))
-            .on_hover_text(match (&name, logging) {
-                (Some(name), true) => format!(
-                    "Logging to {name}.\nClick to stop{}; right-click for more.",
-                    self.keys_hint("toggle_log")
-                ),
-                _ => format!(
-                    "Not logging.\nClick to start{}; right-click for more.",
-                    self.keys_hint("toggle_log")
-                ),
-            });
+        let response = icons::icon_text_button(
+            ui,
+            icon,
+            icon_color,
+            &text,
+            Some(fill),
+            Some(egui::Color32::WHITE),
+        )
+        .on_hover_text(match (&name, logging) {
+            (Some(name), true) => format!(
+                "Logging to {name}.\nClick to stop{}; right-click for more.",
+                self.keys_hint("toggle_log")
+            ),
+            _ => format!(
+                "Not logging.\nClick to start{}; right-click for more.",
+                self.keys_hint("toggle_log")
+            ),
+        });
         if response.clicked() {
             actions.push(Action::ToggleLog);
         }
@@ -2334,6 +2551,7 @@ impl PrzmApp {
             || self.name_dialog.is_some()
             || self.confirm_delete.is_some()
             || self.import_result.is_some()
+            || self.import_wizard.is_some()
             || self.keyword_editor.is_some()
             || self.buttons.modal()
             || self.confirm_broadcast
@@ -2556,11 +2774,23 @@ impl PrzmApp {
                                 });
                             }
                             Some(update::Stage::Installed(start)) => {
-                                ui.strong(format!("PrzmTerm {} is installed.", found.version));
-                                ui.weak(
-                                    "Restarting closes the open sessions. Until then this \
-                                     version keeps running.",
-                                );
+                                if update::is_setup(start) {
+                                    ui.strong(format!(
+                                        "PrzmTerm {} is ready to install.",
+                                        found.version
+                                    ));
+                                    ui.weak(
+                                        "Restarting closes the open sessions and installs it \
+                                         (for everyone, Windows asks for an administrator). \
+                                         Until then this version keeps running.",
+                                    );
+                                } else {
+                                    ui.strong(format!("PrzmTerm {} is installed.", found.version));
+                                    ui.weak(
+                                        "Restarting closes the open sessions. Until then this \
+                                         version keeps running.",
+                                    );
+                                }
                                 ui.add_space(6.0);
                                 ui.horizontal(|ui| {
                                     ui.with_layout(
@@ -2801,27 +3031,29 @@ impl PrzmApp {
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
-                ui.set_max_width(460.0);
+                ui.set_width(460.0);
                 ui.label(
                     "Where PrzmTerm keeps sessions, defaults, buttons, keywords, scripts \
                      and the password vault. A synced folder (iCloud Drive, Dropbox, \
                      OneDrive) shares them between computers.",
                 );
                 ui.add_space(6.0);
+                // The field up to Browse…, which ends at the dialog's edge.
                 ui.horizontal(|ui| {
-                    ui.add_enabled(
-                        !forced,
-                        egui::TextEdit::singleline(typed).desired_width(340.0),
-                    );
-                    if ui
-                        .add_enabled(!forced, egui::Button::new("Browse…"))
-                        .clicked()
-                        && let Some(dir) = rfd::FileDialog::new()
-                            .set_title("Folder for the PrzmTerm settings")
-                            .pick_folder()
-                    {
-                        *typed = dir.display().to_string();
-                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let browse = ui.add_enabled(!forced, egui::Button::new("Browse…"));
+                        ui.add_enabled(
+                            !forced,
+                            egui::TextEdit::singleline(typed).desired_width(ui.available_width()),
+                        );
+                        if browse.clicked()
+                            && let Some(dir) = rfd::FileDialog::new()
+                                .set_title("Folder for the PrzmTerm settings")
+                                .pick_folder()
+                        {
+                            *typed = dir.display().to_string();
+                        }
+                    });
                 });
                 ui.add_space(2.0);
                 if problem {
@@ -2897,6 +3129,12 @@ impl PrzmApp {
 
     /// The tabs of the current window, with + at the end.
     fn tab_bar(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        // The active tab is on screen: its output has been seen.
+        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+            for pane in &mut tab.panes {
+                pane.unseen = false;
+            }
+        }
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
             let mut last_group = None;
@@ -2917,10 +3155,17 @@ impl PrzmApp {
                 if title.chars().count() > 28 {
                     title = title.chars().take(27).collect::<String>() + "…";
                 }
-                if tab.pane().transport.is_closed() && tab.pane().origin.is_some() {
-                    title = format!("○ {title}");
-                } else if !tab.pane().transport.weak_algorithms().is_empty() {
+                // A connection's tab: green while connected (busy, done),
+                // red once ended.
+                let status = Status::of_tab(tab);
+                if status.is_some_and(|s| s != Status::Disconnected)
+                    && !tab.pane().transport.weak_algorithms().is_empty()
+                {
                     title = format!("⚠ {title}");
+                }
+                if status == Some(Status::Busy) {
+                    // To turn into Done when the output stops.
+                    ui.ctx().request_repaint_after(BUSY_FOR / 3);
                 }
                 // The session and where it is connected; a split tab
                 // lists each of its sessions.
@@ -2938,6 +3183,10 @@ impl PrzmApp {
                 } else {
                     format!("{}\nRight-click for more", describe(tab.pane()))
                 };
+                let hover = match status {
+                    Some(s) => format!("{}\n{hover}", s.hint()),
+                    None => hover,
+                };
                 let color = tab
                     .group
                     .and_then(|g| self.groups.iter().find(|x| x.id == g))
@@ -2947,6 +3196,7 @@ impl PrzmApp {
                     &title,
                     i == self.active_tab,
                     tab.lock.is_some(),
+                    status,
                     color,
                     tab.pane().view.ink(),
                 );
@@ -3034,15 +3284,20 @@ impl PrzmApp {
                         (visuals.faint_bg_color, visuals.weak_text_color())
                     };
                     ui.painter().rect_filled(caption, 0.0, fill);
-                    let dot = if pane.origin.is_some() && pane.transport.is_closed() {
-                        "○ "
-                    } else {
-                        ""
-                    };
+                    // Its connection's status, as on tabs.
+                    let mut left = caption.left() + 6.0;
+                    if let Some(status) = Status::of(pane) {
+                        let icon = egui::Rect::from_center_size(
+                            egui::pos2(left + 6.0, caption.center().y),
+                            egui::vec2(12.0, 12.0),
+                        );
+                        status.draw(ui, &ui.painter().with_clip_rect(caption), icon);
+                        left += 16.0;
+                    }
                     ui.painter().with_clip_rect(caption).text(
-                        caption.left_center() + egui::vec2(6.0, 0.0),
+                        egui::pos2(left, caption.center().y),
                         egui::Align2::LEFT_CENTER,
-                        format!("{dot}{}", pane_name(pane)),
+                        pane_name(pane),
                         egui::FontId::proportional(12.0),
                         text,
                     );
@@ -3291,33 +3546,83 @@ impl PrzmApp {
         }
     }
 
-    /// Imports SecureCRT sessions into the `SecureCRT` folder and shows what
-    /// happened.
+    /// Reads what was picked in SecureCRT's files and opens the import
+    /// wizard on it.
     fn import_securecrt(&mut self, paths: &[PathBuf]) {
+        let Some(dir) = self.config_dir.clone() else {
+            return;
+        };
+        match przmterm_session::securecrt::parse_any(paths) {
+            Ok(report)
+                if report.sessions.is_empty()
+                    && report.keyword_sets.is_empty()
+                    && report.button_groups.is_empty() =>
+            {
+                let mut lines = vec!["Nothing to import was found there.".to_string()];
+                lines.extend(
+                    report
+                        .skipped
+                        .iter()
+                        .map(|(name, why)| format!("Skipped {name}: {why}.")),
+                );
+                self.import_result = Some(lines);
+            }
+            Ok(report) => {
+                self.import_wizard =
+                    Some(importwizard::ImportWizard::new(report, &dir, IMPORT_FOLDER));
+            }
+            Err(e) => self.import_result = Some(vec![format!("Import failed: {e}")]),
+        }
+    }
+
+    /// Writes what the import wizard chose and shows what happened.
+    fn finish_import(
+        &mut self,
+        report: &przmterm_session::securecrt::Report,
+        into: &str,
+        existing: przmterm_session::securecrt::Existing,
+    ) {
         use przmterm_session::securecrt;
         let Some(dir) = self.config_dir.clone() else {
             return;
         };
-        let result = securecrt::parse_any(paths).and_then(|report| {
-            let n = securecrt::write(&dir, IMPORT_FOLDER, &report)?;
-            let mut lines = vec![if n == 0 && !report.keyword_sets.is_empty() {
-                "Keywords imported.".to_string()
-            } else if n == 0 {
-                "No sessions found.".to_string()
+        let result = securecrt::write_with(&dir, into, report, existing).map(|w| {
+            let place = if into.is_empty() {
+                "at the top level".to_string()
             } else {
-                format!("Imported {n} session(s) into the folder {IMPORT_FOLDER}.")
-            }];
-            if !report.keyword_sets.is_empty() {
-                let names: Vec<&str> = report
-                    .keyword_sets
+                format!("into the folder {into}")
+            };
+            let mut lines = Vec::new();
+            if w.sessions > 0 {
+                lines.push(format!("Imported {} session(s) {place}.", w.sessions));
+            }
+            if w.kept > 0 {
+                lines.push(format!(
+                    "{} session(s) were already here and were left as they were.",
+                    w.kept
+                ));
+            }
+            if w.keyword_sets > 0 {
+                lines.push(format!(
+                    "Imported {} keyword set(s). Sessions that used them in SecureCRT \
+                     highlight with them here too.",
+                    w.keyword_sets
+                ));
+            }
+            if w.buttons > 0 {
+                let groups: Vec<&str> = report
+                    .button_groups
                     .iter()
-                    .map(|(n, _)| n.as_str())
+                    .map(|g| g.name.as_str())
                     .collect();
                 lines.push(format!(
-                    "Imported keyword set(s): {}. Sessions that used them in SecureCRT \
-                     highlight with them here too.",
-                    names.join(", ")
+                    "Imported {} button(s) into the button group(s) {}.",
+                    w.buttons,
+                    groups.join(", ")
                 ));
+            }
+            if lines.is_empty() {
+                lines.push("Nothing new: everything chosen was already here.".into());
             }
             lines.extend(
                 report
@@ -3326,10 +3631,14 @@ impl PrzmApp {
                     .map(|(name, why)| format!("Skipped {name}: {why}.")),
             );
             lines.extend(report.notes.iter().cloned());
-            Ok(lines)
+            lines
         });
         self.import_result = Some(result.unwrap_or_else(|e| vec![format!("Import failed: {e}")]));
         self.reload_sessions();
+        // Imported button groups.
+        let visible = self.buttons.visible;
+        self.buttons = buttonbar::ButtonBarUi::load(Some(&dir));
+        self.buttons.visible = visible;
     }
 
     /// The session editor and the delete confirmation.
@@ -3405,9 +3714,11 @@ impl PrzmApp {
                 .collapsible(false)
                 .resizable(false)
                 .show(ctx, |ui| {
-                    ui.add(egui::TextEdit::singleline(name).desired_width(260.0))
+                    ui.set_width(theme::DIALOG_WIDTH);
+                    ui.add(egui::TextEdit::singleline(name).desired_width(f32::INFINITY))
                         .request_focus();
                     ui.weak("Only the tab changes; the session keeps its name.");
+                    ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if theme::primary_button(ui, "OK").clicked() || enter {
@@ -3440,6 +3751,7 @@ impl PrzmApp {
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
+                ui.set_width(420.0);
                 ui.label(format!(
                     "Made {} with PrzmTerm {}: {} session(s){}.",
                     bundle.created,
@@ -3472,7 +3784,7 @@ impl PrzmApp {
                     Kind::Export => {
                         ui.horizontal(|ui| {
                             ui.label("Into the folder");
-                            editor::name_field(ui, folder, "Imported");
+                            editor::name_field(ui, folder, "Imported", f32::INFINITY);
                         });
                         ui.weak("Nothing is replaced: a folder that exists gets a new (2).");
                     }
@@ -3660,11 +3972,12 @@ impl PrzmApp {
                 .collapsible(false)
                 .resizable(false)
                 .show(ctx, |ui| {
+                    ui.set_width(theme::DIALOG_WIDTH);
                     ui.label(&prompt.question);
                     let field = ui.add(
                         egui::TextEdit::singleline(&mut prompt.answer)
                             .password(prompt.secret)
-                            .desired_width(300.0),
+                            .desired_width(f32::INFINITY),
                     );
                     if !prompt.focused {
                         if field.has_focus() {
@@ -4005,6 +4318,16 @@ impl PrzmApp {
         {
             self.keyword_editor = Some(keywords::KeywordEditor::new(dir, select.as_deref()));
         }
+        if let Some(wizard) = &mut self.import_wizard {
+            match wizard.show(ctx) {
+                importwizard::WizardResult::Open => {}
+                importwizard::WizardResult::Cancel => self.import_wizard = None,
+                importwizard::WizardResult::Import(report, into, existing) => {
+                    self.import_wizard = None;
+                    self.finish_import(&report, &into, existing);
+                }
+            }
+        }
         if let Some(lines) = &self.import_result {
             let mut close =
                 ctx.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape));
@@ -4055,12 +4378,25 @@ impl PrzmApp {
                 .collapsible(false)
                 .resizable(false)
                 .show(ctx, |ui| {
-                    let edit = editor::name_field(ui, &mut dialog.value, "Folder name");
+                    ui.set_width(360.0);
+                    let edit =
+                        editor::name_field(ui, &mut dialog.value, "Folder name", f32::INFINITY);
                     edit.request_focus();
                     let enter = ui.input(|i| i.key_pressed(Key::Enter));
+                    if !dialog.rename {
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            ui.label("Color");
+                            if let Some(color) = theme::color_swatches(ui, dialog.color.as_deref())
+                            {
+                                dialog.color = color;
+                            }
+                        });
+                    }
                     if let Some(err) = &dialog.error {
                         ui.colored_label(ui.visuals().error_fg_color, err);
                     }
+                    ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if theme::primary_button(ui, "OK").clicked() || enter {
@@ -4068,6 +4404,16 @@ impl PrzmApp {
                                     przmterm_session::rename_folder(&dialog.dir, &dialog.value)
                                 } else {
                                     przmterm_session::create_folder(&dialog.dir, &dialog.value)
+                                        .and_then(|dir| {
+                                            match &dialog.color {
+                                                Some(color) => przmterm_session::set_folder_color(
+                                                    &dir,
+                                                    Some(color),
+                                                ),
+                                                None => Ok(()),
+                                            }
+                                            .map(|()| dir)
+                                        })
                                 };
                                 match result {
                                     Ok(_) => done = Some(dialog.value.trim().to_string()),
@@ -4096,14 +4442,38 @@ impl PrzmApp {
             let mut keep_open = true;
             let (title, question) = match &deletion {
                 Deletion::Session(s) => ("Delete session", format!("Delete “{}”?", s.name)),
-                Deletion::Folder { name, sessions, .. } => (
+                Deletion::Folder {
+                    name,
+                    sessions,
+                    keep,
+                    ..
+                } => (
                     "Delete folder",
-                    match sessions {
-                        0 => format!("Delete the folder “{name}”?"),
-                        1 => format!("Delete the folder “{name}” and the session in it?"),
-                        n => format!("Delete the folder “{name}” and the {n} sessions in it?"),
+                    match (sessions, keep) {
+                        (0, _) | (_, true) => format!("Delete the folder “{name}”?"),
+                        (1, false) => {
+                            format!("Delete the folder “{name}” and the session in it?")
+                        }
+                        (n, false) => {
+                            format!("Delete the folder “{name}” and the {n} sessions in it?")
+                        }
                     },
                 ),
+            };
+            // Where kept sessions go: the folder above, or the top level.
+            let above = match &deletion {
+                Deletion::Folder { dir, .. } => dir
+                    .parent()
+                    .filter(|p| {
+                        self.config_dir
+                            .as_ref()
+                            .is_none_or(|c| *p != c.join(przmterm_session::SESSIONS_DIR))
+                    })
+                    .and_then(|p| p.file_name())
+                    .map_or("the top level".to_string(), |n| {
+                        format!("“{}”", n.to_string_lossy())
+                    }),
+                Deletion::Session(_) => String::new(),
             };
             egui::Window::new(title)
                 .pivot(egui::Align2::CENTER_CENTER)
@@ -4112,6 +4482,26 @@ impl PrzmApp {
                 .resizable(false)
                 .show(ctx, |ui| {
                     ui.label(question);
+                    if let Some(Deletion::Folder { sessions, keep, .. }) = &mut self.confirm_delete
+                        && *sessions > 0
+                    {
+                        ui.add_space(4.0);
+                        let what = if *sessions == 1 {
+                            "Keep the session in it".to_string()
+                        } else {
+                            format!("Keep the {sessions} sessions in it")
+                        };
+                        ui.checkbox(keep, what);
+                        ui.weak(if *keep {
+                            format!(
+                                "They move up to {above}, with the folder's settings, \
+                                 and its subfolders with them."
+                            )
+                        } else {
+                            "They are deleted with the folder.".to_string()
+                        });
+                        ui.add_space(4.0);
+                    }
                     if ui.input(|i| i.key_pressed(Key::Escape)) {
                         keep_open = false;
                     }
@@ -4125,6 +4515,16 @@ impl PrzmApp {
                                         }
                                         std::fs::remove_file(&s.path)
                                             .map(|_| s.name.clone())
+                                            .map_err(|e| e.to_string())
+                                    }
+                                    Deletion::Folder {
+                                        dir,
+                                        name,
+                                        keep,
+                                        sessions,
+                                    } if *keep && *sessions > 0 => {
+                                        przmterm_session::dissolve_folder(dir)
+                                            .map(|_| format!("{name}; its sessions moved up"))
                                             .map_err(|e| e.to_string())
                                     }
                                     Deletion::Folder { dir, name, .. } => {
@@ -4449,7 +4849,27 @@ fn session_matches(s: &Session, filter: &str) -> bool {
 /// One row of the session list: a grip while dragging is on, a folder icon
 /// for folders, then the text. It reaches the list's right edge, so it is
 /// easy to hit and to drop onto.
-fn tree_row(ui: &mut egui::Ui, drag: bool, folder: bool, text: egui::WidgetText) -> egui::Response {
+/// What a row of the session list is.
+#[derive(Clone, Copy)]
+enum RowKind {
+    /// A folder, in its colour if it has one.
+    Folder(Option<egui::Color32>),
+    /// A session of this protocol; `open`: connected in a tab, its icon
+    /// green.
+    Session {
+        protocol: przmterm_core::Protocol,
+        open: bool,
+    },
+}
+
+/// A row of the session list.
+fn tree_row(
+    ui: &mut egui::Ui,
+    drag: bool,
+    kind: RowKind,
+    text: egui::WidgetText,
+) -> egui::Response {
+    let folder = matches!(kind, RowKind::Folder(_));
     let galley = text.into_galley(
         ui,
         Some(egui::TextWrapMode::Extend),
@@ -4479,7 +4899,10 @@ fn tree_row(ui: &mut egui::Ui, drag: bool, folder: bool, text: egui::WidgetText)
         if response.hovered() || response.dragged() {
             painter.rect_filled(rect, visuals.corner_radius, visuals.weak_bg_fill);
         }
-        let color = visuals.text_color();
+        let color = match kind {
+            RowKind::Folder(Some(c)) => c,
+            _ => visuals.text_color(),
+        };
         let mut x = rect.left() + pad + arrow;
         let icon_rect =
             |x: f32| egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(ICON, height));
@@ -4492,15 +4915,21 @@ fn tree_row(ui: &mut egui::Ui, drag: bool, folder: bool, text: egui::WidgetText)
             );
             x += ICON;
         }
-        if folder {
-            icons::draw(painter, icons::Icon::Folder, icon_rect(x), color);
-        } else {
-            icons::draw(
-                painter,
-                icons::Icon::Session,
-                icon_rect(x).shrink2(egui::vec2(1.0, 0.0)),
-                ui.visuals().weak_text_color(),
-            );
+        match kind {
+            RowKind::Folder(_) => icons::draw(painter, icons::Icon::Folder, icon_rect(x), color),
+            RowKind::Session { protocol, open } => {
+                let icon_color = if open {
+                    status_color(ui, true)
+                } else {
+                    ui.visuals().weak_text_color()
+                };
+                icons::draw(
+                    painter,
+                    icons::Icon::of_protocol(protocol),
+                    icon_rect(x),
+                    icon_color,
+                );
+            }
         }
         x += ICON + 2.0;
         let y = rect.center().y - galley.size().y / 2.0;
@@ -4529,6 +4958,27 @@ fn drag_item(ui: &egui::Ui, response: &egui::Response, path: &std::path::Path, n
     }
 }
 
+/// The menu of the session list's free space: what the list as a whole
+/// can do.
+fn list_menu(ui: &mut egui::Ui, picked: &mut Vec<TreeAction>) {
+    crate::theme::compact_menu(ui);
+    let mut item = |ui: &mut egui::Ui, text: &str, action: TreeAction| {
+        if ui.button(text).clicked() {
+            picked.push(action);
+            ui.close();
+        }
+    };
+    item(ui, "New session…", TreeAction::NewSession(Vec::new()));
+    item(ui, "New folder…", TreeAction::NewFolder(PathBuf::new()));
+    ui.separator();
+    item(ui, "Expand all", TreeAction::ExpandAll(true));
+    item(ui, "Collapse all", TreeAction::ExpandAll(false));
+    item(ui, "Reload", TreeAction::Reload);
+    ui.separator();
+    item(ui, "Global settings…", TreeAction::GlobalSettings);
+    item(ui, "Show settings folder", TreeAction::ShowSettingsFolder);
+}
+
 fn folder_ui(
     ui: &mut egui::Ui,
     folder: &Folder,
@@ -4536,6 +4986,7 @@ fn folder_ui(
     drag: bool,
     filter: &str,
     open: &std::collections::HashSet<PathBuf>,
+    expand: Option<bool>,
 ) {
     for f in &folder.folders {
         if !filter.is_empty() && !f.all_sessions().iter().any(|s| session_matches(s, filter)) {
@@ -4546,10 +4997,15 @@ fn folder_ui(
             egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true);
         if !filter.is_empty() {
             state.set_open(true); // show every match while searching
+        } else if let Some(open) = expand {
+            state.set_open(open); // Expand all, Collapse all
         }
         let (_, header, _) = state
-            .show_header(ui, |ui| tree_row(ui, drag, true, f.name.clone().into()))
-            .body(|ui| folder_ui(ui, f, picked, drag, filter, open));
+            .show_header(ui, |ui| {
+                let color = theme::folder_color(f.own.color.as_deref());
+                tree_row(ui, drag, RowKind::Folder(color), f.name.clone().into())
+            })
+            .body(|ui| folder_ui(ui, f, picked, drag, filter, open, expand));
         let r = header.inner;
         // A click on the name opens or closes it, like the arrow.
         if r.clicked()
@@ -4606,6 +5062,12 @@ fn folder_ui(
                 picked.push(TreeAction::FolderSettings(f.trail.clone()));
                 ui.close();
             }
+            ui.menu_button("Color", |ui| {
+                if let Some(color) = theme::color_swatches(ui, f.own.color.as_deref()) {
+                    picked.push(TreeAction::FolderColor(f.dir.clone(), color));
+                    ui.close();
+                }
+            });
             if ui
                 .button("Export folder…")
                 .on_hover_text("Save this folder and its sessions to a file to share")
@@ -4629,26 +5091,13 @@ fn folder_ui(
         if !session_matches(s, filter) {
             continue;
         }
-        // Sessions connected in a tab get a green dot.
+        // Sessions connected in a tab get a green icon.
         let is_open = open.contains(&s.path);
-        let text: egui::WidgetText = if is_open {
-            let mut job = egui::text::LayoutJob::default();
-            let font = egui::TextStyle::Body.resolve(ui.style());
-            job.append(
-                "● ",
-                0.0,
-                egui::TextFormat::simple(font.clone(), egui::Color32::from_rgb(70, 190, 100)),
-            );
-            job.append(
-                &s.name,
-                0.0,
-                egui::TextFormat::simple(font, ui.visuals().text_color()),
-            );
-            job.into()
-        } else {
-            s.name.clone().into()
+        let kind = RowKind::Session {
+            protocol: s.protocol,
+            open: is_open,
         };
-        let response = tree_row(ui, drag, false, text);
+        let response = tree_row(ui, drag, kind, s.name.clone().into());
         if drag {
             drag_item(ui, &response, &s.path, &s.name);
         }
@@ -4921,6 +5370,9 @@ impl eframe::App for PrzmApp {
                         done * 100 / total.max(1)
                     )),
                     update::Stage::Installing => Some(format!("Installing {}…", d.version)),
+                    update::Stage::Installed(start) if update::is_setup(&start) => {
+                        Some(format!("{} ready: restart to install", d.version))
+                    }
                     update::Stage::Installed(_) => {
                         Some(format!("{} installed: restart", d.version))
                     }
@@ -5013,10 +5465,24 @@ impl eframe::App for PrzmApp {
                     {
                         actions.push(Action::TransferDialog(self.active_tab, true));
                     }
-                    if ui
-                        .selectable_label(self.buttons.visible, "▤ Buttons")
-                        .on_hover_text("Show or hide the button bar")
-                        .clicked()
+                    let (fill, text) = if self.buttons.visible {
+                        (
+                            Some(ui.visuals().selection.bg_fill),
+                            Some(ui.visuals().selection.stroke.color),
+                        )
+                    } else {
+                        (None, None)
+                    };
+                    if icons::icon_text_button(
+                        ui,
+                        icons::Icon::ButtonBar,
+                        text.unwrap_or(ui.visuals().text_color()),
+                        "Buttons",
+                        fill,
+                        text,
+                    )
+                    .on_hover_text("Show or hide the button bar")
+                    .clicked()
                     {
                         actions.push(Action::ToggleButtons);
                     }
@@ -5167,6 +5633,7 @@ impl eframe::App for PrzmApp {
                                     rename: false,
                                     value: String::new(),
                                     error: None,
+                                    color: None,
                                 });
                                 ui.close();
                             }
@@ -5239,33 +5706,24 @@ impl eframe::App for PrzmApp {
                             if ui
                                 .button("Import from SecureCRT…")
                                 .on_hover_text(
-                                    "An XML export, session .ini files or keyword lists (.ini)",
+                                    "An XML export, session .ini files, keyword lists or the \
+                                     button bars (ButtonBarV5.ini, in SecureCRT's Config folder)",
                                 )
                                 .clicked()
                             {
                                 ui.close();
-                                if let Some(paths) = rfd::FileDialog::new()
-                                    .set_title("SecureCRT export (.xml) or session files (.ini)")
-                                    .add_filter("SecureCRT", &["xml", "ini"])
-                                    .pick_files()
-                                {
-                                    self.import_securecrt(&paths);
-                                }
+                                self.pick_securecrt(false);
                             }
                             if ui
                                 .button("Import a SecureCRT Sessions folder…")
                                 .on_hover_text(
-                                    "SecureCRT's Config/Sessions folder, with its sub-folders",
+                                    "SecureCRT's Config/Sessions folder, with its sub-folders, \
+                                     and the button bars next to it",
                                 )
                                 .clicked()
                             {
                                 ui.close();
-                                if let Some(dir) = rfd::FileDialog::new()
-                                    .set_title("SecureCRT Sessions folder")
-                                    .pick_folder()
-                                {
-                                    self.import_securecrt(&[dir]);
-                                }
+                                self.pick_securecrt(true);
                             }
                             ui.separator();
                             if ui.button("Appearance…").clicked() {
@@ -5312,14 +5770,18 @@ impl eframe::App for PrzmApp {
                         // Rows as close as a file tree's.
                         ui.spacing_mut().item_spacing.y = 0.0;
                         ui.spacing_mut().interact_size.y = 22.0;
-                        if self.sessions.root.all_sessions().is_empty() {
+                        let mut picked = Vec::new();
+                        // Empty folders are shown too: one just made has no
+                        // sessions yet.
+                        if self.sessions.root.all_sessions().is_empty()
+                            && self.sessions.root.folders.is_empty()
+                        {
                             let hint = match &self.config_dir {
                                 Some(_) => "No sessions yet.\n+ › New session… adds one.",
                                 None => "No configuration directory.",
                             };
                             ui.weak(hint);
                         } else {
-                            let mut picked = Vec::new();
                             let drag = self.drag_unlocked;
                             // Always shown while unlocked, so the tree does not move mid-drag.
                             if drag {
@@ -5365,7 +5827,47 @@ impl eframe::App for PrzmApp {
                                 .filter_map(|p| p.origin.as_ref().map(|o| o.path.clone()))
                                 .filter(|p| !p.as_os_str().is_empty())
                                 .collect();
-                            folder_ui(ui, &self.sessions.root, &mut picked, drag, &filter, &open);
+                            folder_ui(
+                                ui,
+                                &self.sessions.root,
+                                &mut picked,
+                                drag,
+                                &filter,
+                                &open,
+                                self.tree_expand.take(),
+                            );
+                        }
+                        if !self.sessions.errors.is_empty() {
+                            ui.separator();
+                            let n = self.sessions.errors.len();
+                            let text = if n == 1 {
+                                "1 file with a problem".to_string()
+                            } else {
+                                format!("{n} files with problems")
+                            };
+                            let warn = ui.visuals().warn_fg_color;
+                            if icons::icon_text_button(
+                                ui,
+                                icons::Icon::Warning,
+                                warn,
+                                &text,
+                                None,
+                                Some(warn),
+                            )
+                            .on_hover_text("See which and fix them")
+                            .clicked()
+                            {
+                                self.problems.open = true;
+                            }
+                        }
+                        // The free space below: right-click for what the
+                        // list as a whole can do.
+                        if self.config_dir.is_some() {
+                            let room = ui.available_size().max(egui::vec2(0.0, 40.0));
+                            let (_, rest) = ui.allocate_exact_size(room, egui::Sense::click());
+                            rest.context_menu(|ui| list_menu(ui, &mut picked));
+                        }
+                        {
                             for p in picked {
                                 match p {
                                     TreeAction::Connect(s) => {
@@ -5403,12 +5905,19 @@ impl eframe::App for PrzmApp {
                                         self.editor = Some(Editor::new_session(&trail))
                                     }
                                     TreeAction::NewFolder(parent) => {
+                                        // An empty path: the top level.
+                                        let parent = if parent.as_os_str().is_empty() {
+                                            self.sessions.root.dir.clone()
+                                        } else {
+                                            parent
+                                        };
                                         self.name_dialog = Some(NameDialog {
                                             title: "New folder",
                                             dir: parent,
                                             rename: false,
                                             value: String::new(),
                                             error: None,
+                                            color: None,
                                         })
                                     }
                                     TreeAction::RenameFolder(dir, name) => {
@@ -5418,6 +5927,7 @@ impl eframe::App for PrzmApp {
                                             rename: true,
                                             value: name,
                                             error: None,
+                                            color: None,
                                         })
                                     }
                                     TreeAction::FolderSettings(trail) => {
@@ -5430,6 +5940,7 @@ impl eframe::App for PrzmApp {
                                             dir,
                                             name,
                                             sessions,
+                                            keep: true,
                                         })
                                     }
                                     TreeAction::Export(path, name) => self.export(&path, &name),
@@ -5440,27 +5951,36 @@ impl eframe::App for PrzmApp {
                                                 Some(format!("Forgot the password for {account}."));
                                         }
                                     }
+                                    TreeAction::FolderColor(dir, color) => {
+                                        if let Err(e) = przmterm_session::set_folder_color(
+                                            &dir,
+                                            color.as_deref(),
+                                        ) {
+                                            self.notice = Some(format!("Cannot set the colour: {e}"));
+                                        }
+                                        self.reload_sessions();
+                                    }
+                                    TreeAction::ExpandAll(open) => self.tree_expand = Some(open),
+                                    TreeAction::Reload => {
+                                        self.reload_sessions();
+                                        self.notice = Some("Read the sessions again.".into());
+                                    }
+                                    TreeAction::GlobalSettings => {
+                                        if let Some(dir) = &self.config_dir {
+                                            self.editor = Some(Editor::global(dir));
+                                        }
+                                    }
+                                    TreeAction::ShowSettingsFolder => {
+                                        if let Some(dir) = &self.config_dir
+                                            && let Err(e) = desktop::reveal(dir)
+                                        {
+                                            self.notice = Some(format!("Cannot show it: {e}"));
+                                        }
+                                    }
                                 }
                             }
                         }
-                        if !self.sessions.errors.is_empty() {
-                            ui.separator();
-                            ui.colored_label(
-                                ui.visuals().warn_fg_color,
-                                format!(
-                                    "{} settings file(s) with problems",
-                                    self.sessions.errors.len()
-                                ),
-                            )
-                            .on_hover_text(
-                                self.sessions
-                                    .errors
-                                    .iter()
-                                    .map(|e| e.to_string())
-                                    .collect::<Vec<_>>()
-                                    .join("\n"),
-                            );
-                        }
+
                     });
             });
 
@@ -5488,6 +6008,11 @@ impl eframe::App for PrzmApp {
         let vault_names = self.vault.names();
         self.buttons
             .dialogs(&ctx, self.config_dir.as_deref(), vault_names.as_deref());
+        if let Some(dir) = self.config_dir.clone()
+            && let Some(fix) = self.problems.show(&ctx, &self.sessions.errors, &dir)
+        {
+            self.fix_problem(fix, &dir);
+        }
         if std::mem::take(&mut self.buttons.unlock_request) {
             self.vault
                 .ask_unlock("Unlock the vault to list its entries.".into());

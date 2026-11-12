@@ -52,8 +52,8 @@ by default:
 | OS | Directory |
 | --- | --- |
 | Linux | `~/.config/przmterm` |
-| macOS | `~/Library/Application Support/przmterm` |
-| Windows | `%APPDATA%\przmterm` |
+| macOS | `~/Library/Application Support/PrzmTerm` |
+| Windows | `%APPDATA%\PrzmTerm` |
 
 ```text
 przmterm/
@@ -72,8 +72,21 @@ the [configuration reference](CONFIG.md).
 
 Sessions can also be created and edited from the app: **+** next to
 *Sessions*, or right-click a session for Edit, Duplicate and Delete. Right-click
-a folder to add a session or subfolder there, rename it, or edit the settings
-its sessions inherit.
+a folder to add a session or subfolder there, rename it, give it a colour
+(*Color*, also in its settings), edit the settings its sessions inherit, or
+delete it. Right-click the free space below the list for a new session or
+folder at the top level, *Expand all*, *Collapse all*, *Reload*, the
+global settings and the settings folder. Deleting a folder can keep what is in
+it: its sessions and subfolders move up a level and keep the folder's
+settings (written into each), so they connect as before.
+
+When a settings file has a problem (a session without a host, a typo in a
+file edited by hand, a setting from a newer version), a warning under the
+session list says how many. Click it for the list: each file, what is
+wrong, and what can be done: *Edit…* a session that is not listed until it
+is fixed, *Remove them* for unknown settings, *Open* the file, *Show in
+folder* or *Delete* it; *Reload* reads the files again after fixing one by
+hand.
 
 Global defaults live in `defaults.toml` (⚙ next to *Sessions* in the app).
 Changing them asks which existing sessions take the new values: those that
@@ -265,7 +278,14 @@ they move into this tab. To see one session twice, clone it first (*Clone
 Session* in the tab menu). In a split tab the **⋯** menu rearranges the
 panes, moves the active pane to a tab of its own or
 separates them all into tabs again. Each pane shows its session's name, and
-connected sessions have a green dot in the session list.
+connected sessions have a green icon in the session list (a terminal for
+SSH, a screen for Telnet, a cable for serial, a laptop for a local shell).
+
+A tab of a connection starts with an icon: a green plug while connected, a
+red unplugged one once the connection has ended. A tab you are not looking
+at tells you when output comes: a green pulse while it is coming in, then a
+green bell once it stops (the command you left running has finished, say)
+until you open the tab. Split panes show the same icon in their caption.
 
 In a split tab, **⇶ Send to all** in the status bar sends what you type to
 every pane of the tab (after a warning) until you turn it off.
@@ -579,9 +599,13 @@ newer version knows is left out by an older one, which says so (see
 **+** next to *Sessions* › *Import from SecureCRT…* takes SecureCRT's XML
 export (*File › Export Settings*) or session `.ini` files; *Import a SecureCRT
 Sessions folder…* takes the whole `Config/Sessions` folder (macOS:
-`~/Library/Application Support/VanDyke/SecureCRT/Config/Sessions`). Sessions
-land in a `SecureCRT` folder with the same sub-folders; names already used get
-` (2)`. From the command line:
+`~/Library/Application Support/VanDyke/SecureCRT/Config/Sessions`), or the
+`Config` folder itself. A wizard then lists what was found, sessions by
+folder, keyword sets and button groups, each with a box, and marks what is
+already here; for those it skips them (the default: importing again adds
+nothing), replaces them or keeps both (` (2)` after the name). Sessions land
+in a `SecureCRT` folder with the same sub-folders, or the folder named in the
+wizard. From the command line:
 
 ```sh
 przm import-securecrt --dry-run export.xml     # show what would be imported
@@ -591,3 +615,12 @@ przm import-securecrt export.xml --into SecureCRT
 Passwords are not imported: SecureCRT keeps them encrypted, and PrzmTerm asks
 at the first login and can save them in the system keychain. Logon scripts,
 port forwards and RDP or local-shell sessions are listed in the summary.
+
+The button bars come along too: pick `ButtonBarV5.ini` from SecureCRT's
+`Config` folder with the other files, or import the `Sessions` folder (the
+bars next to it are read). Each bar becomes a button group (buttons already
+there are left alone). Send String buttons keep their text and escapes. Send
+Credentials buttons type the password of the [vault](#passwords-keychain-and-vault)
+entry of the same name, so add that entry; like buttons whose label says
+they type a password, they send only at a password prompt (*Only when*).
+Buttons for menu functions, scripts or programs are listed as skipped.

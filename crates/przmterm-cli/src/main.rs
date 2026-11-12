@@ -319,6 +319,13 @@ fn import_securecrt(
     for (name, set) in &report.keyword_sets {
         println!("keyword set {name}: {} rule(s)", set.rules.len());
     }
+    for group in &report.button_groups {
+        println!(
+            "button group {}: {} button(s)",
+            group.name,
+            group.buttons.len()
+        );
+    }
     for (name, why) in &report.skipped {
         println!("skipped {name}: {why}");
     }

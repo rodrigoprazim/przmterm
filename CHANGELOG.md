@@ -7,6 +7,92 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A Debian / Ubuntu package (`…-linux-x86_64.deb`) next to the `.tar.gz`:
+  PrzmTerm in the applications menu with its icon, `przmterm` and `przm` in
+  /usr/bin. A copy installed from it updates itself with the new package,
+  asking for an administrator's password.
+- A Windows setup program (`…-windows-x86_64-setup.exe`) that installs for
+  everyone (needs an administrator) or for the current user only (no
+  administrator), with a Start menu entry, an optional desktop icon, `przm`
+  on the PATH and an uninstaller. A copy installed with it updates itself
+  through the new setup program, the same way it was installed.
+
+- Deleting a folder can keep its sessions (checked by default): they and
+  its subfolders move up a level, with the folder's settings written into
+  each, so they connect as before.
+- A connection's tab starts with an icon: a green plug while connected, a
+  red unplugged plug once it has ended (instead of ○). A tab not looked at
+  shows a green pulse while output comes in and a green bell once it stops
+  (a command finished), until it is opened. Split panes show the same in
+  their caption.
+- An import wizard for SecureCRT: it lists what was found (sessions by
+  folder, keyword sets, button groups) with a box for each, marks what is
+  already here, and asks what to do with that: skip it (the default, so
+  importing again adds nothing), replace it or keep both. The target folder
+  can be changed there.
+- The SecureCRT import brings the button bars too (`ButtonBarV5.ini` in
+  SecureCRT's Config folder, picked with the other files or found next to a
+  Sessions folder): each bar becomes a button group. Send String buttons
+  keep their text; Send Credentials buttons type the vault entry of the same
+  name. Buttons that type a password send only at a password prompt;
+  functions PrzmTerm does not have are listed as skipped.
+- Folder colours: *Color* in a folder's right-click menu, in its settings
+  and in the *New folder* dialog colours its icon and name in the session
+  list (`color` in `folder.toml`; none by default).
+- Right-clicking the free space of the session list: new session, new
+  folder, expand all, collapse all, reload, global settings and showing
+  the settings folder.
+- *Settings problems*: the warning under the session list opens a list of
+  the files with problems, what is wrong with each and what can be done
+  (edit the session, remove unknown settings, open, show or delete the
+  file, reload). A SecureCRT import names the sessions it wrote without a
+  host or serial port.
+- The session list shows each session's kind: a terminal for SSH, a screen
+  for Telnet, a cable for serial, a laptop for a local shell.
+
+### Changed
+
+- PrzmTerm opens maximized.
+- Windows: the desktop app is `PrzmTerm.exe` (`przm.exe` stays). A 1.0.0-rc.3
+  copy unpacked from the `.zip` cannot install this update itself: it
+  leaves the file in Downloads.
+- The settings folder is `PrzmTerm` on macOS and Windows
+  (`~/Library/Application Support/PrzmTerm`, `%APPDATA%\PrzmTerm`); the old
+  `przmterm` folder is renamed when PrzmTerm or `przm` starts. Linux keeps
+  `~/.config/przmterm`.
+- A session open in a tab has a green icon in the session list instead of
+  a green dot before its name.
+- The interface's icons are [Lucide](https://lucide.dev)'s (ISC licence),
+  from a small font, instead of drawn lines; the Log and Buttons buttons
+  in the status bar have icons too.
+
+### Fixed
+
+- The Linux build needed the C library of Ubuntu 26.04 (it was built on
+  the newest Ubuntu): it is built on Ubuntu 22.04 again, so it runs on
+  Ubuntu 22.04, Debian 12 and newer.
+- Importing SecureCRT's Config folder read the session templates
+  (`Default.ini`, `Default_RDP.ini`, `Default_LocalShell.ini`) as sessions:
+  its Sessions folder is now read as the top level, without them, and only
+  the newest button bar file.
+- Small dialogs (new or renamed folder, tab and button group names, script
+  prompts, the master password prompt, vault entries, the master password
+  change, SFTP names and passwords, file transfers, imports, the settings
+  folder, send to group): their text fields reach the dialog's edge, and
+  long messages wrap inside it.
+- A folder made while there were no sessions yet was not shown: the list
+  said "No sessions yet" until a session existed.
+- A session that could not connect (a serial one without a serial port,
+  say) was saved but not listed: the session dialog now says what is
+  missing instead of saving it.
+- Windows: no console window opens with PrzmTerm.
+- A maximized window flickered as the mouse moved on some Windows
+  computers: PrzmTerm now draws with Direct3D 12 on Windows and asks for
+  the integrated graphics where there are two (`WGPU_BACKEND` and
+  `WGPU_POWER_PREF` still choose otherwise).
+
 ## [1.0.0-rc.3] - 2026-11-10
 
 ### Added

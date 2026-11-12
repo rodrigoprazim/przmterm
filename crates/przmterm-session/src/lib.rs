@@ -94,6 +94,41 @@ pub enum SessionError {
     Unknown { path: PathBuf, keys: Vec<String> },
 }
 
+impl SessionError {
+    /// The file the problem is in.
+    pub fn path(&self) -> &Path {
+        match self {
+            SessionError::Io { path, .. }
+            | SessionError::Parse { path, .. }
+            | SessionError::Invalid { path, .. }
+            | SessionError::Unknown { path, .. } => path,
+        }
+    }
+
+    /// What is wrong, without the file's path.
+    pub fn reason(&self) -> String {
+        match self {
+            SessionError::Io { source, .. } => source.to_string(),
+            SessionError::Parse { source, .. } => source.to_string(),
+            SessionError::Invalid { reason, .. } => reason.clone(),
+            SessionError::Unknown { keys, .. } => {
+                format!("Unknown setting(s), ignored: {}", keys.join(", "))
+            }
+        }
+    }
+}
+
+/// Writes a settings file (a session's, a folder's or the defaults) again
+/// with only the settings this version knows: unknown keys go, the rest
+/// stays.
+pub fn drop_unknown_settings(path: &Path) -> Result<(), SessionError> {
+    let settings = read_session_settings(path)?;
+    fs::write(path, settings.to_toml()).map_err(|source| SessionError::Io {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
 /// Reads TOML into `T`, leaving out keys `T` does not know, so a file
 /// written by a newer version still opens. Returns those keys' dotted
 /// paths (`terminal.colour`, `forward.0.via`) to point them out.
@@ -299,6 +334,10 @@ pub struct SessionSettings {
     /// SSH: forward X11 to the local display (`ssh -X`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub x11_forwarding: Option<bool>,
+    /// `folder.toml` only: the folder's colour in the session list,
+    /// `#rrggbb`. Not passed down to what is inside.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
     /// Keyword set used to highlight the output (`<config>/keywords/<name>.toml`);
     /// `""` turns an inherited one off.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -563,6 +602,8 @@ impl SessionSettings {
             auto_reconnect: pick(&self.auto_reconnect, &over.auto_reconnect),
             jump_host: pick(&self.jump_host, &over.jump_host),
             legacy_algorithms: pick(&self.legacy_algorithms, &over.legacy_algorithms),
+            // A folder's own: what is inside does not take it.
+            color: over.color.clone(),
             x11_forwarding: pick(&self.x11_forwarding, &over.x11_forwarding),
             keywords: pick(&self.keywords, &over.keywords),
             logon_script: pick(&self.logon_script, &over.logon_script),
@@ -1394,6 +1435,72 @@ pub fn delete_folder(dir: &Path) -> Result<(), SessionError> {
     })
 }
 
+/// Deletes the folder `dir` but keeps what is in it: its sessions and
+/// subfolders move up into the folder above. They keep this folder's
+/// settings, written into each of them where they set nothing of their own,
+/// so they connect as before. Nothing moves if a name is taken above.
+/// Returns how many sessions and folders moved.
+pub fn dissolve_folder(dir: &Path) -> Result<usize, SessionError> {
+    let invalid = |path: &Path, reason: String| SessionError::Invalid {
+        path: path.to_path_buf(),
+        reason,
+    };
+    let io = |path: &Path| {
+        let path = path.to_path_buf();
+        move |source| SessionError::Io { path, source }
+    };
+    let parent = dir
+        .parent()
+        .ok_or_else(|| invalid(dir, "not a folder".into()))?;
+    let mut own = read_session_settings(&dir.join(FOLDER_FILE))?;
+    // The folder's colour goes with it.
+    own.color = None;
+    let mut items = Vec::new();
+    for entry in fs::read_dir(dir).map_err(io(dir))?.flatten() {
+        let name = entry.file_name();
+        if name == FOLDER_FILE {
+            continue;
+        }
+        let target = parent.join(&name);
+        if target.exists() {
+            return Err(invalid(
+                &target,
+                format!(
+                    "“{}” is already in the folder above",
+                    Path::new(&name)
+                        .file_stem()
+                        .unwrap_or(&name)
+                        .to_string_lossy()
+                ),
+            ));
+        }
+        items.push((entry.path(), target));
+    }
+    let keep_settings = own != SessionSettings::default();
+    for (from, to) in &items {
+        if keep_settings {
+            if from.is_dir() {
+                let sub = read_session_settings(&from.join(FOLDER_FILE))?;
+                write_folder_settings(from, &own.overlay(&sub))?;
+            } else if from.extension().is_some_and(|e| e == "toml") {
+                let session = read_session_settings(from)?;
+                fs::write(from, own.overlay(&session).to_toml()).map_err(io(from))?;
+            }
+        }
+        fs::rename(from, to).map_err(io(from))?;
+    }
+    fs::remove_dir_all(dir).map_err(io(dir))?;
+    Ok(items.len())
+}
+
+/// Sets the colour of the folder `dir` in the session list (`#rrggbb`), or
+/// takes it away; its other settings stay.
+pub fn set_folder_color(dir: &Path, color: Option<&str>) -> Result<(), SessionError> {
+    let mut own = read_session_settings(&dir.join(FOLDER_FILE))?;
+    own.color = color.map(str::to_string);
+    write_folder_settings(dir, &own)
+}
+
 /// Writes a folder's own settings (`folder.toml`); empty settings remove the file.
 pub fn write_folder_settings(dir: &Path, settings: &SessionSettings) -> Result<(), SessionError> {
     let path = dir.join(FOLDER_FILE);
@@ -2061,6 +2168,67 @@ mod tests {
         assert_eq!(target("a"), "a:22");
         assert_eq!(target("b"), "me@b:22", "keeps its host and user");
         assert_eq!(target("c"), "c:22");
+    }
+
+    #[test]
+    fn a_folder_colour_is_its_own() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write(dir, "sessions/Lab/folder.toml", "username = 'ops'");
+        write(dir, "sessions/Lab/Core/r1.toml", "host = 'r1'");
+        let lab = dir.join("sessions/Lab");
+        set_folder_color(&lab, Some("#46a758")).unwrap();
+        let tree = SessionTree::load(dir);
+        let lab_folder = &tree.root.folders[0];
+        assert_eq!(lab_folder.own.color.as_deref(), Some("#46a758"));
+        assert_eq!(lab_folder.own.username.as_deref(), Some("ops"), "kept");
+        assert_eq!(lab_folder.folders[0].own.color, None);
+        assert_eq!(lab_folder.folders[0].settings.color, None, "not inherited");
+        set_folder_color(&lab, None).unwrap();
+        let text = std::fs::read_to_string(lab.join(FOLDER_FILE)).unwrap();
+        assert!(!text.contains("color"), "{text}");
+    }
+
+    #[test]
+    fn dissolving_a_folder_moves_its_contents_up_with_its_settings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write(
+            dir,
+            "sessions/Lab/folder.toml",
+            "username = 'ops'\nport = 2222",
+        );
+        write(dir, "sessions/Lab/r1.toml", "host = 'r1'");
+        write(
+            dir,
+            "sessions/Lab/r2.toml",
+            "host = 'r2'\nusername = 'admin'",
+        );
+        write(dir, "sessions/Lab/Core/folder.toml", "port = 22");
+        write(dir, "sessions/Lab/Core/c1.toml", "host = 'c1'");
+        let sessions = dir.join(SESSIONS_DIR);
+        assert_eq!(dissolve_folder(&sessions.join("Lab")).unwrap(), 3);
+        assert!(!sessions.join("Lab").exists());
+        let r1 = read_session_settings(&sessions.join("r1.toml")).unwrap();
+        assert_eq!(
+            (r1.host.as_deref(), r1.username.as_deref(), r1.port),
+            (Some("r1"), Some("ops"), Some(2222))
+        );
+        let r2 = read_session_settings(&sessions.join("r2.toml")).unwrap();
+        assert_eq!(r2.username.as_deref(), Some("admin"), "its own value stays");
+        let core = read_session_settings(&sessions.join("Core").join(FOLDER_FILE)).unwrap();
+        assert_eq!(
+            (core.username.as_deref(), core.port),
+            (Some("ops"), Some(22))
+        );
+        assert!(sessions.join("Core/c1.toml").is_file());
+
+        // A name taken above: nothing moves.
+        write(dir, "sessions/Edge/r1.toml", "host = 'other'");
+        write(dir, "sessions/Edge/e1.toml", "host = 'e1'");
+        assert!(dissolve_folder(&sessions.join("Edge")).is_err());
+        assert!(sessions.join("Edge/e1.toml").is_file());
+        assert!(!sessions.join("e1.toml").exists());
     }
 
     #[test]

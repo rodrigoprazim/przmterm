@@ -277,6 +277,7 @@ fn base_definitions() -> egui::FontDefinitions {
         }
     }
     crate::theme::add_fonts(&mut fonts);
+    crate::icons::add_font(&mut fonts);
     fonts
 }
 

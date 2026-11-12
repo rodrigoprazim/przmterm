@@ -197,7 +197,7 @@ impl TransferDialog {
             ui.add(
                 egui::TextEdit::singleline(&mut self.remote)
                     .hint_text("home folder")
-                    .desired_width(240.0),
+                    .desired_width(f32::INFINITY),
             );
             ui.end_row();
         } else {
@@ -205,7 +205,7 @@ impl TransferDialog {
             ui.add(
                 egui::TextEdit::singleline(&mut self.remote)
                     .hint_text("/var/log/messages, or a folder")
-                    .desired_width(240.0),
+                    .desired_width(f32::INFINITY),
             );
             ui.end_row();
             self.save_to_row(ui);
@@ -218,7 +218,9 @@ impl TransferDialog {
             ui.add(
                 egui::TextEdit::singleline(&mut self.shell)
                     .hint_text("Default")
-                    .desired_width(160.0),
+                    .desired_width(
+                        ui.available_width() - crate::icons::BUTTON.x - ui.spacing().item_spacing.x,
+                    ),
             );
             let pick_shell = crate::icons::button(ui, crate::icons::Icon::ChevronDown, false)
                 .on_hover_text("Common shells");
@@ -241,7 +243,7 @@ impl TransferDialog {
                 egui::TextEdit::singleline(&mut *self.password)
                     .password(true)
                     .hint_text("if the shell asks for one")
-                    .desired_width(240.0),
+                    .desired_width(f32::INFINITY),
             );
             ui.end_row();
         }
@@ -306,8 +308,9 @@ impl TransferDialog {
             .default_pos(ctx.content_rect().center())
             .collapsible(false)
             .resizable(false)
-            .min_width(420.0)
             .show(ctx, |ui| {
+                // Fields reach the dialog's edge.
+                ui.set_width(420.0);
                 // Send and Receive as tabs, half the row each.
                 ui.horizontal(|ui| {
                     let gap = ui.spacing().item_spacing.x;
@@ -382,7 +385,7 @@ impl TransferDialog {
                                 ui.add(
                                     egui::TextEdit::singleline(&mut self.name)
                                         .hint_text("firmware.bin")
-                                        .desired_width(240.0),
+                                        .desired_width(f32::INFINITY),
                                 );
                                 ui.end_row();
                             }

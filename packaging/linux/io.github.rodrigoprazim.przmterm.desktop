@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=PrzmTerm
+GenericName=Terminal
+Comment=SSH, Telnet and serial terminal
+Exec=przmterm
+Icon=io.github.rodrigoprazim.przmterm
+Terminal=false
+Categories=Network;System;
+Keywords=ssh;telnet;serial;console;terminal;sftp;
+StartupWMClass=io.github.rodrigoprazim.przmterm
