@@ -554,32 +554,45 @@ pub fn parse_button_bars(text: &str, report: &mut Report) {
     }
 }
 
+/// Splits a button's line into its fields: commas separate them, `\,` is
+/// a comma inside a field and `\\` a backslash (so `\\n` in the file is
+/// the escape `\n` of the text to send).
+fn button_fields(line: &str) -> Vec<String> {
+    let mut fields = vec![String::new()];
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        let field = fields.last_mut().expect("one at least");
+        match c {
+            '\\' => match chars.next() {
+                Some(next @ (',' | '\\')) => field.push(next),
+                Some(next) => {
+                    field.push('\\');
+                    field.push(next);
+                }
+                None => field.push('\\'),
+            },
+            ',' => fields.push(String::new()),
+            c => field.push(c),
+        }
+    }
+    fields
+}
+
 /// One button of a bar; `None` (and a note) for what PrzmTerm cannot do.
 fn convert_button(bar: &str, item: &str, report: &mut Report) -> Option<MacroButton> {
-    let parts: Vec<&str> = item.trim().split(',').collect();
+    let parts = button_fields(item.trim_start());
     if parts.len() < 3 {
         return None;
     }
-    // Commas in the argument: the fields after it are always seven.
-    let (function, argument, label, field) = if parts.len() > 9 {
-        let end = parts.len() - 7;
-        (
-            parts[0],
-            parts[1..end].join(","),
-            parts[end],
-            parts.get(end + 2),
-        )
-    } else {
-        (parts[0], parts[1].to_string(), parts[2], parts.get(4))
-    };
+    let (function, argument, label) = (&parts[0], &parts[1], &parts[2]);
+    let field = parts.get(4);
     let label = if label.trim().is_empty() {
         argument.chars().take(20).collect()
     } else {
         label.trim().to_string()
     };
     let shown = format!("{bar}/{label}");
-    // The file doubles backslashes: `\\n` is the escape `\n`.
-    let text = argument.replace("\\\\", "\\");
+    let text = argument.clone();
     match function.trim() {
         "SEND" => {
             let mut button = MacroButton {
@@ -990,7 +1003,7 @@ CREDENTIALS,LAB_ADMIN,Lab login,,password,1,1,,\r\n \
 MENU,MENU_TAB_CLONE,Clone,,,0,1,,\r\n\
 Z:\"Cisco\"=00000002\r\n \
 SEND,show running-config\\\\n,show run,,,0,1,,\r\n \
-SEND,echo a,b\\\\r\\\\p,echo,,,0,1,,\r\n";
+SEND,teste\\,virgula\\\\r\\\\p,eco\\, dois,,,0,1,,\r\n";
         let mut r = Report::default();
         parse_ini("ButtonBarV5", ini, Vec::new(), &mut r);
         let names: Vec<&str> = r.button_groups.iter().map(|g| g.name.as_str()).collect();
@@ -1004,8 +1017,8 @@ SEND,echo a,b\\\\r\\\\p,echo,,,0,1,,\r\n";
         let cisco = &r.button_groups[1].buttons;
         assert_eq!(cisco[0].send, "show running-config\\n");
         assert_eq!(cisco[0].only_when, "");
-        assert_eq!(cisco[1].send, "echo a,b\\r\\p", "a comma in the text");
-        assert_eq!(cisco[1].label, "echo");
+        assert_eq!(cisco[1].send, "teste,virgula\\r\\p", "`\\,` is a comma");
+        assert_eq!(cisco[1].label, "eco, dois");
         assert!(
             r.skipped
                 .iter()
