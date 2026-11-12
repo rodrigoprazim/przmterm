@@ -148,10 +148,36 @@ jobs:
               ;;
           esac
 
+      # The setup program: for everyone or for the current user only
+      # (packaging/windows/przmterm.iss), with the binaries signed above.
+      # It is not signed itself yet.
+      - name: Setup program (Windows)
+        if: startsWith(matrix.name, 'windows')
+        shell: pwsh
+        run: |
+          $version = "${{ needs.verify.outputs.version }}"
+          $numeric = ($version -split '[-+]')[0]
+          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --no-progress -y
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          & $iscc /Q "/DAppVersion=$version" "/DNumericVersion=$numeric" `
+            "/DBinDir=$PWD\windows-bin" "/DRepoDir=$PWD" "/DOutputDir=$PWD" `
+            packaging\windows\przmterm.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "SETUP=przmterm-$version-windows-x86_64-setup.exe" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
       - uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.name }}
           path: ${{ env.ASSET }}
+
+      - uses: actions/upload-artifact@v7
+        if: startsWith(matrix.name, 'windows')
+        with:
+          name: release-${{ matrix.name }}-setup
+          path: ${{ env.SETUP }}
 
   publish:
     name: Publish release

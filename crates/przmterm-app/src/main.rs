@@ -1,5 +1,9 @@
 //! PrzmTerm desktop application.
 
+// A window program on Windows: no console window opens with it. Debug
+// builds keep the console, for the logs.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod appmenu;
 mod atlas;
 mod buttonbar;
@@ -34,6 +38,26 @@ use crate::editor::{Editor, EditorResult};
 use crate::pane::{Env, Pane};
 use przmterm_connect::Keychain;
 
+/// The graphics setup. A terminal needs little of the GPU, so the
+/// integrated one is asked for: on a laptop with two, drawing on the fast one
+/// and showing on the other made a maximized window flicker. On Windows,
+/// Direct3D 12 rather than Vulkan, for the same reason. `WGPU_BACKEND` and
+/// `WGPU_POWER_PREF` still choose otherwise.
+fn wgpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
+    use eframe::egui_wgpu::{WgpuConfiguration, WgpuSetupCreateNew, wgpu};
+    let mut setup = WgpuSetupCreateNew::without_display_handle();
+    setup.power_preference =
+        wgpu::PowerPreference::from_env().unwrap_or(wgpu::PowerPreference::LowPower);
+    if cfg!(windows) {
+        setup.instance_descriptor.backends =
+            wgpu::Backends::from_env().unwrap_or(wgpu::Backends::DX12);
+    }
+    WgpuConfiguration {
+        wgpu_setup: setup.into(),
+        ..Default::default()
+    }
+}
+
 fn main() -> eframe::Result {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -51,6 +75,7 @@ fn main() -> eframe::Result {
                 eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/icon-256.png"))
                     .unwrap_or_default(),
             ),
+        wgpu_options: wgpu_options(),
         ..Default::default()
     };
     eframe::run_native(
@@ -2556,11 +2581,23 @@ impl PrzmApp {
                                 });
                             }
                             Some(update::Stage::Installed(start)) => {
-                                ui.strong(format!("PrzmTerm {} is installed.", found.version));
-                                ui.weak(
-                                    "Restarting closes the open sessions. Until then this \
-                                     version keeps running.",
-                                );
+                                if update::is_setup(start) {
+                                    ui.strong(format!(
+                                        "PrzmTerm {} is ready to install.",
+                                        found.version
+                                    ));
+                                    ui.weak(
+                                        "Restarting closes the open sessions and installs it \
+                                         (for everyone, Windows asks for an administrator). \
+                                         Until then this version keeps running.",
+                                    );
+                                } else {
+                                    ui.strong(format!("PrzmTerm {} is installed.", found.version));
+                                    ui.weak(
+                                        "Restarting closes the open sessions. Until then this \
+                                         version keeps running.",
+                                    );
+                                }
                                 ui.add_space(6.0);
                                 ui.horizontal(|ui| {
                                     ui.with_layout(
@@ -4921,6 +4958,9 @@ impl eframe::App for PrzmApp {
                         done * 100 / total.max(1)
                     )),
                     update::Stage::Installing => Some(format!("Installing {}…", d.version)),
+                    update::Stage::Installed(start) if update::is_setup(&start) => {
+                        Some(format!("{} ready: restart to install", d.version))
+                    }
                     update::Stage::Installed(_) => {
                         Some(format!("{} installed: restart", d.version))
                     }

@@ -7,6 +7,22 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A Windows setup program (`…-windows-x86_64-setup.exe`) that installs for
+  everyone (needs an administrator) or for the current user only (no
+  administrator), with a Start menu entry, an optional desktop icon, `przm`
+  on the PATH and an uninstaller. A copy installed with it updates itself
+  through the new setup program, the same way it was installed.
+
+### Fixed
+
+- Windows: no console window opens with PrzmTerm.
+- A maximized window flickered as the mouse moved on some Windows
+  computers: PrzmTerm now draws with Direct3D 12 on Windows and asks for
+  the integrated graphics where there are two (`WGPU_BACKEND` and
+  `WGPU_POWER_PREF` still choose otherwise).
+
 ## [1.0.0-rc.3] - 2026-11-10
 
 ### Added

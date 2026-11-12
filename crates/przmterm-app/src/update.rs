@@ -42,17 +42,44 @@ pub struct Asset {
     pub size: u64,
 }
 
-/// The end of the release file's name for this system.
-fn asset_suffix() -> Option<&'static str> {
+/// The end of the Windows setup program's name.
+const SETUP_SUFFIX: &str = "-windows-x86_64-setup.exe";
+
+/// The ends of the release file's name for this system, the best first.
+fn asset_suffixes() -> &'static [&'static str] {
     if cfg!(target_os = "macos") {
-        Some("-macos-universal.dmg")
+        &["-macos-universal.dmg"]
     } else if cfg!(all(windows, target_arch = "x86_64")) {
-        Some("-windows-x86_64.zip")
+        if installed_by_setup() {
+            &[SETUP_SUFFIX, "-windows-x86_64.zip"]
+        } else {
+            &["-windows-x86_64.zip"]
+        }
     } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-        Some("-linux-x86_64.tar.gz")
+        &["-linux-x86_64.tar.gz"]
     } else {
-        None
+        &[]
     }
+}
+
+/// The folder this program runs from.
+fn exe_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
+    Some(exe.parent()?.to_path_buf())
+}
+
+/// Windows: this copy was installed by the setup program, whose
+/// uninstaller lies next to it.
+fn installed_by_setup() -> bool {
+    cfg!(windows) && exe_dir().is_some_and(|d| d.join("unins000.exe").is_file())
+}
+
+/// Whether `program` is a setup program to run rather than PrzmTerm itself.
+pub fn is_setup(program: &Path) -> bool {
+    program
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.ends_with(SETUP_SUFFIX))
 }
 
 /// What a check came to.
@@ -98,8 +125,9 @@ fn newest(current: &str, releases: &[Release]) -> Option<Found> {
                 version: version.to_string(),
                 url: r.html_url.clone(),
                 notes: r.body.clone().unwrap_or_default().trim().to_string(),
-                asset: asset_suffix()
-                    .and_then(|suffix| r.assets.iter().find(|a| a.name.ends_with(suffix)).cloned()),
+                asset: asset_suffixes()
+                    .iter()
+                    .find_map(|suffix| r.assets.iter().find(|a| a.name.ends_with(suffix)).cloned()),
                 sums: named("SHA256SUMS.txt")
                     .zip(named("SHA256SUMS.txt.asc"))
                     .map(|(sums, sig)| (sums.url.clone(), sig.url.clone())),
@@ -176,6 +204,9 @@ pub enum Place {
     Bundle(PathBuf),
     /// Windows and Linux: the folder of `przmterm` and `przm`.
     Folder(PathBuf),
+    /// Windows: the folder the setup program installed into; the new
+    /// setup program installs over it.
+    Setup(PathBuf),
 }
 
 /// Where this copy would be updated, or `None` to only download: copies
@@ -183,13 +214,15 @@ pub enum Place {
 /// (the release workflow sets `PRZMTERM_RELEASE_BUILD`).
 pub fn place() -> Option<Place> {
     option_env!("PRZMTERM_RELEASE_BUILD")?;
-    let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
+    let dir = exe_dir()?;
     if cfg!(target_os = "macos") {
         // …/PrzmTerm.app/Contents/MacOS/przmterm
-        let bundle = exe.parent()?.parent()?.parent()?;
+        let bundle = dir.parent()?.parent()?;
         (bundle.extension()? == "app").then(|| Place::Bundle(bundle.to_path_buf()))
+    } else if installed_by_setup() {
+        Some(Place::Setup(dir))
     } else {
-        Some(Place::Folder(exe.parent()?.to_path_buf()))
+        Some(Place::Folder(dir))
     }
 }
 
@@ -201,7 +234,9 @@ pub enum Stage {
         total: u64,
     },
     Installing,
-    /// Installed: start the new version from here.
+    /// Installed: start the new version from here. On Windows, when the
+    /// setup program installed this copy, the new setup program (see
+    /// [`is_setup`]), which installs it once this copy has quit.
     Installed(PathBuf),
     /// Not installed (a development build, or no right to replace the
     /// files): the checked file, left in Downloads and opened.
@@ -373,6 +408,15 @@ fn install(file: &Path, place: &Place, work: &Path) -> Result<PathBuf, String> {
     match place {
         Place::Bundle(bundle) => install_bundle(file, bundle, work),
         Place::Folder(dir) => install_folder(file, dir),
+        Place::Setup(_) if is_setup(file) => {
+            // Kept out of `work`, which goes; removed at the next start.
+            let setup = std::env::temp_dir().join(file.file_name().ok_or("no file name")?);
+            std::fs::copy(file, &setup).map_err(|e| format!("{}: {e}", setup.display()))?;
+            Ok(setup)
+        }
+        // A release without a setup program: its files, if they can be
+        // written.
+        Place::Setup(dir) => install_folder(file, dir),
     }
 }
 
@@ -543,10 +587,23 @@ fn writable(dir: &Path) -> Result<(), String> {
         .map_err(|e| format!("cannot write in {}: {e}", dir.display()))
 }
 
-/// Deletes what an update on Windows left behind (`….exe.old`).
+/// Deletes what an update on Windows left behind (`….exe.old`, the setup
+/// program).
 pub fn clean_up() {
     if !cfg!(windows) {
         return;
+    }
+    if let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let ours = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("przmterm-"));
+            if ours && is_setup(&path) {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
     }
     if let Some(dir) = std::env::current_exe()
         .ok()
@@ -561,7 +618,31 @@ pub fn clean_up() {
 /// Starts `program` (the new version) once this process has ended.
 pub fn start_after_exit(program: &Path) -> Result<(), String> {
     let mut cmd;
-    if cfg!(windows) {
+    if cfg!(windows) && is_setup(program) {
+        // Installs quietly over this copy, for everyone or for this user as
+        // before (Windows asks for an administrator for everyone), closes
+        // what still runs and starts the new version.
+        let for_user = exe_dir()
+            .zip(std::env::var_os("LOCALAPPDATA").map(PathBuf::from))
+            .is_some_and(|(dir, local)| {
+                local
+                    .canonicalize()
+                    .is_ok_and(|local| dir.starts_with(local))
+            });
+        cmd = std::process::Command::new(program);
+        cmd.args([
+            "/SILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+            "/CLOSEAPPLICATIONS",
+            "/SP-",
+            if for_user {
+                "/CURRENTUSER"
+            } else {
+                "/ALLUSERS"
+            },
+        ]);
+    } else if cfg!(windows) {
         // Its files were renamed out of the way: it can start right away.
         cmd = std::process::Command::new(program);
     } else {
@@ -601,6 +682,7 @@ mod tests {
             assets: [
                 "-macos-universal.dmg",
                 "-windows-x86_64.zip",
+                SETUP_SUFFIX,
                 "-linux-x86_64.tar.gz",
             ]
             .iter()
@@ -639,7 +721,7 @@ mod tests {
         // The notes, this system's file and the checksums come along.
         let found = newest("1.0.0", &list).unwrap();
         assert_eq!(found.notes, "notes of v1.0.1");
-        if let Some(suffix) = asset_suffix() {
+        if let Some(suffix) = asset_suffixes().first() {
             assert!(found.asset.unwrap().name.ends_with(suffix));
         }
         assert_eq!(
@@ -650,6 +732,17 @@ mod tests {
         let mut draft = release("v9.0.0", false);
         draft.draft = true;
         assert_eq!(newest("1.0.0", &[draft]), None);
+    }
+
+    #[test]
+    fn tells_the_setup_program_apart() {
+        assert!(is_setup(Path::new(
+            "C:/Temp/przmterm-1.0.0-rc.4-windows-x86_64-setup.exe"
+        )));
+        assert!(!is_setup(Path::new("C:/PrzmTerm/przmterm.exe")));
+        assert!(!is_setup(Path::new(
+            "przmterm-1.0.0-rc.4-windows-x86_64.zip"
+        )));
     }
 
     #[test]

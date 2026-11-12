@@ -27,8 +27,12 @@ PrzmTerm, delete what you installed, and the settings folder if you no
 longer want your sessions (see
 [Sessions and folders](docs/GUIDE.md#sessions-and-folders)).
 
-- **Windows:** unpack the `.zip` and run `przmterm.exe` (the desktop app)
-  or `przm.exe` (the command line). The executables are not signed yet (see
+- **Windows:** run the `-setup.exe`. It asks whether to install for
+  everyone (Program Files, needs an administrator) or only for you (no
+  administrator needed), adds PrzmTerm to the Start menu and can put
+  `przm` (the command line) on the PATH; it is removed in *Settings › Apps*.
+  Or unpack the `.zip` anywhere and run `przmterm.exe` (the desktop app)
+  or `przm.exe`. The files are not signed yet (see
   [Code signing policy](#code-signing-policy)), so the first time Windows
   shows *Windows protected your PC*: choose *More info › Run anyway*.
 - **macOS:** open the `.dmg` and drag PrzmTerm to Applications. The app is
@@ -47,7 +51,9 @@ looks for a newer release on GitHub; PrzmTerm also looks when it starts and
 shows a newer version in the status bar. The window shows what is new.
 *Install and Restart* downloads the release, checks it against the signed
 checksums below, and replaces this copy: PrzmTerm.app on macOS, the
-programs in their folder elsewhere. When it cannot (no right to write
+programs in their folder elsewhere; a copy installed with the Windows
+setup program is updated by the new one, for everyone or for you as
+before. When it cannot (no right to write
 there), the checked file is left in Downloads and opened. *Skip This
 Version* stops a release from being announced at start. Nothing is
 downloaded or installed until you click.
