@@ -52,8 +52,8 @@ by default:
 | OS | Directory |
 | --- | --- |
 | Linux | `~/.config/przmterm` |
-| macOS | `~/Library/Application Support/przmterm` |
-| Windows | `%APPDATA%\przmterm` |
+| macOS | `~/Library/Application Support/PrzmTerm` |
+| Windows | `%APPDATA%\PrzmTerm` |
 
 ```text
 przmterm/
@@ -265,7 +265,7 @@ they move into this tab. To see one session twice, clone it first (*Clone
 Session* in the tab menu). In a split tab the **⋯** menu rearranges the
 panes, moves the active pane to a tab of its own or
 separates them all into tabs again. Each pane shows its session's name, and
-connected sessions have a green dot in the session list.
+connected sessions have a green icon in the session list.
 
 In a split tab, **⇶ Send to all** in the status bar sends what you type to
 every pane of the tab (after a warning) until you turn it off.

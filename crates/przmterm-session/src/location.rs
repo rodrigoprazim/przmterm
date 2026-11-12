@@ -1,8 +1,8 @@
 //! Where PrzmTerm keeps its settings.
 //!
 //! By default that is the system's folder for application settings
-//! (`~/.config/przmterm`, `~/Library/Application Support/przmterm`,
-//! `%APPDATA%\przmterm`). Another folder can be chosen, a synced one for
+//! (`~/.config/przmterm`, `~/Library/Application Support/PrzmTerm`,
+//! `%APPDATA%\PrzmTerm`). Another folder can be chosen, a synced one for
 //! instance: its path is then kept in `location.toml` in the default folder,
 //! which is the only file left there. `$PRZMTERM_HOME` overrides both.
 
@@ -21,9 +21,51 @@ struct Location {
     path: PathBuf,
 }
 
-/// The system's settings folder for PrzmTerm.
+/// The settings folder's name: as the app is called on macOS and Windows,
+/// lower case on Linux as other programs there.
+const DIR_NAME: &str = if cfg!(any(target_os = "macos", windows)) {
+    "PrzmTerm"
+} else {
+    "przmterm"
+};
+
+/// Its name before 1.0.0-rc.4 everywhere.
+const OLD_DIR_NAME: &str = "przmterm";
+
+/// The system's settings folder for PrzmTerm. A folder of the old name is
+/// renamed first.
 pub fn standard_dir() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("przmterm"))
+    let parent = dirs::config_dir()?;
+    rename_old(&parent, OLD_DIR_NAME, DIR_NAME);
+    Some(parent.join(DIR_NAME))
+}
+
+/// Renames `parent/old` to `parent/new` when only `old` is there. On the
+/// usual macOS and Windows disks, where case does not count, both names
+/// are the same folder: this changes how it is shown, and older copies
+/// still running keep finding it.
+fn rename_old(parent: &Path, old: &str, new: &str) {
+    if old == new {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(parent) else {
+        return;
+    };
+    let names: Vec<String> = entries
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    if names.iter().any(|n| n == new) || !names.iter().any(|n| n == old) {
+        return;
+    }
+    // Through another name: a rename that only changes case may be
+    // refused.
+    let between = parent.join(format!("{new}.renaming"));
+    if fs::rename(parent.join(old), &between).is_ok()
+        && fs::rename(&between, parent.join(new)).is_err()
+    {
+        let _ = fs::rename(&between, parent.join(old));
+    }
 }
 
 /// `$PRZMTERM_HOME`, when set: it wins over any choice.
@@ -210,6 +252,32 @@ mod tests {
         assert_eq!(contents(dir), Contents::Other);
         fs::create_dir(dir.join(crate::SESSIONS_DIR)).unwrap();
         assert_eq!(contents(dir), Contents::Settings);
+    }
+
+    #[test]
+    fn renames_the_old_folder_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let parent = tmp.path();
+        fs::create_dir_all(parent.join("przmterm/sessions")).unwrap();
+        fs::write(parent.join("przmterm/defaults.toml"), "port = 2").unwrap();
+        rename_old(parent, "przmterm", "PrzmTerm");
+        assert!(parent.join("PrzmTerm/sessions").is_dir());
+        assert_eq!(
+            fs::read_to_string(parent.join("PrzmTerm/defaults.toml")).unwrap(),
+            "port = 2"
+        );
+        let names: Vec<_> = fs::read_dir(parent)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(names, ["PrzmTerm"]);
+        // Done: nothing more happens.
+        rename_old(parent, "przmterm", "PrzmTerm");
+        assert!(parent.join("PrzmTerm/defaults.toml").is_file());
+        // Nothing to rename: nothing is made.
+        let empty = tempfile::tempdir().unwrap();
+        rename_old(empty.path(), "przmterm", "PrzmTerm");
+        assert_eq!(fs::read_dir(empty.path()).unwrap().count(), 0);
     }
 
     #[test]

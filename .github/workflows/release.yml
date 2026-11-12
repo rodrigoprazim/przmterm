@@ -90,7 +90,9 @@ jobs:
         shell: bash
         run: |
           mkdir windows-bin
-          cp target/${{ matrix.target }}/release/przmterm.exe target/${{ matrix.target }}/release/przm.exe windows-bin/
+          # The desktop app is PrzmTerm.exe on Windows, as it is named there.
+          cp target/${{ matrix.target }}/release/przmterm.exe windows-bin/PrzmTerm.exe
+          cp target/${{ matrix.target }}/release/przm.exe windows-bin/
 
       - name: Upload the Windows binaries for signing
         id: unsigned
@@ -125,7 +127,7 @@ jobs:
           cp README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE "$dir/"
           case "${{ matrix.name }}" in
             windows-*)
-              cp windows-bin/przmterm.exe windows-bin/przm.exe "$dir/"
+              cp windows-bin/PrzmTerm.exe windows-bin/przm.exe "$dir/"
               7z a "$dir.zip" "$dir" > /dev/null
               echo "ASSET=$dir.zip" >> "$GITHUB_ENV"
               ;;

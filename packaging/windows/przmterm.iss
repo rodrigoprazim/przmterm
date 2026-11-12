@@ -1,6 +1,6 @@
 ; The Windows setup program (Inno Setup 6.3 or newer).
 ;
-; Built by the release workflow:
+; Built by the release workflow (which names the desktop app PrzmTerm.exe):
 ;   iscc /DAppVersion=1.0.0 /DNumericVersion=1.0.0 /DBinDir=<folder of the
 ;        two .exe> /DRepoDir=<checkout> /DOutputDir=<where the setup goes>
 ;        packaging\windows\przmterm.iss
@@ -52,7 +52,7 @@ CloseApplications=yes
 RestartApplications=no
 ChangesEnvironment=yes
 SetupIconFile={#RepoDir}\assets\icon.ico
-UninstallDisplayIcon={app}\przmterm.exe
+UninstallDisplayIcon={app}\PrzmTerm.exe
 UninstallDisplayName=PrzmTerm
 WizardStyle=modern
 Compression=lzma2/max
@@ -73,7 +73,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "addtopath"; Description: "{cm:AddToPath}"
 
 [Files]
-Source: "{#BinDir}\przmterm.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BinDir}\PrzmTerm.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BinDir}\przm.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoDir}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoDir}\CHANGELOG.md"; DestDir: "{app}"; Flags: ignoreversion
@@ -81,17 +81,17 @@ Source: "{#RepoDir}\LICENSE-MIT"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoDir}\LICENSE-APACHE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\PrzmTerm"; Filename: "{app}\przmterm.exe"
-Name: "{autodesktop}\PrzmTerm"; Filename: "{app}\przmterm.exe"; Tasks: desktopicon
+Name: "{autoprograms}\PrzmTerm"; Filename: "{app}\PrzmTerm.exe"
+Name: "{autodesktop}\PrzmTerm"; Filename: "{app}\PrzmTerm.exe"; Tasks: desktopicon
 
 [Registry]
 ; HKA: the machine's PATH for everyone, the user's PATH for one user.
 Root: HKA; Subkey: "{code:EnvKey}"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Tasks: addtopath; Check: NeedsAddPath(ExpandConstant('{app}'))
 
 [Run]
-Filename: "{app}\przmterm.exe"; Description: "{cm:LaunchProgram,PrzmTerm}"; Flags: nowait postinstall skipifsilent runasoriginaluser
+Filename: "{app}\PrzmTerm.exe"; Description: "{cm:LaunchProgram,PrzmTerm}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 ; An update from PrzmTerm itself runs silently: start the new version.
-Filename: "{app}\przmterm.exe"; Flags: nowait runasoriginaluser; Check: WizardSilent
+Filename: "{app}\PrzmTerm.exe"; Flags: nowait runasoriginaluser; Check: WizardSilent
 
 [Code]
 function EnvKey(Param: String): String;

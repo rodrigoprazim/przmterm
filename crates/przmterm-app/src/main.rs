@@ -4486,7 +4486,15 @@ fn session_matches(s: &Session, filter: &str) -> bool {
 /// One row of the session list: a grip while dragging is on, a folder icon
 /// for folders, then the text. It reaches the list's right edge, so it is
 /// easy to hit and to drop onto.
-fn tree_row(ui: &mut egui::Ui, drag: bool, folder: bool, text: egui::WidgetText) -> egui::Response {
+/// A row of the session list; `open`: a session connected in a tab, whose
+/// icon is green.
+fn tree_row(
+    ui: &mut egui::Ui,
+    drag: bool,
+    folder: bool,
+    open: bool,
+    text: egui::WidgetText,
+) -> egui::Response {
     let galley = text.into_galley(
         ui,
         Some(egui::TextWrapMode::Extend),
@@ -4532,11 +4540,18 @@ fn tree_row(ui: &mut egui::Ui, drag: bool, folder: bool, text: egui::WidgetText)
         if folder {
             icons::draw(painter, icons::Icon::Folder, icon_rect(x), color);
         } else {
+            let icon_color = if !open {
+                ui.visuals().weak_text_color()
+            } else if ui.visuals().dark_mode {
+                egui::Color32::from_rgb(70, 190, 100)
+            } else {
+                egui::Color32::from_rgb(30, 140, 60)
+            };
             icons::draw(
                 painter,
                 icons::Icon::Session,
                 icon_rect(x).shrink2(egui::vec2(1.0, 0.0)),
-                ui.visuals().weak_text_color(),
+                icon_color,
             );
         }
         x += ICON + 2.0;
@@ -4585,7 +4600,9 @@ fn folder_ui(
             state.set_open(true); // show every match while searching
         }
         let (_, header, _) = state
-            .show_header(ui, |ui| tree_row(ui, drag, true, f.name.clone().into()))
+            .show_header(ui, |ui| {
+                tree_row(ui, drag, true, false, f.name.clone().into())
+            })
             .body(|ui| folder_ui(ui, f, picked, drag, filter, open));
         let r = header.inner;
         // A click on the name opens or closes it, like the arrow.
@@ -4666,26 +4683,9 @@ fn folder_ui(
         if !session_matches(s, filter) {
             continue;
         }
-        // Sessions connected in a tab get a green dot.
+        // Sessions connected in a tab get a green icon.
         let is_open = open.contains(&s.path);
-        let text: egui::WidgetText = if is_open {
-            let mut job = egui::text::LayoutJob::default();
-            let font = egui::TextStyle::Body.resolve(ui.style());
-            job.append(
-                "● ",
-                0.0,
-                egui::TextFormat::simple(font.clone(), egui::Color32::from_rgb(70, 190, 100)),
-            );
-            job.append(
-                &s.name,
-                0.0,
-                egui::TextFormat::simple(font, ui.visuals().text_color()),
-            );
-            job.into()
-        } else {
-            s.name.clone().into()
-        };
-        let response = tree_row(ui, drag, false, text);
+        let response = tree_row(ui, drag, false, is_open, s.name.clone().into());
         if drag {
             drag_item(ui, &response, &s.path, &s.name);
         }

@@ -15,6 +15,18 @@ All notable changes to PrzmTerm are recorded here. The format follows
   on the PATH and an uninstaller. A copy installed with it updates itself
   through the new setup program, the same way it was installed.
 
+### Changed
+
+- Windows: the desktop app is `PrzmTerm.exe` (`przm.exe` stays). A 1.0.0-rc.3
+  copy unpacked from the `.zip` cannot install this update itself: it
+  leaves the file in Downloads.
+- The settings folder is `PrzmTerm` on macOS and Windows
+  (`~/Library/Application Support/PrzmTerm`, `%APPDATA%\PrzmTerm`); the old
+  `przmterm` folder is renamed when PrzmTerm or `przm` starts. Linux keeps
+  `~/.config/przmterm`.
+- A session open in a tab has a green icon in the session list instead of
+  a green dot before its name.
+
 ### Fixed
 
 - Windows: no console window opens with PrzmTerm.

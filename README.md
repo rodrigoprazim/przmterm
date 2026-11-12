@@ -31,7 +31,7 @@ longer want your sessions (see
   everyone (Program Files, needs an administrator) or only for you (no
   administrator needed), adds PrzmTerm to the Start menu and can put
   `przm` (the command line) on the PATH; it is removed in *Settings › Apps*.
-  Or unpack the `.zip` anywhere and run `przmterm.exe` (the desktop app)
+  Or unpack the `.zip` anywhere and run `PrzmTerm.exe` (the desktop app)
   or `przm.exe`. The files are not signed yet (see
   [Code signing policy](#code-signing-policy)), so the first time Windows
   shows *Windows protected your PC*: choose *More info › Run anyway*.

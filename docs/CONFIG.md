@@ -30,8 +30,11 @@ PrzmTerm looks for the settings folder (`<config>` below) in this order:
    | System | Folder |
    | --- | --- |
    | Linux | `~/.config/przmterm` |
-   | macOS | `~/Library/Application Support/przmterm` |
-   | Windows | `%APPDATA%\przmterm` |
+   | macOS | `~/Library/Application Support/PrzmTerm` |
+   | Windows | `%APPDATA%\PrzmTerm` |
+
+   Before 1.0.0-rc.4 it was `przmterm` on macOS and Windows too; that
+   folder is renamed `PrzmTerm` when PrzmTerm or `przm` starts.
 
 ```text
 <config>/

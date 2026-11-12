@@ -485,7 +485,7 @@ fn install_bundle(dmg: &Path, bundle: &Path, work: &Path) -> Result<PathBuf, Str
 
 /// The programs a release carries, by their file names.
 const PROGRAMS: [&str; 2] = if cfg!(windows) {
-    ["przmterm.exe", "przm.exe"]
+    ["PrzmTerm.exe", "przm.exe"]
 } else {
     ["przmterm", "przm"]
 };
@@ -498,7 +498,12 @@ fn install_folder(archive: &Path, dir: &Path) -> Result<PathBuf, String> {
     writable(dir)?;
     let mut new = Vec::new();
     unpack(archive, &mut |name, data| {
-        let Some(program) = PROGRAMS.iter().find(|p| **p == name) else {
+        // Windows does not tell `przmterm.exe` (before 1.0.0-rc.4) from
+        // `PrzmTerm.exe`.
+        let Some(program) = PROGRAMS
+            .iter()
+            .find(|p| **p == name || (cfg!(windows) && p.eq_ignore_ascii_case(name)))
+        else {
             return Ok(());
         };
         let path = dir.join(format!("{program}.new"));
@@ -739,7 +744,7 @@ mod tests {
         assert!(is_setup(Path::new(
             "C:/Temp/przmterm-1.0.0-rc.4-windows-x86_64-setup.exe"
         )));
-        assert!(!is_setup(Path::new("C:/PrzmTerm/przmterm.exe")));
+        assert!(!is_setup(Path::new("C:/PrzmTerm/PrzmTerm.exe")));
         assert!(!is_setup(Path::new(
             "przmterm-1.0.0-rc.4-windows-x86_64.zip"
         )));
