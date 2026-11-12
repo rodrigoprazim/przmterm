@@ -23,6 +23,11 @@ All notable changes to PrzmTerm are recorded here. The format follows
   shows a green pulse while output comes in and a green bell once it stops
   (a command finished), until it is opened. Split panes show the same in
   their caption.
+- An import wizard for SecureCRT: it lists what was found (sessions by
+  folder, keyword sets, button groups) with a box for each, marks what is
+  already here, and asks what to do with that: skip it (the default, so
+  importing again adds nothing), replace it or keep both. The target folder
+  can be changed there.
 - The SecureCRT import brings the button bars too (`ButtonBarV5.ini` in
   SecureCRT's Config folder, picked with the other files or found next to a
   Sessions folder): each bar becomes a button group. Send String buttons

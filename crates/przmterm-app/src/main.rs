@@ -12,6 +12,7 @@ mod editor;
 mod fonts;
 mod grid;
 mod icons;
+mod importwizard;
 mod input;
 mod keymap;
 mod keywords;
@@ -753,6 +754,8 @@ struct PrzmApp {
     status: Option<(String, std::time::Instant)>,
     /// What the last SecureCRT import did, shown until dismissed.
     import_result: Option<Vec<String>>,
+    /// What a SecureCRT import found, to choose from.
+    import_wizard: Option<importwizard::ImportWizard>,
     /// The keyword set editor, when open.
     keyword_editor: Option<keywords::KeywordEditor>,
     /// The password vault and its windows.
@@ -938,6 +941,7 @@ impl PrzmApp {
             notice: None,
             status: None,
             import_result: None,
+            import_wizard: None,
             keyword_editor: None,
             vault: vault::VaultUi::new(),
             after_unlock: None,
@@ -2543,6 +2547,7 @@ impl PrzmApp {
             || self.name_dialog.is_some()
             || self.confirm_delete.is_some()
             || self.import_result.is_some()
+            || self.import_wizard.is_some()
             || self.keyword_editor.is_some()
             || self.buttons.modal()
             || self.confirm_broadcast
@@ -3537,48 +3542,83 @@ impl PrzmApp {
         }
     }
 
-    /// Imports SecureCRT sessions into the `SecureCRT` folder and shows what
-    /// happened.
+    /// Reads what was picked in SecureCRT's files and opens the import
+    /// wizard on it.
     fn import_securecrt(&mut self, paths: &[PathBuf]) {
+        let Some(dir) = self.config_dir.clone() else {
+            return;
+        };
+        match przmterm_session::securecrt::parse_any(paths) {
+            Ok(report)
+                if report.sessions.is_empty()
+                    && report.keyword_sets.is_empty()
+                    && report.button_groups.is_empty() =>
+            {
+                let mut lines = vec!["Nothing to import was found there.".to_string()];
+                lines.extend(
+                    report
+                        .skipped
+                        .iter()
+                        .map(|(name, why)| format!("Skipped {name}: {why}.")),
+                );
+                self.import_result = Some(lines);
+            }
+            Ok(report) => {
+                self.import_wizard =
+                    Some(importwizard::ImportWizard::new(report, &dir, IMPORT_FOLDER));
+            }
+            Err(e) => self.import_result = Some(vec![format!("Import failed: {e}")]),
+        }
+    }
+
+    /// Writes what the import wizard chose and shows what happened.
+    fn finish_import(
+        &mut self,
+        report: &przmterm_session::securecrt::Report,
+        into: &str,
+        existing: przmterm_session::securecrt::Existing,
+    ) {
         use przmterm_session::securecrt;
         let Some(dir) = self.config_dir.clone() else {
             return;
         };
-        let result = securecrt::parse_any(paths).and_then(|report| {
-            let n = securecrt::write(&dir, IMPORT_FOLDER, &report)?;
-            let buttons: usize = report.button_groups.iter().map(|g| g.buttons.len()).sum();
-            let mut lines = vec![
-                if n == 0 && (!report.keyword_sets.is_empty() || buttons > 0) {
-                    "Imported.".to_string()
-                } else if n == 0 {
-                    "No sessions found.".to_string()
-                } else {
-                    format!("Imported {n} session(s) into the folder {IMPORT_FOLDER}.")
-                },
-            ];
-            if !report.keyword_sets.is_empty() {
-                let names: Vec<&str> = report
-                    .keyword_sets
-                    .iter()
-                    .map(|(n, _)| n.as_str())
-                    .collect();
+        let result = securecrt::write_with(&dir, into, report, existing).map(|w| {
+            let place = if into.is_empty() {
+                "at the top level".to_string()
+            } else {
+                format!("into the folder {into}")
+            };
+            let mut lines = Vec::new();
+            if w.sessions > 0 {
+                lines.push(format!("Imported {} session(s) {place}.", w.sessions));
+            }
+            if w.kept > 0 {
                 lines.push(format!(
-                    "Imported keyword set(s): {}. Sessions that used them in SecureCRT \
-                     highlight with them here too.",
-                    names.join(", ")
+                    "{} session(s) were already here and were left as they were.",
+                    w.kept
                 ));
             }
-            if buttons > 0 {
+            if w.keyword_sets > 0 {
+                lines.push(format!(
+                    "Imported {} keyword set(s). Sessions that used them in SecureCRT \
+                     highlight with them here too.",
+                    w.keyword_sets
+                ));
+            }
+            if w.buttons > 0 {
                 let groups: Vec<&str> = report
                     .button_groups
                     .iter()
                     .map(|g| g.name.as_str())
                     .collect();
                 lines.push(format!(
-                    "Imported {buttons} button(s) into the button group(s) {} (buttons already \
-                     there were left as they were).",
+                    "Imported {} button(s) into the button group(s) {}.",
+                    w.buttons,
                     groups.join(", ")
                 ));
+            }
+            if lines.is_empty() {
+                lines.push("Nothing new: everything chosen was already here.".into());
             }
             lines.extend(
                 report
@@ -3587,7 +3627,7 @@ impl PrzmApp {
                     .map(|(name, why)| format!("Skipped {name}: {why}.")),
             );
             lines.extend(report.notes.iter().cloned());
-            Ok(lines)
+            lines
         });
         self.import_result = Some(result.unwrap_or_else(|e| vec![format!("Import failed: {e}")]));
         self.reload_sessions();
@@ -4273,6 +4313,16 @@ impl PrzmApp {
             && let Some(dir) = &self.config_dir
         {
             self.keyword_editor = Some(keywords::KeywordEditor::new(dir, select.as_deref()));
+        }
+        if let Some(wizard) = &mut self.import_wizard {
+            match wizard.show(ctx) {
+                importwizard::WizardResult::Open => {}
+                importwizard::WizardResult::Cancel => self.import_wizard = None,
+                importwizard::WizardResult::Import(report, into, existing) => {
+                    self.import_wizard = None;
+                    self.finish_import(&report, &into, existing);
+                }
+            }
         }
         if let Some(lines) = &self.import_result {
             let mut close =

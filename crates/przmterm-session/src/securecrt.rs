@@ -730,6 +730,13 @@ fn scan_dir(dir: &Path, trail: &mut Vec<String>, report: &mut Report) -> Result<
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("folder");
+            // SecureCRT's Sessions folder (a Config folder was picked): its
+            // sessions are the top level, and its Default*.ini templates
+            // stay out.
+            if trail.is_empty() && name.eq_ignore_ascii_case("sessions") {
+                scan_dir(&path, &mut Vec::new(), report)?;
+                continue;
+            }
             trail.push(clean_name(name));
             scan_dir(&path, trail, report)?;
             trail.pop();
@@ -737,6 +744,14 @@ fn scan_dir(dir: &Path, trail: &mut Vec<String>, report: &mut Report) -> Result<
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("ini"))
         {
+            // Of the button bar files, only the newest version.
+            let bar = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.to_ascii_lowercase().starts_with("buttonbar"));
+            if bar && !button_bar_files(dir).contains(&path) {
+                continue;
+            }
             read_ini(&path, trail.clone(), report)?;
         }
     }
@@ -761,22 +776,105 @@ pub fn parse_any(paths: &[PathBuf]) -> Result<Report, String> {
 
 // ---------------------------------------------------------------- writing
 
-/// Writes the imported sessions under `<config>/sessions/<into>/…`, keeping
-/// SecureCRT's folders. Names already taken get ` (2)`, ` (3)`…; jump hosts
-/// follow renamed sessions. Returns how many sessions were written.
-pub fn write(config_dir: &Path, into: &str, report: &Report) -> Result<usize, String> {
+/// What to do with an imported session or keyword set that is already
+/// there (same folder and name).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Existing {
+    /// Leave the one there; import the others. Importing again adds nothing.
+    #[default]
+    Skip,
+    /// Write the imported one over it.
+    Replace,
+    /// Import it under another name: ` (2)`, ` (3)`…
+    KeepBoth,
+}
+
+/// The folder an imported session goes to, below `sessions/`.
+fn target_folder(into: &str, s: &Imported) -> String {
     let into = into.trim().trim_matches('/');
+    std::iter::once(into)
+        .filter(|f| !f.is_empty())
+        .map(str::to_string)
+        .chain(s.folder.iter().cloned())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Whether the session `s` is already there when imported into `into`.
+pub fn session_exists(config_dir: &Path, into: &str, s: &Imported) -> bool {
+    config_dir
+        .join(crate::SESSIONS_DIR)
+        .join(target_folder(into, s))
+        .join(format!("{}.toml", s.name))
+        .exists()
+}
+
+/// Whether a keyword set of this name is already there.
+pub fn keyword_set_exists(config_dir: &Path, name: &str) -> bool {
+    crate::keyword_sets(config_dir).iter().any(|n| n == name)
+}
+
+/// How many of a button group's buttons are not in `buttons.toml` yet.
+pub fn new_buttons(config_dir: &Path, group: &ButtonTab) -> usize {
+    let bar = crate::buttons::read_buttons(config_dir).unwrap_or_default();
+    let there = bar.tabs.iter().find(|t| t.name == group.name);
+    group
+        .buttons
+        .iter()
+        .filter(|b| {
+            !there.is_some_and(|t| {
+                t.buttons
+                    .iter()
+                    .any(|o| o.label == b.label && o.send == b.send)
+            })
+        })
+        .count()
+}
+
+/// What an import wrote.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Written {
+    pub sessions: usize,
+    /// Sessions already there, left alone ([`Existing::Skip`]).
+    pub kept: usize,
+    pub keyword_sets: usize,
+    pub buttons: usize,
+}
+
+/// Writes the imported sessions under `<config>/sessions/<into>/…`, keeping
+/// SecureCRT's folders; names already taken get ` (2)`, ` (3)`…, and jump
+/// hosts follow renamed sessions. Returns how many sessions were written.
+pub fn write(config_dir: &Path, into: &str, report: &Report) -> Result<usize, String> {
+    write_with(config_dir, into, report, Existing::KeepBoth).map(|w| w.sessions)
+}
+
+/// [`write`], with `existing` deciding about what is already there.
+pub fn write_with(
+    config_dir: &Path,
+    into: &str,
+    report: &Report,
+    existing: Existing,
+) -> Result<Written, String> {
+    let mut written = Written::default();
     let mut taken: HashSet<(String, String)> = HashSet::new();
     let mut renamed: BTreeMap<String, String> = BTreeMap::new();
     let mut plan = Vec::new();
     for s in &report.sessions {
-        let folder = std::iter::once(into)
-            .filter(|f| !f.is_empty())
-            .map(str::to_string)
-            .chain(s.folder.iter().cloned())
-            .collect::<Vec<_>>()
-            .join("/");
+        let folder = target_folder(into, s);
         let dir = config_dir.join(crate::SESSIONS_DIR).join(&folder);
+        let there = dir.join(format!("{}.toml", s.name)).exists();
+        match existing {
+            Existing::Skip if there => {
+                written.kept += 1;
+                continue;
+            }
+            Existing::Replace if there => {
+                taken.insert((folder.clone(), s.name.clone()));
+                plan.push((folder, s.name.clone(), s.settings.clone()));
+                continue;
+            }
+            _ => {}
+        }
         let mut name = s.name.clone();
         let mut n = 2;
         while dir.join(format!("{name}.toml")).exists()
@@ -798,12 +896,23 @@ pub fn write(config_dir: &Path, into: &str, report: &Report) -> Result<usize, St
             settings.jump_host = Some(new.clone());
         }
         crate::write_session(config_dir, &folder, &name, &settings).map_err(|e| e.to_string())?;
+        written.sessions += 1;
     }
     for (name, set) in &report.keyword_sets {
+        // A set is referred to by its name: kept, or replaced.
+        if existing == Existing::Skip && keyword_set_exists(config_dir, name) {
+            continue;
+        }
         crate::write_keyword_set(config_dir, name, set).map_err(|e| e.to_string())?;
+        written.keyword_sets += 1;
     }
+    written.buttons = report
+        .button_groups
+        .iter()
+        .map(|g| new_buttons(config_dir, g))
+        .sum();
     write_buttons(config_dir, &report.button_groups)?;
-    Ok(report.sessions.len())
+    Ok(written)
 }
 
 /// Adds the imported button groups to `buttons.toml`: into the group of
@@ -1086,6 +1195,39 @@ Z:\"Keyword List V3\"=00000004\r\n \"no-\",00ffffff,00000000,00000001\r\n \
         let copy = all.iter().find(|s| s.name == "core-sw-01 (2)").unwrap();
         assert_eq!(copy.folder, ["SecureCRT", "Lab", "Core"]);
         assert_eq!(copy.jump_host.as_deref(), Some("bastion (2)"));
+    }
+
+    #[test]
+    fn importing_again_skips_or_replaces_what_is_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = parse_xml(XML).unwrap();
+        let first = write_with(dir.path(), "SecureCRT", &r, Existing::Skip).unwrap();
+        assert_eq!((first.sessions, first.kept), (2, 0));
+        assert!(
+            r.sessions
+                .iter()
+                .all(|s| session_exists(dir.path(), "SecureCRT", s))
+        );
+        let again = write_with(dir.path(), "SecureCRT", &r, Existing::Skip).unwrap();
+        assert_eq!((again.sessions, again.kept), (0, 2), "nothing doubled");
+        let replaced = write_with(dir.path(), "SecureCRT", &r, Existing::Replace).unwrap();
+        assert_eq!(replaced.sessions, 2);
+        let tree = crate::SessionTree::load(dir.path());
+        assert_eq!(tree.root.all_sessions().len(), 2);
+    }
+
+    #[test]
+    fn a_config_folder_is_read_as_its_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = dir.path().join("Config/Sessions");
+        std::fs::create_dir_all(sessions.join("Home")).unwrap();
+        for template in ["Default.ini", "Default_RDP.ini", "Default_LocalShell.ini"] {
+            std::fs::write(sessions.join(template), INI).unwrap();
+        }
+        std::fs::write(sessions.join("Home/VM.ini"), INI).unwrap();
+        let r = parse_any(&[dir.path().join("Config")]).unwrap();
+        assert_eq!(r.sessions.len(), 1, "the templates stay out");
+        assert_eq!(r.sessions[0].folder, ["Home"]);
     }
 
     #[test]
