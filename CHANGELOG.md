@@ -65,6 +65,10 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Fixed
 
+- Importing SecureCRT's Config folder read the session templates
+  (`Default.ini`, `Default_RDP.ini`, `Default_LocalShell.ini`) as sessions:
+  its Sessions folder is now read as the top level, without them, and only
+  the newest button bar file.
 - Small dialogs (new or renamed folder, tab and button group names, script
   prompts, the master password prompt, vault entries, the master password
   change, SFTP names and passwords, file transfers, imports, the settings

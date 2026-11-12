@@ -599,9 +599,13 @@ newer version knows is left out by an older one, which says so (see
 **+** next to *Sessions* › *Import from SecureCRT…* takes SecureCRT's XML
 export (*File › Export Settings*) or session `.ini` files; *Import a SecureCRT
 Sessions folder…* takes the whole `Config/Sessions` folder (macOS:
-`~/Library/Application Support/VanDyke/SecureCRT/Config/Sessions`). Sessions
-land in a `SecureCRT` folder with the same sub-folders; names already used get
-` (2)`. From the command line:
+`~/Library/Application Support/VanDyke/SecureCRT/Config/Sessions`), or the
+`Config` folder itself. A wizard then lists what was found, sessions by
+folder, keyword sets and button groups, each with a box, and marks what is
+already here; for those it skips them (the default: importing again adds
+nothing), replaces them or keeps both (` (2)` after the name). Sessions land
+in a `SecureCRT` folder with the same sub-folders, or the folder named in the
+wizard. From the command line:
 
 ```sh
 przm import-securecrt --dry-run export.xml     # show what would be imported
