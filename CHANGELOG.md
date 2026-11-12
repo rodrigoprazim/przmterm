@@ -23,6 +23,11 @@ All notable changes to PrzmTerm are recorded here. The format follows
   shows a green pulse while output comes in and a green bell once it stops
   (a command finished), until it is opened. Split panes show the same in
   their caption.
+- *Settings problems*: the warning under the session list opens a list of
+  the files with problems, what is wrong with each and what can be done
+  (edit the session, remove unknown settings, open, show or delete the
+  file, reload). A SecureCRT import names the sessions it wrote without a
+  host or serial port.
 - The session list shows each session's kind: a terminal for SSH, a screen
   for Telnet, a cable for serial, a laptop for a local shell.
 
@@ -38,7 +43,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
 - A session open in a tab has a green icon in the session list instead of
   a green dot before its name.
 - The interface's icons are [Lucide](https://lucide.dev)'s (ISC licence),
-  from a small font, instead of drawn lines.
+  from a small font, instead of drawn lines; the Log and Buttons buttons
+  in the status bar have icons too.
 
 ### Fixed
 

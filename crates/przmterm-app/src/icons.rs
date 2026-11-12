@@ -65,6 +65,22 @@ pub enum Icon {
     Busy,
     /// Output came in and stopped (a tab not looked at): a command ended.
     Done,
+    /// Logging: a file being written.
+    Logging,
+    /// Not logging: a file.
+    NotLogging,
+    /// The button bar.
+    ButtonBar,
+    /// A problem.
+    Warning,
+    Edit,
+    /// Shows a file in its folder.
+    ShowFile,
+    Delete,
+    /// Takes away what is not needed.
+    Erase,
+    /// Opens a file as text.
+    TextFile,
 }
 
 impl Icon {
@@ -95,6 +111,15 @@ impl Icon {
             Icon::Disconnected => 0xE45D,
             Icon::Busy => 0xE038,
             Icon::Done => 0xE42B,
+            Icon::Logging => 0xE320,
+            Icon::NotLogging => 0xE0C0,
+            Icon::ButtonBar => 0xE42C,
+            Icon::Warning => 0xE193,
+            Icon::Edit => 0xE1F9,
+            Icon::ShowFile => 0xE247,
+            Icon::Delete => 0xE18E,
+            Icon::Erase => 0xE28F,
+            Icon::TextFile => 0xE0CC,
         };
         char::from_u32(code).unwrap_or('?')
     }
@@ -110,7 +135,7 @@ impl Icon {
     }
 
     #[cfg(test)]
-    const ALL: [Icon; 24] = [
+    const ALL: [Icon; 33] = [
         Icon::ChevronLeft,
         Icon::ChevronRight,
         Icon::Reload,
@@ -135,6 +160,15 @@ impl Icon {
         Icon::Disconnected,
         Icon::Busy,
         Icon::Done,
+        Icon::Logging,
+        Icon::NotLogging,
+        Icon::ButtonBar,
+        Icon::Warning,
+        Icon::Edit,
+        Icon::ShowFile,
+        Icon::Delete,
+        Icon::Erase,
+        Icon::TextFile,
     ];
 }
 
@@ -182,12 +216,12 @@ pub fn draw_scaled(painter: &egui::Painter, icon: Icon, rect: Rect, color: Color
     painter.galley(pos, galley, color);
 }
 
-/// A button the size of egui's own, with a dot of `dot` colour before
-/// `text` and an optional `fill` (else the usual button colours). The dot
-/// is drawn, so it sits on the text's middle line whatever the font.
-pub fn dot_button(
+/// A button the size of egui's own, with `icon` in `icon_color` before
+/// `text` and an optional `fill` (else the usual button colours).
+pub fn icon_text_button(
     ui: &mut egui::Ui,
-    dot: Color32,
+    icon: Icon,
+    icon_color: Color32,
     text: &str,
     fill: Option<Color32>,
     text_color: Option<Color32>,
@@ -199,7 +233,7 @@ pub fn dot_button(
         text_color.unwrap_or(ui.visuals().text_color()),
     );
     let pad = ui.spacing().button_padding;
-    let dot_w = 12.0;
+    let dot_w = 18.0;
     let size = Vec2::new(
         pad.x * 2.0 + dot_w + galley.size().x,
         (galley.size().y + pad.y * 2.0).max(ui.spacing().interact_size.y),
@@ -219,8 +253,11 @@ pub fn dot_button(
             visuals.bg_stroke,
             egui::StrokeKind::Inside,
         );
-        let center = Pos2::new(rect.left() + pad.x + 4.0, rect.center().y);
-        ui.painter().circle_filled(center, 4.0, dot);
+        let icon_rect = Rect::from_center_size(
+            Pos2::new(rect.left() + pad.x + 6.0, rect.center().y),
+            Vec2::splat(14.0),
+        );
+        draw(ui.painter(), icon, icon_rect, icon_color);
         let text_pos = Pos2::new(
             rect.left() + pad.x + dot_w,
             rect.center().y - galley.size().y / 2.0,

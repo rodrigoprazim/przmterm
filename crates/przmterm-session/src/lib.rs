@@ -94,6 +94,41 @@ pub enum SessionError {
     Unknown { path: PathBuf, keys: Vec<String> },
 }
 
+impl SessionError {
+    /// The file the problem is in.
+    pub fn path(&self) -> &Path {
+        match self {
+            SessionError::Io { path, .. }
+            | SessionError::Parse { path, .. }
+            | SessionError::Invalid { path, .. }
+            | SessionError::Unknown { path, .. } => path,
+        }
+    }
+
+    /// What is wrong, without the file's path.
+    pub fn reason(&self) -> String {
+        match self {
+            SessionError::Io { source, .. } => source.to_string(),
+            SessionError::Parse { source, .. } => source.to_string(),
+            SessionError::Invalid { reason, .. } => reason.clone(),
+            SessionError::Unknown { keys, .. } => {
+                format!("Unknown setting(s), ignored: {}", keys.join(", "))
+            }
+        }
+    }
+}
+
+/// Writes a settings file (a session's, a folder's or the defaults) again
+/// with only the settings this version knows: unknown keys go, the rest
+/// stays.
+pub fn drop_unknown_settings(path: &Path) -> Result<(), SessionError> {
+    let settings = read_session_settings(path)?;
+    fs::write(path, settings.to_toml()).map_err(|source| SessionError::Io {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
 /// Reads TOML into `T`, leaving out keys `T` does not know, so a file
 /// written by a newer version still opens. Returns those keys' dotted
 /// paths (`terminal.colour`, `forward.0.via`) to point them out.

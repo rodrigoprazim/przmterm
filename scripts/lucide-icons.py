@@ -40,6 +40,15 @@ ICONS = [
     "unplug",
     "activity",
     "bell-dot",
+    "file-pen-line",
+    "file",
+    "panel-bottom",
+    "triangle-alert",
+    "pencil",
+    "folder-open",
+    "trash-2",
+    "eraser",
+    "file-text",
 ]
 
 

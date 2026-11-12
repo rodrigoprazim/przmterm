@@ -76,9 +76,10 @@ example) are read as well.
 (written by a newer version, or misspelt) is left out, and the file is
 still used:
 
-- for `defaults.toml`, `folder.toml` and session files, the status line
-  under the session list counts the files with problems, and its tooltip
-  names the keys that were left out;
+- for `defaults.toml`, `folder.toml` and session files, a warning under
+  the session list counts the files with problems; clicking it lists each
+  file with what is wrong, and *Remove them* writes it again without the
+  unknown keys;
 - for `buttons.toml`, the note shows on the button bar;
 - for `keymap.toml`, the note shows in *Keyboard shortcuts…*;
 - for keyword sets, the note shows in the terminal of the session that

@@ -62,6 +62,9 @@ pub struct Report {
     capped: usize,
     /// Sessions that run a logon script (Expect/Send) after connecting.
     scripted: Vec<String>,
+    /// Sessions without a host (or serial port): written, but not listed
+    /// until that is filled in.
+    incomplete: Vec<String>,
 }
 
 impl Report {
@@ -86,6 +89,15 @@ impl Report {
                  (SecureCRT stores it encrypted); they connect to their host and stop there: {}.",
                 self.scripted.len(),
                 self.scripted.join(", ")
+            ));
+        }
+        if !self.incomplete.is_empty() {
+            self.notes.push(format!(
+                "{} session(s) have no host or serial port in SecureCRT: they were imported \
+                 but are not listed until one is filled in (the warning under the session \
+                 list opens them): {}.",
+                self.incomplete.len(),
+                self.incomplete.join(", ")
             ));
         }
         if self.capped > 0 {
@@ -214,6 +226,14 @@ fn convert(name: &str, f: &Fields, report: &mut Report) -> Option<SessionSetting
     }
     if number(f, "Use Login Script") == Some(1) {
         report.scripted.push(name.to_string());
+    }
+    let reachable = match protocol {
+        Protocol::Serial => s.serial_port.is_some(),
+        Protocol::Local => true,
+        _ => s.host.is_some(),
+    };
+    if !reachable {
+        report.incomplete.push(name.to_string());
     }
 
     let term_type = match text(f, "Emulation").unwrap_or("Xterm") {
@@ -739,6 +759,18 @@ Z:\"Port Forward Table V3\"=00000000\r\n";
         assert_eq!(c.parity, Some(Parity::Even));
         assert_eq!(c.stop_bits, Some(2));
         assert_eq!(c.flow_control, Some(FlowControl::Hardware));
+
+        // No host: imported, and the report says it needs one.
+        parse_ini("blank", "D:\"Is Session\"=00000001\n", vec![], &mut r);
+        assert_eq!(r.sessions.len(), 3);
+        let r = r.finish();
+        assert!(
+            r.notes
+                .iter()
+                .any(|n| n.contains("no host") && n.contains("blank")),
+            "{:?}",
+            r.notes
+        );
     }
 
     #[test]

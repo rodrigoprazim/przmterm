@@ -77,6 +77,14 @@ its sessions inherit, or delete it. Deleting a folder can keep what is in
 it: its sessions and subfolders move up a level and keep the folder's
 settings (written into each), so they connect as before.
 
+When a settings file has a problem (a session without a host, a typo in a
+file edited by hand, a setting from a newer version), a warning under the
+session list says how many. Click it for the list: each file, what is
+wrong, and what can be done: *Edit…* a session that is not listed until it
+is fixed, *Remove them* for unknown settings, *Open* the file, *Show in
+folder* or *Delete* it; *Reload* reads the files again after fixing one by
+hand.
+
 Global defaults live in `defaults.toml` (⚙ next to *Sessions* in the app).
 Changing them asks which existing sessions take the new values: those that
 use the default (sessions with their own value keep it), all of them

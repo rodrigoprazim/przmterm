@@ -18,6 +18,7 @@ mod keywords;
 mod launcher;
 mod openpgp;
 mod pane;
+mod problems;
 mod scriptguide;
 mod sftp;
 mod theme;
@@ -760,6 +761,8 @@ struct PrzmApp {
     after_unlock: Option<Action>,
     /// Which window the master password prompt answers.
     master_for: Option<MasterFor>,
+    /// The settings files with problems, and what to do about them.
+    problems: problems::Problems,
     /// Macro buttons above the status bar.
     buttons: buttonbar::ButtonBarUi,
     /// What is typed goes to every connected pane of the current tab.
@@ -926,6 +929,7 @@ impl PrzmApp {
             vault: vault::VaultUi::new(),
             after_unlock: None,
             master_for: None,
+            problems: problems::Problems::default(),
             buttons,
             broadcast: false,
             confirm_broadcast: false,
@@ -965,6 +969,44 @@ impl PrzmApp {
             folder_dialog: None,
             quitting: false,
         }
+    }
+
+    /// Does what was chosen in the settings problems window.
+    fn fix_problem(&mut self, fix: problems::Fix, config_dir: &std::path::Path) {
+        use problems::Fix;
+        let done = match fix {
+            Fix::Edit(path) => {
+                match Editor::fix(&path, config_dir) {
+                    Some(editor) => self.editor = Some(editor),
+                    None => self.notice = Some(format!("{} is not a session.", path.display())),
+                }
+                return;
+            }
+            Fix::DropUnknown(path) => przmterm_session::drop_unknown_settings(&path)
+                .map(|()| "Removed the unknown settings.".to_string())
+                .map_err(|e| e.to_string()),
+            Fix::Delete(path) => std::fs::remove_file(&path)
+                .map(|()| format!("Deleted {}.", path.display()))
+                .map_err(|e| format!("{}: {e}", path.display())),
+            Fix::Reveal(path) => {
+                if let Err(e) = desktop::reveal(&path) {
+                    self.notice = Some(format!("Cannot show {}: {e}", path.display()));
+                }
+                return;
+            }
+            Fix::OpenText(path) => {
+                if let Err(e) = desktop::open_text(&path) {
+                    self.notice = Some(format!("Cannot open {}: {e}", path.display()));
+                }
+                return;
+            }
+            Fix::Reload => Ok("Read the settings again.".to_string()),
+        };
+        self.notice = Some(match done {
+            Ok(text) => text,
+            Err(e) => e,
+        });
+        self.reload_sessions();
     }
 
     fn reload_sessions(&mut self) {
@@ -2281,30 +2323,43 @@ impl PrzmApp {
             .map(|n| n.to_string_lossy().into_owned());
         let logging = pane.log.is_some();
         // Shaped like the other status bar buttons: filled green while
-        // logging, red while not, with a dot that keeps the state readable
-        // without colour (full when logging, hollow-looking when not).
+        // logging, red while not, with an icon that keeps the state readable
+        // without colour (a file being written, or a plain one).
         let green = egui::Color32::from_rgb(40, 135, 65);
         let red = egui::Color32::from_rgb(160, 52, 52);
-        let (text, fill, dot) = if logging {
+        let (text, fill, icon, icon_color) = if logging {
             (
                 format!("Log  {}", short_name(name.as_deref().unwrap_or(""))),
                 green,
+                icons::Icon::Logging,
                 egui::Color32::WHITE,
             )
         } else {
-            ("Log".to_string(), red, egui::Color32::from_white_alpha(110))
+            (
+                "Log".to_string(),
+                red,
+                icons::Icon::NotLogging,
+                egui::Color32::from_white_alpha(170),
+            )
         };
-        let response = icons::dot_button(ui, dot, &text, Some(fill), Some(egui::Color32::WHITE))
-            .on_hover_text(match (&name, logging) {
-                (Some(name), true) => format!(
-                    "Logging to {name}.\nClick to stop{}; right-click for more.",
-                    self.keys_hint("toggle_log")
-                ),
-                _ => format!(
-                    "Not logging.\nClick to start{}; right-click for more.",
-                    self.keys_hint("toggle_log")
-                ),
-            });
+        let response = icons::icon_text_button(
+            ui,
+            icon,
+            icon_color,
+            &text,
+            Some(fill),
+            Some(egui::Color32::WHITE),
+        )
+        .on_hover_text(match (&name, logging) {
+            (Some(name), true) => format!(
+                "Logging to {name}.\nClick to stop{}; right-click for more.",
+                self.keys_hint("toggle_log")
+            ),
+            _ => format!(
+                "Not logging.\nClick to start{}; right-click for more.",
+                self.keys_hint("toggle_log")
+            ),
+        });
         if response.clicked() {
             actions.push(Action::ToggleLog);
         }
@@ -5237,10 +5292,24 @@ impl eframe::App for PrzmApp {
                     {
                         actions.push(Action::TransferDialog(self.active_tab, true));
                     }
-                    if ui
-                        .selectable_label(self.buttons.visible, "▤ Buttons")
-                        .on_hover_text("Show or hide the button bar")
-                        .clicked()
+                    let (fill, text) = if self.buttons.visible {
+                        (
+                            Some(ui.visuals().selection.bg_fill),
+                            Some(ui.visuals().selection.stroke.color),
+                        )
+                    } else {
+                        (None, None)
+                    };
+                    if icons::icon_text_button(
+                        ui,
+                        icons::Icon::ButtonBar,
+                        text.unwrap_or(ui.visuals().text_color()),
+                        "Buttons",
+                        fill,
+                        text,
+                    )
+                    .on_hover_text("Show or hide the button bar")
+                    .clicked()
                     {
                         actions.push(Action::ToggleButtons);
                     }
@@ -5670,21 +5739,26 @@ impl eframe::App for PrzmApp {
                         }
                         if !self.sessions.errors.is_empty() {
                             ui.separator();
-                            ui.colored_label(
-                                ui.visuals().warn_fg_color,
-                                format!(
-                                    "{} settings file(s) with problems",
-                                    self.sessions.errors.len()
-                                ),
+                            let n = self.sessions.errors.len();
+                            let text = if n == 1 {
+                                "1 file with a problem".to_string()
+                            } else {
+                                format!("{n} files with problems")
+                            };
+                            let warn = ui.visuals().warn_fg_color;
+                            if icons::icon_text_button(
+                                ui,
+                                icons::Icon::Warning,
+                                warn,
+                                &text,
+                                None,
+                                Some(warn),
                             )
-                            .on_hover_text(
-                                self.sessions
-                                    .errors
-                                    .iter()
-                                    .map(|e| e.to_string())
-                                    .collect::<Vec<_>>()
-                                    .join("\n"),
-                            );
+                            .on_hover_text("See which and fix them")
+                            .clicked()
+                            {
+                                self.problems.open = true;
+                            }
                         }
                     });
             });
@@ -5713,6 +5787,11 @@ impl eframe::App for PrzmApp {
         let vault_names = self.vault.names();
         self.buttons
             .dialogs(&ctx, self.config_dir.as_deref(), vault_names.as_deref());
+        if let Some(dir) = self.config_dir.clone()
+            && let Some(fix) = self.problems.show(&ctx, &self.sessions.errors, &dir)
+        {
+            self.fix_problem(fix, &dir);
+        }
         if std::mem::take(&mut self.buttons.unlock_request) {
             self.vault
                 .ask_unlock("Unlock the vault to list its entries.".into());

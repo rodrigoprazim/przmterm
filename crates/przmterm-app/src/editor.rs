@@ -208,7 +208,7 @@ fn tilde(path: &Path) -> String {
 /// Human name of a settings key, for the confirmation.
 /// `reason` with its `key`s named as the form names them, capitalised:
 /// "`serial_port` is required" becomes "Serial port is required".
-fn readable(reason: &str) -> String {
+pub fn readable(reason: &str) -> String {
     let mut out = String::new();
     let mut parts = reason.split('`');
     if let Some(first) = parts.next() {
@@ -404,6 +404,32 @@ impl Editor {
             &session.name,
             &settings,
         )
+    }
+
+    /// Opens a session file that could not be listed (a required setting
+    /// is missing, say), to fix it. `None` if `path` is not a session file
+    /// below `config_dir`.
+    pub fn fix(path: &Path, config_dir: &Path) -> Option<Self> {
+        let sessions = config_dir.join(przmterm_session::SESSIONS_DIR);
+        let folder = path.parent()?.strip_prefix(&sessions).ok()?;
+        if path.extension()? != "toml" || path.file_name()? == przmterm_session::FOLDER_FILE {
+            return None;
+        }
+        let name = path.file_stem()?.to_string_lossy().into_owned();
+        let trail = folder
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        let settings = przmterm_session::read_session_settings(path).unwrap_or_default();
+        Some(Self::from_settings(
+            Target::Session {
+                original: Some(path.to_path_buf()),
+                trail,
+            },
+            &format!("Fix {name}"),
+            &name,
+            &settings,
+        ))
     }
 
     /// Like [`Editor::edit`], opened at the log settings.
