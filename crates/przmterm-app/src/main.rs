@@ -9,14 +9,17 @@ mod atlas;
 mod buttonbar;
 mod desktop;
 mod editor;
+mod findbar;
 mod fonts;
 mod grid;
+mod highlights;
 mod icons;
 mod importwizard;
 mod input;
 mod keymap;
 mod keywords;
 mod launcher;
+mod marks;
 mod openpgp;
 mod pane;
 mod problems;
@@ -204,6 +207,9 @@ enum Status {
     Done,
     /// The connection ended: an unplugged plug, red.
     Disconnected,
+    /// A highlight set to alert turned up in a tab not looked at: a
+    /// marker, in the highlight's colour.
+    Alert([u8; 3]),
 }
 
 /// Output this recent counts as still coming in.
@@ -215,6 +221,8 @@ impl Status {
         pane.origin.as_ref()?;
         Some(if pane.transport.is_closed() {
             Status::Disconnected
+        } else if let Some(color) = pane.alert {
+            Status::Alert(color)
         } else if !pane.unseen {
             Status::Connected
         } else if pane.last_output.is_some_and(|t| t.elapsed() < BUSY_FOR) {
@@ -226,15 +234,14 @@ impl Status {
 
     /// A tab's status: the most telling of its panes'.
     fn of_tab(tab: &Tab) -> Option<Status> {
-        let all: Vec<Status> = tab.panes.iter().filter_map(Status::of).collect();
-        [
-            Status::Disconnected,
-            Status::Done,
-            Status::Busy,
-            Status::Connected,
-        ]
-        .into_iter()
-        .find(|s| all.contains(s))
+        let rank = |s: &Status| match s {
+            Status::Disconnected => 0,
+            Status::Alert(_) => 1,
+            Status::Done => 2,
+            Status::Busy => 3,
+            Status::Connected => 4,
+        };
+        tab.panes.iter().filter_map(Status::of).min_by_key(rank)
     }
 
     fn icon(self) -> icons::Icon {
@@ -243,6 +250,7 @@ impl Status {
             Status::Busy => icons::Icon::Busy,
             Status::Done => icons::Icon::Done,
             Status::Disconnected => icons::Icon::Disconnected,
+            Status::Alert(_) => icons::Icon::Highlight,
         }
     }
 
@@ -252,11 +260,15 @@ impl Status {
             Status::Busy => "Connected, new output coming in",
             Status::Done => "Connected, new output (it stopped)",
             Status::Disconnected => "Disconnected",
+            Status::Alert(_) => "Connected, a highlighted text turned up",
         }
     }
 
     fn draw(self, ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect) {
-        let color = status_color(ui, self != Status::Disconnected);
+        let color = match self {
+            Status::Alert(c) => view::rgb(c),
+            _ => status_color(ui, self != Status::Disconnected),
+        };
         icons::draw(painter, self.icon(), rect, color);
     }
 }
@@ -504,6 +516,8 @@ struct Tab {
     /// Set with "Rename": shown instead of the session's title, until the
     /// tab closes (the session itself keeps its name).
     name: Option<String>,
+    /// Finding text in the tab's sessions.
+    find: findbar::FindBar,
 }
 
 impl Layout {
@@ -558,6 +572,7 @@ impl Tab {
             active: 0,
             layout: Layout::Grid,
             name: None,
+            find: findbar::FindBar::default(),
         }
     }
 
@@ -713,6 +728,15 @@ enum Action {
     ToMainWindow(usize),
     /// Asks a password and locks the tab.
     LockTab(usize),
+    /// Opens the find bar of the active tab, looking for this text (if
+    /// not empty).
+    Find(String),
+    /// Opens the highlights of this pane of the active tab, adding this
+    /// text (if not empty).
+    Highlight(usize, String),
+    /// Highlights what the find bar looks for, in these panes of the
+    /// active tab.
+    HighlightSearch(Vec<usize>),
 }
 
 struct PrzmApp {
@@ -829,6 +853,8 @@ struct PrzmApp {
     folder_dialog: Option<String>,
     /// The quit was confirmed: let the window close.
     quitting: bool,
+    /// The Highlights window of a session.
+    highlights_dialog: Option<highlights::HighlightsDialog>,
 }
 
 /// Folder SecureCRT sessions are imported into.
@@ -990,6 +1016,7 @@ impl PrzmApp {
             bundle_dialog: None,
             folder_dialog: None,
             quitting: false,
+            highlights_dialog: None,
         }
     }
 
@@ -1821,6 +1848,50 @@ impl PrzmApp {
             Action::ToggleSessions => self.sessions_hidden = !self.sessions_hidden,
             Action::Zoom(points) => self.tab_mut().pane_mut().view.zoom(points),
             Action::ZoomReset => self.tab_mut().pane_mut().view.reset_zoom(),
+            Action::Find(text) => self.tab_mut().find.open_with(&text),
+            Action::Highlight(p, text) => {
+                let tab = self.tab_mut();
+                let id = tab.id;
+                if let Some(pane) = tab.panes.get_mut(p) {
+                    let highlights = &mut pane.view.marks.highlights;
+                    // Something to type in when there is nothing yet.
+                    let add = !text.is_empty() || highlights.rules().is_empty();
+                    if add {
+                        let color = highlights.next_color();
+                        highlights.add(marks::Rule::new(&text, false, false, color));
+                    }
+                    self.highlights_dialog = Some(highlights::HighlightsDialog::new(
+                        id,
+                        p,
+                        add && text.is_empty(),
+                    ));
+                }
+            }
+            Action::HighlightSearch(panes) => {
+                let tab = self.tab_mut();
+                let id = tab.id;
+                let (text, regex, case) =
+                    (tab.find.text.clone(), tab.find.regex, tab.find.match_case);
+                for &p in &panes {
+                    if let Some(pane) = tab.panes.get_mut(p) {
+                        let highlights = &mut pane.view.marks.highlights;
+                        if !highlights
+                            .rules()
+                            .iter()
+                            .any(|r| r.text == text && r.regex == regex)
+                        {
+                            let color = highlights.next_color();
+                            highlights.add(marks::Rule::new(&text, regex, case, color));
+                        }
+                    }
+                }
+                let show = if panes.contains(&tab.active) {
+                    tab.active
+                } else {
+                    panes.first().copied().unwrap_or(tab.active)
+                };
+                self.highlights_dialog = Some(highlights::HighlightsDialog::new(id, show, false));
+            }
             Action::NewGroup(tabs) => {
                 // Made once it is named; Cancel leaves the tabs as they are.
                 self.group_rename = Some(GroupName {
@@ -2324,6 +2395,8 @@ impl PrzmApp {
                 "zoom_in" => Action::Zoom(1.0),
                 "zoom_out" => Action::Zoom(-1.0),
                 "zoom_reset" => Action::ZoomReset,
+                "find" => Action::Find(String::new()),
+                "highlights" => Action::Highlight(self.tabs[t].active, String::new()),
                 "toggle_buttons" => Action::ToggleButtons,
                 "toggle_log" => Action::ToggleLog,
                 "run_script" => Action::RunScript(t),
@@ -2461,6 +2534,48 @@ impl PrzmApp {
         });
     }
 
+    /// The status bar's Highlights and Find buttons, for the session in
+    /// front.
+    fn mark_buttons(&self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        let tab = self.tab();
+        let count = tab.pane().view.marks.highlights.count();
+        let (fill, text) = if count > 0 {
+            (
+                Some(ui.visuals().selection.bg_fill),
+                Some(ui.visuals().selection.stroke.color),
+            )
+        } else {
+            (None, None)
+        };
+        let label = if count > 0 {
+            format!("Highlights {count}")
+        } else {
+            "Highlights".to_string()
+        };
+        if icons::icon_text_button(
+            ui,
+            icons::Icon::Highlight,
+            text.unwrap_or(ui.visuals().text_color()),
+            &label,
+            fill,
+            text,
+        )
+        .on_hover_text(format!(
+            "Mark text in this session in a colour, while it is open{}",
+            self.keys_hint("highlights")
+        ))
+        .clicked()
+        {
+            actions.push(Action::Highlight(tab.active, String::new()));
+        }
+        if icons::button(ui, icons::Icon::Search, tab.find.open)
+            .on_hover_text(format!("Find in this session{}", self.keys_hint("find")))
+            .clicked()
+        {
+            actions.push(Action::Find(String::new()));
+        }
+    }
+
     fn keys_hint(&self, id: &str) -> String {
         self.shortcuts
             .label_for(id)
@@ -2570,6 +2685,7 @@ impl PrzmApp {
             || self.group_send.is_some()
             || self.group_rename.is_some()
             || self.lock_dialog.is_some()
+            || self.highlights_dialog.is_some()
             || self.vault.modal()
     }
 
@@ -3133,6 +3249,7 @@ impl PrzmApp {
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
             for pane in &mut tab.panes {
                 pane.unseen = false;
+                pane.alert = None;
             }
         }
         ui.horizontal_wrapped(|ui| {
@@ -3264,6 +3381,7 @@ impl PrzmApp {
             let area = ui.available_rect_before_wrap();
             let n = tab.panes.len();
             let gap = 4.0;
+            tab.find.prepare(&mut tab.panes, tab.active);
             // A pane dragged by its caption: (from, where the pointer is).
             let mut dragging: Option<(usize, egui::Pos2)> = None;
             let mut dropped: Option<usize> = None;
@@ -3378,6 +3496,15 @@ impl PrzmApp {
                 if let Some(text) = out.paste {
                     pasted = Some((i, text));
                 }
+                if let Some(text) = out.find {
+                    if !active {
+                        actions.push(Action::FocusPane(i));
+                    }
+                    actions.push(Action::Find(text));
+                }
+                if let Some(text) = out.highlight {
+                    actions.push(Action::Highlight(i, text));
+                }
                 if out.send_break {
                     if !active {
                         actions.push(Action::FocusPane(i));
@@ -3438,6 +3565,14 @@ impl PrzmApp {
                 && to != from
             {
                 actions.push(Action::SwapPanes(from, to));
+            }
+            let top = if n > 1 { PANE_CAPTION } else { 0.0 };
+            match tab.find.ui(&ctx, area, top, &mut tab.panes, tab.active) {
+                findbar::BarAction::None => {}
+                findbar::BarAction::Closed => tab.panes[tab.active].view.focus(),
+                findbar::BarAction::Highlight(panes) => {
+                    actions.push(Action::HighlightSearch(panes));
+                }
             }
         });
 
@@ -3642,6 +3777,60 @@ impl PrzmApp {
     }
 
     /// The session editor and the delete confirmation.
+    /// The Highlights window, while open.
+    fn highlights_ui(&mut self, ctx: &egui::Context) {
+        let Some(dialog) = &mut self.highlights_dialog else {
+            return;
+        };
+        let Some(pane) = self
+            .tabs
+            .iter_mut()
+            .find(|t| t.id == dialog.tab)
+            .and_then(|t| t.panes.get_mut(dialog.pane))
+        else {
+            // Its session closed.
+            self.highlights_dialog = None;
+            return;
+        };
+        let sets = self
+            .config_dir
+            .as_deref()
+            .map(przmterm_session::keyword_sets);
+        let name = pane_name(pane);
+        match dialog.show(ctx, &name, &mut pane.view.marks.highlights, sets.as_deref()) {
+            highlights::Out::Open => {}
+            highlights::Out::Close => {
+                // Blank rows are left out.
+                let rules: Vec<marks::Rule> = pane
+                    .view
+                    .marks
+                    .highlights
+                    .rules()
+                    .iter()
+                    .filter(|r| !r.text.is_empty())
+                    .cloned()
+                    .collect();
+                pane.view.marks.highlights.set(rules);
+                pane.view.focus();
+                self.highlights_dialog = None;
+            }
+            highlights::Out::Save(set_name) => {
+                let set = marks::to_keyword_set(pane.view.marks.highlights.rules());
+                if let Some(dir) = &self.config_dir {
+                    self.notice = Some(
+                        match przmterm_session::write_keyword_set(dir, &set_name, &set) {
+                            Ok(_) => format!(
+                                "Saved as the keyword set {set_name}: choose it under \
+                                 Keywords in a session's settings."
+                            ),
+                            Err(e) => format!("Could not save the keyword set: {e}"),
+                        },
+                    );
+                }
+            }
+        }
+    }
+
     fn dialogs(&mut self, ctx: &egui::Context) {
         let center = ctx.content_rect().center();
         let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
@@ -4272,6 +4461,7 @@ impl PrzmApp {
                 self.confirm_broadcast = false;
             }
         }
+        self.highlights_ui(ctx);
         if let Some(editor) = &mut self.keyword_editor
             && let keywords::KeywordResult::Closed(changed) = editor.show(ctx)
         {
@@ -5431,6 +5621,7 @@ impl eframe::App for PrzmApp {
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     self.log_button(ui, &mut actions);
+                    self.mark_buttons(ui, &mut actions);
                     let split = self.tabs[self.active_tab].panes.len() > 1;
                     let broadcast = split && {
                         let button = if self.broadcast {

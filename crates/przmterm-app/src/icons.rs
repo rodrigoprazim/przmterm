@@ -81,6 +81,18 @@ pub enum Icon {
     Erase,
     /// Opens a file as text.
     TextFile,
+    /// Session highlights: a marker pen.
+    Highlight,
+    /// Find in the session.
+    Search,
+    /// The previous match.
+    ChevronUp,
+    /// Match case.
+    MatchCase,
+    /// A regular expression.
+    Regex,
+    /// Every pane of a split tab.
+    AllPanes,
 }
 
 impl Icon {
@@ -120,6 +132,12 @@ impl Icon {
             Icon::Delete => 0xE18E,
             Icon::Erase => 0xE28F,
             Icon::TextFile => 0xE0CC,
+            Icon::Highlight => 0xE0F4,
+            Icon::Search => 0xE151,
+            Icon::ChevronUp => 0xE070,
+            Icon::MatchCase => 0xE3D9,
+            Icon::Regex => 0xE1FC,
+            Icon::AllPanes => 0xE0FF,
         };
         char::from_u32(code).unwrap_or('?')
     }
@@ -135,7 +153,7 @@ impl Icon {
     }
 
     #[cfg(test)]
-    const ALL: [Icon; 33] = [
+    const ALL: [Icon; 39] = [
         Icon::ChevronLeft,
         Icon::ChevronRight,
         Icon::Reload,
@@ -169,6 +187,12 @@ impl Icon {
         Icon::Delete,
         Icon::Erase,
         Icon::TextFile,
+        Icon::Highlight,
+        Icon::Search,
+        Icon::ChevronUp,
+        Icon::MatchCase,
+        Icon::Regex,
+        Icon::AllPanes,
     ];
 }
 

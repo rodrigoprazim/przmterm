@@ -373,10 +373,8 @@ Each shortcut has `keys` and exactly one of `command`, `send`, `script` and
 | `zoom_in` | Zoom in: the active pane's font a point bigger, not saved (`Equals` also takes `+`) | `Cmd+Equals` |
 | `zoom_out` | Zoom out: a point smaller | `Cmd+Minus` |
 | `zoom_reset` | Reset the zoom: back to the pane's own size | `Cmd+0` |
-
-A `keymap.toml` that binds none of the three zoom commands (one written
-before they existed) gets their built-in keys, where no other shortcut
-uses them.
+| `find` | Find in the session (the find bar) | `Cmd+F` on macOS, `Ctrl+Shift+F` elsewhere |
+| `highlights` | The session's highlights | — |
 | `toggle_buttons` | Hide / show the button bar | — |
 | `toggle_log` | Start / stop the log | — |
 | `run_script` | Run a script… | — |
@@ -386,6 +384,10 @@ uses them.
 | `open_scp` | File browser (SCP) | — |
 | `send_files` | Send files (Zmodem, Ymodem, Xmodem) | — |
 | `receive_files` | Receive files (Zmodem, Ymodem, Xmodem) | — |
+
+A `keymap.toml` that binds none of the three zoom commands, or not `find`
+(one written before they existed), gets their built-in keys, where no other
+shortcut uses them.
 
 ## Keyword highlighting: `keywords/<name>.toml`
 

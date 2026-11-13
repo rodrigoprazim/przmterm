@@ -197,6 +197,12 @@ pub struct ViewOutput {
     pub send_break: bool,
     /// Pasted text with line breaks, to confirm before it is sent.
     pub paste: Option<String>,
+    /// "Highlight" was chosen in the context menu: the text selected
+    /// (empty: none).
+    pub highlight: Option<String>,
+    /// "Find" was chosen in the context menu: the text selected (empty:
+    /// none).
+    pub find: Option<String>,
 }
 
 /// How much a wheel or pinch zoom grows before the font takes a point.
@@ -240,6 +246,8 @@ pub struct TerminalView {
     pub offer_break: bool,
     /// Keyword highlighting for what is shown.
     pub highlighter: Option<std::rc::Rc<przmterm_term::highlight::Highlighter>>,
+    /// The session's own highlights and the matches of a search.
+    pub marks: crate::marks::Marks,
     focus_requested: bool,
     selection: Option<Selection>,
     scroll_accum: f32,
@@ -266,6 +274,7 @@ impl Default for TerminalView {
             blink_from: std::time::Instant::now(),
             offer_break: false,
             highlighter: None,
+            marks: crate::marks::Marks::default(),
             focus_requested: false,
             selection: None,
             scroll_accum: 0.0,
@@ -400,12 +409,20 @@ impl TerminalView {
 
         let mut input = Vec::new();
         self.handle_mouse(ui, &response, inner, (cell_w, cell_h), term, &mut input);
+        self.marks.refresh(term, ui.ctx());
 
         let screen = term.screen();
         let painter = ui.painter_at(rect);
         let ink = self.ink();
         painter.rect_filled(rect, CornerRadius::ZERO, rgb(ink.bg));
         let span = self.selection.and_then(|s| s.span(screen));
+        // Highlights and search matches on the rows shown, by row.
+        let first = screen.view_row_index(0);
+        let shown = first..first + screen.rows();
+        let mut paints =
+            crate::marks::highlight_paints(screen, &self.marks.highlights, shown.clone());
+        let (found, frames) = self.marks.found.paints(screen, shown);
+        paints.extend(found);
         let mut grid = crate::grid::enabled().then(|| GridFrame {
             ppp: ui.ctx().pixels_per_point(),
             ascent: crate::grid::atlas().ascent(&self.family, self.font_size),
@@ -425,6 +442,9 @@ impl TerminalView {
             let mut line = std::borrow::Cow::Borrowed(screen.view_line(row));
             if let Some(h) = &self.highlighter {
                 h.apply(line.to_mut());
+            }
+            for paint in paints.iter().filter(|p| p.index == index) {
+                apply_paint(line.to_mut(), paint);
             }
             match &mut grid {
                 Some(grid) => grid.row(&line, origin, (cell_w, cell_h), &font_id, selected),
@@ -455,6 +475,28 @@ impl TerminalView {
                 let galley = painter.layout_job(LayoutJob::single_section(ch.to_string(), format));
                 painter.galley(at, galley, fg);
             }
+        }
+
+        // The match being looked at, framed.
+        for (index, (from, to)) in frames {
+            let row = index - first;
+            let to = to.min(screen.cols() - 1);
+            let frame = Rect::from_min_max(
+                Pos2::new(
+                    inner.left() + from as f32 * cell_w,
+                    inner.top() + row as f32 * cell_h,
+                ),
+                Pos2::new(
+                    inner.left() + (to + 1) as f32 * cell_w,
+                    inner.top() + (row + 1) as f32 * cell_h,
+                ),
+            );
+            painter.rect_stroke(
+                frame.expand(1.0),
+                CornerRadius::same(2),
+                Stroke::new(1.5, Color32::WHITE),
+                egui::StrokeKind::Outside,
+            );
         }
 
         let offset = screen.display_offset();
@@ -513,8 +555,14 @@ impl TerminalView {
         }
         self.scroll_bar(ui, response.id, rect, term);
         if offset > 0 {
+            // Below the find bar while it is open.
+            let down = if self.marks.found.searching() {
+                44.0
+            } else {
+                8.0
+            };
             painter.text(
-                rect.right_top() + Vec2::new(-10.0, 8.0),
+                rect.right_top() + Vec2::new(-10.0, down),
                 Align2::RIGHT_TOP,
                 format!("↑ {offset} lines · Shift+End to return"),
                 FontId::proportional(12.0),
@@ -551,7 +599,7 @@ impl TerminalView {
         } else {
             self.preedit.clear();
         }
-        let send_break = self.context_menu(&response, term, &mut input);
+        let menu = self.context_menu(&response, term, &mut input);
 
         if !input.is_empty() {
             term.screen_mut().reset_display();
@@ -562,8 +610,10 @@ impl TerminalView {
             input,
             resized,
             clicked,
-            send_break,
+            send_break: menu.send_break,
             paste: self.pending_paste.take(),
+            highlight: menu.highlight,
+            find: menu.find,
         }
     }
 
@@ -580,6 +630,7 @@ impl TerminalView {
             Pos2::new(rect.right() - 2.0, rect.bottom() - 2.0),
         );
         let response = ui.interact(track, id.with("scrollbar"), Sense::click_and_drag());
+        let mut ticks = self.marks.ticks(screen);
         let rows = screen.rows();
         let total = (history + rows) as f32;
         let thumb_h = (track.height() * rows as f32 / total)
@@ -614,6 +665,42 @@ impl TerminalView {
             CornerRadius::same(4),
             Color32::from_white_alpha(if hot { 120 } else { 60 }),
         );
+        // Where the highlights and the search matches are: a mark each,
+        // one per point of height.
+        let mut last_y = f32::NEG_INFINITY;
+        ticks.sort_by_key(|t| t.0);
+        for (row, color) in ticks {
+            let y = (track.top() + track.height() * (row as f32 + 0.5) / total).round();
+            if y - last_y < 1.0 {
+                continue;
+            }
+            last_y = y;
+            painter.rect_filled(
+                Rect::from_min_max(
+                    Pos2::new(track.left() + 1.0, y - 1.0),
+                    Pos2::new(track.right(), y + 1.0),
+                ),
+                CornerRadius::ZERO,
+                rgb(color),
+            );
+        }
+    }
+
+    /// Scrolls so that row `index` (combined) is shown, a third of the way
+    /// down, unless it is shown already.
+    pub fn reveal(&mut self, term: &mut Terminal, index: usize) {
+        let screen = term.screen();
+        let first = screen.view_row_index(0);
+        if (first..first + screen.rows()).contains(&index) {
+            return;
+        }
+        let history = screen.scrollback_len();
+        let want = (history + screen.rows() / 3)
+            .saturating_sub(index)
+            .min(history);
+        let now = screen.display_offset();
+        term.screen_mut()
+            .scroll_display(want as isize - now as isize);
     }
 
     fn handle_mouse(
@@ -813,10 +900,15 @@ impl TerminalView {
         response: &egui::Response,
         term: &mut Terminal,
         input: &mut Vec<u8>,
-    ) -> bool {
+    ) -> MenuChoice {
         let text = self.selection.and_then(|s| s.text(term.screen()));
         let bracketed = term.screen().bracketed_paste();
-        let mut send_break = false;
+        let mut choice = MenuChoice::default();
+        // Text on one line can be found or highlighted as it is.
+        let one_line = text
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty() && !t.contains('\n') && t.chars().count() <= 200);
         response.context_menu(|ui| {
             crate::theme::menu(ui);
             if ui
@@ -832,6 +924,28 @@ impl TerminalView {
                 if let Some(t) = read_clipboard() {
                     self.paste(t, bracketed, input);
                 }
+                ui.close();
+            }
+            ui.separator();
+            let quoted = one_line.map(|t| format!("“{}”", ellipsis(t, 24)));
+            let label = match &quoted {
+                Some(q) => format!("Find {q}"),
+                None => "Find…".to_string(),
+            };
+            if ui.button(label).clicked() {
+                choice.find = Some(one_line.unwrap_or_default().to_string());
+                ui.close();
+            }
+            let label = match &quoted {
+                Some(q) => format!("Highlight {q}"),
+                None => "Highlights…".to_string(),
+            };
+            if ui
+                .button(label)
+                .on_hover_text("Mark text in this session only, in a colour")
+                .clicked()
+            {
+                choice.highlight = Some(one_line.unwrap_or_default().to_string());
                 ui.close();
             }
             ui.separator();
@@ -855,12 +969,46 @@ impl TerminalView {
                     .on_hover_text("Also in the status bar; the shortcut is in Keyboard shortcuts")
                     .clicked()
                 {
-                    send_break = true;
+                    choice.send_break = true;
                     ui.close();
                 }
             }
         });
-        send_break
+        choice
+    }
+}
+
+/// What was chosen in the terminal's context menu.
+#[derive(Default)]
+struct MenuChoice {
+    send_break: bool,
+    highlight: Option<String>,
+    find: Option<String>,
+}
+
+/// `text`, cut to `max` chars with an ellipsis.
+fn ellipsis(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        text.to_string()
+    } else {
+        format!("{}…", text.chars().take(max - 1).collect::<String>())
+    }
+}
+
+/// Paints cells over whatever colours they have.
+fn apply_paint(line: &mut [Cell], paint: &crate::marks::Paint) {
+    let Some(last) = line.len().checked_sub(1) else {
+        return;
+    };
+    let (from, to) = (paint.cols.0.min(last), paint.cols.1.min(last));
+    let [r, g, b] = paint.bg;
+    let [fr, fg, fb] = paint.fg;
+    for cell in &mut line[from..=to] {
+        let style = &mut cell.style;
+        style.bg = przmterm_term::Color::Rgb(r, g, b);
+        style.fg = przmterm_term::Color::Rgb(fr, fg, fb);
+        style.reverse = false;
+        style.dim = false;
     }
 }
 

@@ -243,6 +243,7 @@ display's cookie from `xauth`; the server only ever sees a random stand-in.
 | Hide / show the session list | Ctrl+Shift+S | ⌘⇧S |
 | Zoom the pane's font in / out | Ctrl+wheel, Ctrl+= / Ctrl+- | ⌘+wheel or pinch, ⌘= / ⌘- |
 | Reset the zoom | Ctrl+0, or ⟲ in the status bar | ⌘0, or ⟲ |
+| Find in the session | Ctrl+Shift+F, or the magnifier in the status bar | ⌘F |
 | Global settings | the gear above the sessions | ⌘, |
 
 Zooming changes the font of the pane under the pointer (the keys: the
@@ -251,8 +252,9 @@ the status bar shows its size and the reset arrow, which goes back to the
 size it had. To keep a size, set it in *Font, Colors and Cursor…*.
 
 Drag to select, double-click selects a word, triple-click a line. Right-click
-opens Copy / Paste / Select all. Text with line breaks is shown before it is
-pasted, to check or edit it.
+opens Copy / Paste, Find and Highlight (the text selected, when there is
+one) and Select all. Text with line breaks is shown before it is pasted, to
+check or edit it.
 
 *Font, Colors and Cursor…* in a tab's menu picks the font (the built-in one or
 any installed monospace font), its size, the terminal's background and text
@@ -423,6 +425,30 @@ bold = true
 SecureCRT keyword lists (`Config/Keywords/*.ini`) come in with
 *Import from SecureCRT…*. Only text the remote side left uncoloured is
 recoloured, so `ls --color` or `vim` keep their own colours.
+
+### Highlights of one session
+
+For troubleshooting, mark text in one session only, while it is open:
+**Highlights** in the status bar, or select the text, right-click ›
+*Highlight "…"*. Each highlight has its text (found anywhere in a line;
+with **.\*** a regular expression, with **Aa** matching case), a colour, and
+*Text* (only the text) or *Line* (the whole line). They are painted over the
+program's own colours, show as marks on the scroll bar, and change as you
+type. With the bell on, the tab shows a marker in the highlight's colour
+when the text turns up while you are on another tab, so a `tail -f` can run
+in the background. Nothing is saved: *Save as keyword set…* keeps them as a
+keyword set, to choose in other sessions.
+
+### Finding text
+
+Ctrl+Shift+F (⌘F on macOS), the magnifier in the status bar or
+right-click › *Find* opens the find bar. It searches the session's history
+and screen as you type, marks every match (also on the scroll bar) and
+counts them. Enter goes to the older match, Shift+Enter to the newer; the
+count follows new output. **Aa** matches case, **.\*** takes a regular
+expression, and the marker button turns the search into a highlight. In a
+split tab the grid button searches every pane instead of only the one with
+the keyboard. Esc closes the bar.
 
 ## Logging
 

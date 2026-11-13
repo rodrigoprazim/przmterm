@@ -149,6 +149,11 @@ pub struct Pane {
     /// Output arrived that nobody has seen: the pane was not on screen
     /// (its tab not the active one). Cleared when it is.
     pub unseen: bool,
+    /// A highlight set to alert turned up while the pane was not on
+    /// screen: its colour. Cleared when it is.
+    pub alert: Option<[u8; 3]>,
+    /// Watches the output for those highlights.
+    watch: crate::marks::Watch,
     /// Watches the output for the session's triggers.
     triggers: Option<przmterm_term::triggers::TriggerEngine>,
     /// Macro text still to send, and when the next piece is due (`\p`).
@@ -277,6 +282,8 @@ impl Pane {
             heard: false,
             last_output: None,
             unseen: false,
+            alert: None,
+            watch: crate::marks::Watch::default(),
             triggers: None,
             queue: VecDeque::new(),
             queue_at: None,
@@ -980,8 +987,17 @@ impl Pane {
                                 .extend(przmterm_session::buttons::parse_send(&send));
                         }
                     }
-                    if let Some(script) = &self.script {
-                        script.feed(&self.plain.text(data));
+                    let watching = crate::marks::Watch::wanted(&self.view.marks.highlights);
+                    if self.script.is_some() || watching {
+                        let text = self.plain.text(data);
+                        if let Some(script) = &self.script {
+                            script.feed(&text);
+                        }
+                        if watching
+                            && let Some(color) = self.watch.feed(&text, &self.view.marks.highlights)
+                        {
+                            self.alert = Some(color);
+                        }
                     }
                     if start.is_some() {
                         self.watching = None;
