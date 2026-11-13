@@ -142,7 +142,11 @@ jobs:
                   target/${{ matrix.target }}/release/$bin \
                   target/${{ matrix.extra_target }}/release/$bin
               done
-              scripts/macos-app.sh "$version" universal "$dir.dmg"
+              # dmgbuild lays out the disk image's window.
+              python3 -m venv "$RUNNER_TEMP/dmgbuild"
+              "$RUNNER_TEMP/dmgbuild/bin/pip" install --quiet dmgbuild==1.6.7
+              DMGBUILD="$RUNNER_TEMP/dmgbuild/bin/dmgbuild" \
+                scripts/macos-app.sh "$version" universal "$dir.dmg"
               echo "ASSET=$dir.dmg" >> "$GITHUB_ENV"
               ;;
             *)

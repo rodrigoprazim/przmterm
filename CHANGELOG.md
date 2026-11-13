@@ -7,6 +7,13 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The macOS disk image opens on a styled window: PrzmTerm's background, the
+  app and Applications side by side with an arrow between them, and the
+  app's icon on the volume. The Windows setup program shows PrzmTerm's
+  artwork instead of the default pictures.
+
 ## [1.0.0-rc.4] - 2026-11-12
 
 ### Added

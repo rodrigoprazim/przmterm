@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Builds PrzmTerm.app from the przmterm and przm binaries and packs it in a
 # disk image with a link to Applications. Runs on macOS (sips, iconutil,
-# codesign, hdiutil).
+# codesign, tiffutil, hdiutil). With dmgbuild (pip install dmgbuild, or its
+# path in DMGBUILD) the image opens on a styled window
+# (packaging/macos/dmg-settings.py); without it, on a plain one.
 #
 #   scripts/macos-app.sh VERSION BIN_DIR DMG
 #
@@ -90,8 +92,24 @@ codesign --force --sign - --identifier "$id.przm" "$app/Contents/MacOS/przm"
 codesign --force --sign - "$app"
 codesign --verify --strict "$app"
 
-ln -s /Applications "$stage/Applications"
 rm -f "$dmg"
-hdiutil create -quiet -volname "PrzmTerm $version" -srcfolder "$stage" \
-    -fs HFS+ -format UDZO "$dmg"
+volume="PrzmTerm $version"
+dmgbuild=${DMGBUILD:-dmgbuild}
+if command -v "$dmgbuild" >/dev/null 2>&1; then
+    # The styled window: the background (both resolutions in one TIFF),
+    # the icons where it shows them, and the app's icon on the volume.
+    tiffutil -cathidpicheck "$root/packaging/macos/dmg-background.png" \
+        "$root/packaging/macos/dmg-background@2x.png" \
+        -out "$work/background.tiff" >/dev/null
+    "$dmgbuild" -s "$root/packaging/macos/dmg-settings.py" \
+        -D app="$app" -D background="$work/background.tiff" \
+        -D icon="$app/Contents/Resources/PrzmTerm.icns" \
+        "$volume" "$dmg" >/dev/null
+else
+    # Without dmgbuild (a local test): a plain window.
+    echo "dmgbuild not found (pip install dmgbuild): plain disk image" >&2
+    ln -s /Applications "$stage/Applications"
+    hdiutil create -quiet -volname "$volume" -srcfolder "$stage" \
+        -fs HFS+ -format UDZO "$dmg"
+fi
 echo "$dmg"

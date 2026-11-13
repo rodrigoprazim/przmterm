@@ -51,3 +51,11 @@ add one, put its Lucide name in `scripts/lucide-icons.py`, run it on the
 `lucide-static` npm package (the script says how) and add the icon with its
 code point to `Icon` in `crates/przmterm-app/src/icons.rs`; a test checks
 that the font has every icon.
+
+## Installer artwork
+
+The disk image background (`packaging/macos/`) and the setup pictures
+(`packaging/windows/*.bmp`) are drawn by `scripts/installer-art.py` from the
+app icon and Inter; change the script and run it again rather than editing
+the pictures. The icon positions in `packaging/macos/dmg-settings.py` must
+match the ones the script draws the arrow between.
