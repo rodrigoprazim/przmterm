@@ -1,5 +1,14 @@
 # PrzmTerm
 
+[![CI](https://github.com/rodrigoprazim/przmterm/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rodrigoprazim/przmterm/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/rodrigoprazim/przmterm?include_prereleases&sort=semver)](https://github.com/rodrigoprazim/przmterm/releases)
+[![Downloads](https://img.shields.io/github/downloads/rodrigoprazim/przmterm/total)](https://github.com/rodrigoprazim/przmterm/releases)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
+[![Rust](https://img.shields.io/badge/rust-1.95%2B-orange?logo=rust)](https://www.rust-lang.org)
+[![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)](#install)
+[![Stars](https://img.shields.io/github/stars/rodrigoprazim/przmterm?style=flat)](https://github.com/rodrigoprazim/przmterm/stargazers)
+[![Visitors](https://hits.sh/github.com/rodrigoprazim/przmterm.svg?label=visitors)](https://hits.sh/github.com/rodrigoprazim/przmterm/)
+
 A native terminal client for network and systems engineers: SSH, Telnet and
 serial consoles, a session tree with inherited settings, logging and automation.
 Written in Rust, one binary per platform for macOS, Windows and Linux. No
