@@ -4251,7 +4251,7 @@ checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 
 [[package]]
 name = "przmterm-app"
-version = "1.0.0-rc.4"
+version = "1.0.0-rc.5"
 dependencies = [
  "arboard",
  "base64",
@@ -4288,7 +4288,7 @@ dependencies = [
 
 [[package]]
 name = "przmterm-cli"
-version = "1.0.0-rc.4"
+version = "1.0.0-rc.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -4306,7 +4306,7 @@ dependencies = [
 
 [[package]]
 name = "przmterm-connect"
-version = "1.0.0-rc.4"
+version = "1.0.0-rc.5"
 dependencies = [
  "keyring",
  "przmterm-core",
@@ -4316,7 +4316,7 @@ dependencies = [
 
 [[package]]
 name = "przmterm-core"
-version = "1.0.0-rc.4"
+version = "1.0.0-rc.5"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -4325,14 +4325,14 @@ dependencies = [
 
 [[package]]
 name = "przmterm-script"
-version = "1.0.0-rc.4"
+version = "1.0.0-rc.5"
 dependencies = [
  "rhai",
 ]
 
 [[package]]
 name = "przmterm-session"
-version = "1.0.0-rc.4"
+version = "1.0.0-rc.5"
 dependencies = [
  "argon2",
  "base64",
@@ -4351,7 +4351,7 @@ dependencies = [
 
 [[package]]
 name = "przmterm-term"
-version = "1.0.0-rc.4"
+version = "1.0.0-rc.5"
 dependencies = [
  "fancy-regex",
  "przmterm-core",
@@ -4361,7 +4361,7 @@ dependencies = [
 
 [[package]]
 name = "przmterm-transport"
-version = "1.0.0-rc.4"
+version = "1.0.0-rc.5"
 dependencies = [
  "dirs",
  "przmterm-core",
