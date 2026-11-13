@@ -15,7 +15,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
   regular expressions, a count, older / newer (Enter / Shift+Enter) and the
   matches marked on the scroll bar. In a split tab it can search every pane.
 - Highlights of one session, while it is open: text or a regular
-  expression marked in a colour, the text only or the whole line, over the
+  expression marked in a colour (eight neon ones, or any from the palette),
+  the text only or the whole line, over the
   program's own colours, with marks on the scroll bar. Set in the
   *Highlights* window (status bar), from a selection (right-click ›
   *Highlight*) or from the find bar. A highlight that turns up in a tab not

@@ -11,16 +11,17 @@ use przmterm_core::keywords::{Keyword, KeywordSet, format_color};
 use przmterm_term::search::{self, Hit, Pattern};
 use przmterm_term::{Screen, Terminal};
 
-/// Marker colours, in the order new highlights take them.
+/// Marker colours (neon, to stand out in a log), in the order new
+/// highlights take them.
 pub const COLORS: [(&str, [u8; 3]); 8] = [
-    ("Yellow", [0xf2, 0xc9, 0x4c]),
-    ("Orange", [0xf0, 0x8c, 0x3a]),
-    ("Red", [0xe5, 0x53, 0x4b]),
-    ("Pink", [0xe0, 0x6c, 0xb0]),
-    ("Purple", [0xa0, 0x78, 0xe8]),
-    ("Blue", [0x4a, 0x8f, 0xe0]),
-    ("Teal", [0x2e, 0xb8, 0xa8]),
-    ("Green", [0x5c, 0xb8, 0x5c]),
+    ("Yellow", [0xff, 0xf0, 0x1f]),
+    ("Green", [0x39, 0xff, 0x14]),
+    ("Cyan", [0x00, 0xf0, 0xff]),
+    ("Pink", [0xff, 0x2e, 0xb4]),
+    ("Orange", [0xff, 0x8c, 0x1a]),
+    ("Purple", [0xbc, 0x13, 0xfe]),
+    ("Red", [0xff, 0x31, 0x31]),
+    ("Blue", [0x1f, 0x51, 0xff]),
 ];
 
 /// The matches of a search, and the one being looked at.

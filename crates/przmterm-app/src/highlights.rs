@@ -16,6 +16,8 @@ pub struct HighlightsDialog {
     save_name: Option<String>,
     /// Put the keyboard in the name.
     focus_name: bool,
+    /// A colour menu was open last frame: Esc closes only it.
+    menu_open: bool,
 }
 
 pub enum Out {
@@ -33,6 +35,7 @@ impl HighlightsDialog {
             focus_last,
             save_name: None,
             focus_name: false,
+            menu_open: false,
         }
     }
 
@@ -173,7 +176,9 @@ impl HighlightsDialog {
             rules.remove(i);
         }
         highlights.set(rules);
-        let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        // Esc in the colours closes only them.
+        let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !self.menu_open;
+        self.menu_open = egui::Popup::is_any_open(ctx);
         if !open || (escape && self.save_name.is_none()) {
             out = Out::Close;
         }
@@ -258,8 +263,10 @@ fn color_button(ui: &mut egui::Ui, i: usize, color: &mut [u8; 3]) {
     let response = response
         .on_hover_text("Colour")
         .on_hover_cursor(egui::CursorIcon::PointingHand);
+    // Stays open while the palette is dragged; a swatch closes it.
     egui::Popup::menu(&response)
         .id(egui::Id::unique(("highlight-colour", i)))
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
@@ -285,9 +292,15 @@ fn color_button(ui: &mut egui::Ui, i: usize, color: &mut [u8; 3]) {
                     }
                 }
             });
-            ui.horizontal(|ui| {
-                ui.label("Other");
-                ui.color_edit_button_srgb(color);
-            });
+            ui.add_space(4.0);
+            ui.weak("Or any colour:");
+            let mut picked = egui::Color32::from_rgb(color[0], color[1], color[2]);
+            if egui::widgets::color_picker::color_picker_color32(
+                ui,
+                &mut picked,
+                egui::widgets::color_picker::Alpha::Opaque,
+            ) {
+                *color = [picked.r(), picked.g(), picked.b()];
+            }
         });
 }
