@@ -55,6 +55,9 @@ SetupIconFile={#RepoDir}\assets\icon.ico
 UninstallDisplayIcon={app}\PrzmTerm.exe
 UninstallDisplayName=PrzmTerm
 WizardStyle=modern
+; Drawn by scripts/installer-art.py; setup picks the size for the screen.
+WizardImageFile={#RepoDir}\packaging\windows\wizard-image-100.bmp,{#RepoDir}\packaging\windows\wizard-image-150.bmp,{#RepoDir}\packaging\windows\wizard-image-200.bmp
+WizardSmallImageFile={#RepoDir}\packaging\windows\wizard-small-100.bmp,{#RepoDir}\packaging\windows\wizard-small-150.bmp,{#RepoDir}\packaging\windows\wizard-small-200.bmp
 Compression=lzma2/max
 SolidCompression=yes
 OutputDir={#OutputDir}
