@@ -18,6 +18,7 @@
 pub mod highlight;
 pub mod log;
 pub mod plain;
+pub mod search;
 pub mod triggers;
 
 use std::collections::VecDeque;
@@ -1110,6 +1111,9 @@ impl Perform for Screen {
 pub struct Terminal {
     parser: Parser,
     screen: Screen,
+    /// Counts changes to what is held (output, resizing), so work done on
+    /// the contents can tell when it is out of date.
+    generation: u64,
 }
 
 impl Terminal {
@@ -1121,12 +1125,19 @@ impl Terminal {
         Self {
             parser: Parser::new(),
             screen: Screen::new(cols, rows, scrollback_limit),
+            generation: 0,
         }
     }
 
     /// Feeds bytes received from the remote side.
     pub fn feed(&mut self, bytes: &[u8]) {
         self.parser.advance(&mut self.screen, bytes);
+        self.generation += 1;
+    }
+
+    /// Changes with every change to the contents.
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     pub fn screen(&self) -> &Screen {
@@ -1139,6 +1150,7 @@ impl Terminal {
 
     pub fn resize(&mut self, cols: usize, rows: usize) {
         self.screen.resize(cols, rows);
+        self.generation += 1;
     }
 
     /// Bytes the terminal must send back to the remote side (DSR, DA replies).

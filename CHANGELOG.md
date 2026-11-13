@@ -7,6 +7,20 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Find in the session: Ctrl+Shift+F (⌘F on macOS), the magnifier in the
+  status bar or the terminal's right-click menu opens a find bar that
+  searches the history and the screen as you type, with match case and
+  regular expressions, a count, older / newer (Enter / Shift+Enter) and the
+  matches marked on the scroll bar. In a split tab it can search every pane.
+- Highlights of one session, while it is open: text or a regular
+  expression marked in a colour, the text only or the whole line, over the
+  program's own colours, with marks on the scroll bar. Set in the
+  *Highlights* window (status bar), from a selection (right-click ›
+  *Highlight*) or from the find bar. A highlight that turns up in a tab not
+  looked at marks the tab in its colour. They can be saved as a keyword set.
+
 ### Changed
 
 - The macOS disk image opens on a styled window: PrzmTerm's background, the

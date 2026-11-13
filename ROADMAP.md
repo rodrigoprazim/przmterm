@@ -206,6 +206,9 @@ and, when a device is at hand, a serial console (Xmodem or Ymodem).
 - [x] Debian / Ubuntu package (`.deb`), beside the `.tar.gz`
 - [x] Installer artwork: a styled macOS disk image window and branded
   Windows setup pages (`scripts/installer-art.py`)
+- [x] Find in the session (history and screen; every pane of a split tab
+  if wanted) and highlights of one session while it is open (text or
+  line, alert on the tab, savable as a keyword set)
 - [x] User guide and scripting reference: [docs/GUIDE.md](docs/GUIDE.md)
   and [docs/SCRIPTING.md](docs/SCRIPTING.md)
 - [x] Buttons and shortcuts that type a password can require the prompt

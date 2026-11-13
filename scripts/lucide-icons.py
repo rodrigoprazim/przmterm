@@ -49,6 +49,12 @@ ICONS = [
     "trash-2",
     "eraser",
     "file-text",
+    "highlighter",
+    "search",
+    "chevron-up",
+    "case-sensitive",
+    "regex",
+    "layout-grid",
 ]
 
 
