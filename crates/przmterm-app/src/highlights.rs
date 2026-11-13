@@ -294,6 +294,9 @@ fn color_button(ui: &mut egui::Ui, i: usize, color: &mut [u8; 3]) {
             });
             ui.add_space(4.0);
             ui.weak("Or any colour:");
+            // As wide as the row of swatches above it.
+            let swatches = COLORS.len() as f32 * 22.0 + (COLORS.len() - 1) as f32 * 4.0;
+            ui.spacing_mut().slider_width = swatches;
             let mut picked = egui::Color32::from_rgb(color[0], color[1], color[2]);
             if egui::widgets::color_picker::color_picker_color32(
                 ui,
