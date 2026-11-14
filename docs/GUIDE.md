@@ -474,7 +474,9 @@ it; *Download…* takes several files or whole folders. *Upload files…*,
 *Upload folder…* or dropping files on the window sends them to the folder
 shown. Transfers run in the background with a progress bar and *Cancel*.
 Click a column's header to sort by it (name, size, date or permissions),
-again to reverse; folders stay on top.
+again to reverse; folders stay on top. Drag the line between two headers
+to resize the columns; double-click it for the first widths. The window
+opens in the middle and keeps the size you give it.
 
 ### SCP, also as root
 
