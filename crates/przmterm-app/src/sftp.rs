@@ -90,7 +90,22 @@ pub struct SftpBrowser {
     anchor: Option<String>,
     /// The column the list is sorted by, and whether ascending.
     sort: (SortBy, bool),
+    /// The widths of Name, Size and Modified, as parts of the list's
+    /// width (Permissions takes the rest). Dragging a header's edge
+    /// changes them.
+    columns: [f32; 3],
+    /// The height of what is under the list (hint, transfers), as drawn
+    /// last time: the list takes the rest of the window, no more, so the
+    /// window keeps the size it is given.
+    footer_h: f32,
 }
+
+/// The window's size when it opens.
+const SIZE: egui::Vec2 = egui::vec2(760.0, 520.0);
+/// The columns' widths to start with, and after a double-click on an edge.
+const COLUMNS: [f32; 3] = [0.46, 0.14, 0.2];
+/// The narrowest a column gets.
+const MIN_COLUMN: f32 = 60.0;
 
 /// `1.2 MB`.
 pub fn size_text(bytes: u64) -> String {
@@ -143,6 +158,8 @@ impl SftpBrowser {
             drag_from: None,
             anchor: None,
             sort: (SortBy::Name, true),
+            columns: COLUMNS,
+            footer_h: 40.0,
         }
     }
 
@@ -270,9 +287,11 @@ impl SftpBrowser {
         ))
         .id(egui::Id::unique(("sftp", self.id)))
         .open(&mut open)
-        .default_size([760.0, 520.0])
-        .pivot(egui::Align2::CENTER_CENTER)
-        .default_pos(ctx.content_rect().center())
+        .default_size(SIZE)
+        // Opens in the middle, placed by its top left corner: resizing then
+        // moves the edge dragged and nothing else.
+        .default_pos(ctx.content_rect().center() - SIZE / 2.0)
+        .min_size([480.0, 320.0])
         .resizable(true)
         .collapsible(true)
         .show(ctx, |ui| self.body(ui));
@@ -358,7 +377,8 @@ impl SftpBrowser {
                 }
             });
         });
-        ui.horizontal(|ui| {
+        // Wraps when the window is narrow.
+        ui.horizontal_wrapped(|ui| {
             ui.add_enabled_ui(live, |ui| {
                 if ui.button("Upload files…").clicked()
                     && let Some(files) = rfd::FileDialog::new()
@@ -403,10 +423,19 @@ impl SftpBrowser {
                 {
                     self.ask = Some(Ask::Delete(selected.clone()));
                 }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    crate::theme::checkbox(ui, &mut self.hidden, "Hidden files")
+                // At the right end when it fits there, else on the next row.
+                let hidden = |ui: &mut egui::Ui, on: &mut bool| {
+                    crate::theme::checkbox(ui, on, "Hidden files")
                         .on_hover_text("Show names that start with a dot");
-                });
+                };
+                if ui.available_width() >= 120.0 {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        hidden(ui, &mut self.hidden);
+                    });
+                } else {
+                    ui.end_row();
+                    hidden(ui, &mut self.hidden);
+                }
             });
         });
         if let Some(e) = &self.error {
@@ -415,17 +444,12 @@ impl SftpBrowser {
         ui.separator();
 
         // The folder's contents.
-        let transfers_h = if self.transfers.is_empty() {
-            0.0
-        } else {
-            (self.transfers.len().min(4) as f32) * 26.0 + 36.0
-        };
-        let list_h = (ui.available_height() - transfers_h - 44.0).max(120.0);
-        let width = ui.available_width();
-        let (name_w, size_w, date_w) = (width * 0.46, width * 0.14, width * 0.2);
-        let gap = ui.spacing().item_spacing.x;
-        let perm_w = (width - name_w - size_w - date_w - 3.0 * gap).max(40.0);
         let row_h = ui.spacing().interact_size.y;
+        let width = ui.available_width();
+        let gap = ui.spacing().item_spacing.x;
+        let usable = (width - 3.0 * gap).max(4.0 * MIN_COLUMN);
+        let [name_w, size_w, date_w] = self.columns.map(|f| f * usable);
+        let perm_w = (usable - name_w - size_w - date_w).max(MIN_COLUMN);
         // The headers: a click sorts by the column, again reverses it.
         let sort = self.sort;
         let mut sort_by = None;
@@ -447,7 +471,10 @@ impl SftpBrowser {
                 .allocate_ui_with_layout(egui::vec2(w, row_h), layout, |ui| {
                     ui.set_min_width(w);
                     ui.add_space(if by == SortBy::Size { 12.0 } else { 4.0 });
-                    ui.strong(format!("{text}{arrow}"));
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(format!("{text}{arrow}")).strong())
+                            .truncate(),
+                    );
                 })
                 .response;
             let click = ui
@@ -495,6 +522,9 @@ impl SftpBrowser {
         let (multi, range) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
         // Each row's place on screen, for selecting with a box.
         let mut rows: Vec<(String, egui::Rect)> = Vec::new();
+        // The list fills what the window has left under the headers, less
+        // what goes under it: no more, or the window would grow.
+        let list_h = (ui.available_height() - self.footer_h).max(120.0);
         let list = egui::ScrollArea::vertical()
             .id_salt(("sftp-list", self.id))
             .max_height(list_h)
@@ -540,7 +570,7 @@ impl SftpBrowser {
                                 ui.set_min_width(size_w);
                                 ui.add_space(12.0);
                                 if !e.is_dir {
-                                    ui.label(size_text(e.size));
+                                    ui.add(egui::Label::new(size_text(e.size)).truncate());
                                 }
                             },
                         );
@@ -550,7 +580,7 @@ impl SftpBrowser {
                             |ui| {
                                 ui.set_min_width(date_w);
                                 ui.add_space(4.0);
-                                ui.label(e.modified.map_or(String::new(), |t| {
+                                let modified = e.modified.map_or(String::new(), |t| {
                                     chrono::DateTime::from_timestamp(t as i64, 0)
                                         .map(|d| {
                                             d.with_timezone(&chrono::Local)
@@ -558,14 +588,28 @@ impl SftpBrowser {
                                                 .to_string()
                                         })
                                         .unwrap_or_default()
-                                }));
+                                });
+                                ui.add(egui::Label::new(modified).truncate());
                             },
                         );
-                        ui.add_space(4.0);
-                        ui.monospace(
-                            e.permissions
-                                .map(|m| mode_text(m, e.is_dir))
-                                .unwrap_or_default(),
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(perm_w, row_h),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.set_min_width(perm_w);
+                                ui.add_space(4.0);
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(
+                                            e.permissions
+                                                .map(|m| mode_text(m, e.is_dir))
+                                                .unwrap_or_default(),
+                                        )
+                                        .monospace(),
+                                    )
+                                    .truncate(),
+                                );
+                            },
                         );
                         r
                     });
@@ -609,13 +653,36 @@ impl SftpBrowser {
                     }
                 }
             });
-        // Lines between the columns, and under the headers.
+        // Lines between the columns, and under the headers. A header's
+        // edge is dragged to resize its column; double-clicked, the
+        // columns go back to their first widths.
         let line = ui.visuals().widgets.noninteractive.bg_stroke;
         let (top, bottom) = (headers[0].top(), list.inner_rect.bottom());
-        for cell in &headers[..3] {
+        for (i, cell) in headers[..3].iter().enumerate() {
             let x = cell.right() + gap / 2.0;
-            ui.painter().vline(x, top..=bottom, line);
+            let edge = egui::Rect::from_x_y_ranges(x - 4.0..=x + 4.0, top..=cell.bottom());
+            let handle = ui
+                .interact(
+                    edge,
+                    ui.scope_id().with(("sftp-column", self.id, i)),
+                    egui::Sense::click_and_drag(),
+                )
+                .on_hover_cursor(egui::CursorIcon::ResizeColumn)
+                .on_hover_text("Drag to resize the column; double-click for the first widths");
+            if handle.dragged() {
+                self.columns = resize_columns(self.columns, i, handle.drag_delta().x, usable);
+            }
+            if handle.double_clicked() {
+                self.columns = COLUMNS;
+            }
+            let stroke = if handle.hovered() || handle.dragged() {
+                egui::Stroke::new(2.0, ui.visuals().selection.bg_fill)
+            } else {
+                line
+            };
+            ui.painter().vline(x, top..=bottom, stroke);
         }
+        let footer_top = list.inner_rect.bottom();
         ui.painter().hline(
             headers[0].left()..=list.inner_rect.right(),
             headers[0].bottom() + ui.spacing().item_spacing.y / 2.0,
@@ -628,12 +695,32 @@ impl SftpBrowser {
         if let Some(name) = download {
             self.start_downloads(vec![name]);
         }
-        ui.weak("Drag or Shift+click to select several; drop files here to upload.")
-            .on_hover_text(
-                "Double-click a folder to open it and a file to download it. \
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(
+                    "Drag or Shift+click to select several; drop files here to upload.",
+                )
+                .weak(),
+            )
+            .truncate(),
+        )
+        .on_hover_text(
+            "Double-click a folder to open it and a file to download it. \
                  Ctrl/⌘ adds to the selection.",
-            );
+        );
 
+        self.transfers_ui(ui, row_h);
+        // What is under the list, for the next frame's list height (not
+        // from the squeezed pass egui makes when a resize starts).
+        let footer_h = ui.min_rect().bottom() - footer_top;
+        if !ui.is_sizing_pass() && (footer_h - self.footer_h).abs() > 0.5 {
+            self.footer_h = footer_h;
+            ui.ctx().request_repaint();
+        }
+    }
+
+    /// The transfers under the list, with their progress.
+    fn transfers_ui(&mut self, ui: &mut egui::Ui, row_h: f32) {
         if !self.transfers.is_empty() {
             ui.separator();
             let mut cancel = None;
@@ -863,8 +950,41 @@ impl SftpBrowser {
     }
 }
 
+/// The columns after the edge right of column `edge` moved by `dx` points
+/// in a list `usable` points wide: the column and the next one share the
+/// move, neither narrower than [`MIN_COLUMN`].
+fn resize_columns(columns: [f32; 3], edge: usize, dx: f32, usable: f32) -> [f32; 3] {
+    let [a, b, c] = columns;
+    let mut parts = [a, b, c, 1.0 - a - b - c];
+    let min = MIN_COLUMN / usable;
+    let delta = (dx / usable).clamp(min - parts[edge], parts[edge + 1] - min);
+    if delta.is_finite() && min * 4.0 <= 1.0 {
+        parts[edge] += delta;
+        parts[edge + 1] -= delta;
+    }
+    [parts[0], parts[1], parts[2]]
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn columns_resize_within_limits() {
+        let usable = 1000.0;
+        let c = super::resize_columns(super::COLUMNS, 0, 50.0, usable);
+        assert!(
+            (c[0] - 0.51).abs() < 1e-5 && (c[1] - 0.09).abs() < 1e-5,
+            "{c:?}"
+        );
+        // Size cannot go below its minimum: Name stops growing.
+        let c = super::resize_columns(super::COLUMNS, 0, 500.0, usable);
+        assert!((c[1] - 0.06).abs() < 1e-5, "{c:?}");
+        assert!((c[0] - 0.54).abs() < 1e-5, "{c:?}");
+        // The last edge trades with Permissions (the rest).
+        let c = super::resize_columns(super::COLUMNS, 2, -50.0, usable);
+        assert!((c[2] - 0.15).abs() < 1e-5);
+        assert_eq!(c[..2], super::COLUMNS[..2]);
+    }
+
     use super::*;
 
     #[test]

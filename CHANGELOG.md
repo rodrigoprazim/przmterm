@@ -7,6 +7,18 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- SFTP / SCP browser: the columns are resized by dragging the line between
+  two headers (double-click it for the first widths); text that does not
+  fit is cut with "…".
+
+### Fixed
+
+- SFTP / SCP browser: the window no longer grows taller on its own or
+  springs back when made smaller. It opens in the middle at its first size,
+  and its buttons wrap when it is narrow.
+
 ## [1.0.0-rc.5] - 2026-11-13
 
 ### Added
