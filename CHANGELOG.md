@@ -23,6 +23,9 @@ All notable changes to PrzmTerm are recorded here. The format follows
   of it was closed and opened again. A running log keeps its file; a new
   log name is used when the log is next started. Connection settings are used at the
   next reconnect, and the message after saving says so.
+- The SCP file browser no longer shows "Opening SCP…" for ever when the
+  SCP shell cannot start (e.g. `sudo su -` on a host without sudo): it
+  says why, and where to change the shell.
 
 ## [1.0.0-rc.6] - 2026-11-14
 

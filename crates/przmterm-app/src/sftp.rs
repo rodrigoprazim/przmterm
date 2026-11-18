@@ -332,6 +332,23 @@ impl SftpBrowser {
             );
         }
         if !self.ready && self.closed.is_none() {
+            // It did not start: why, not a spinner that never ends.
+            if let Some(e) = &self.error {
+                ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    format!("Could not open {}.", self.protocol),
+                );
+                ui.label(e);
+                if self.protocol == "SCP" {
+                    ui.add_space(4.0);
+                    ui.weak(
+                        "With an SCP shell set (session settings › SSH › SCP shell), it must be a \
+                         command this server has: sudo su -, sudo -i, su -… Change it, save, \
+                         and open the file browser again.",
+                    );
+                }
+                return;
+            }
             ui.horizontal(|ui| {
                 ui.spinner();
                 ui.label(format!("Opening {}…", self.protocol));
