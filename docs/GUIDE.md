@@ -72,8 +72,10 @@ the [configuration reference](CONFIG.md).
 
 A session that is open takes its changed settings as soon as they are
 saved (in the session, its folders or the global settings): the font and
-colours, history size, keyword set, triggers, log, anti-idle, SCP shell,
-logon script and auto-reconnect. Settings of the connection itself (host,
+colours, history size, keyword set, triggers, anti-idle, SCP shell,
+logon script and auto-reconnect. A log that is running keeps its file, so
+nothing is split off: a new log folder or name is used once the log is
+stopped and started again (or at the next connection). Settings of the connection itself (host,
 port, user, protocol, credential, key, jump host, tunnels, X11, keepalive,
 terminal type) are used when it reconnects; the message after saving
 names the sessions this applies to.

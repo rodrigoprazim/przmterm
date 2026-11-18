@@ -969,8 +969,9 @@ impl Pane {
     }
 
     /// Takes the session's settings as saved again: what can change on an
-    /// open session changes now (look, history, keywords, triggers, log,
-    /// anti-idle, SCP shell, logon script and reconnecting). Returns
+    /// open session changes now (look, history, keywords, triggers,
+    /// anti-idle, SCP shell, logon script and reconnecting; the log's file
+    /// at its next start). Returns
     /// whether a setting of the connection itself changed, which only a
     /// reconnect takes.
     pub fn apply_saved(&mut self, session: Session, env: &Env) -> bool {
@@ -995,17 +996,12 @@ impl Pane {
         if old.triggers != session.triggers {
             self.load_triggers(&session);
         }
-        let log_changed = old.log_enabled != session.log_enabled
-            || old.log_path != session.log_path
-            || old.log_dir != session.log_dir;
-        // A log chosen for this pane only is not the session's to change.
-        if log_changed && self.log_to.is_none() {
-            if session.log_enabled {
-                self.stop_log();
-                self.start_log(env);
-            } else if old.log_enabled {
-                self.stop_log();
-            }
+        // A running log keeps its file: a new folder or name is used when
+        // the log is next started (stopped and started again, or the next
+        // connection), so nothing logged so far is split off. Logging
+        // switched on starts it now if it is not running.
+        if session.log_enabled && !old.log_enabled && self.log.is_none() {
+            self.start_log(env);
         }
         old.protocol != session.protocol
             || old.target != session.target
@@ -1329,6 +1325,37 @@ mod tests {
         assert!(pane.apply_saved(moved.clone(), &env));
         assert_eq!(pane.origin, Some(moved.clone()));
         assert!(!pane.apply_saved(moved, &env), "nothing changed");
+    }
+
+    #[test]
+    fn a_running_log_keeps_its_file_when_its_name_changes() {
+        let dir = std::env::temp_dir().join(format!("przmterm-logname-{}", std::process::id()));
+        let env = Env {
+            known_hosts: PathBuf::new(),
+            config_dir: Some(dir.clone()),
+            sessions: Vec::new(),
+            credentials: None,
+            headless: true,
+        };
+        let mut session = Session::quick_connect("10.0.0.1").unwrap();
+        session.log_enabled = true;
+        session.log_path = Some("first.log".into());
+        let mut pane = Pane::launcher();
+        pane.origin = Some(session.clone());
+        pane.start_log(&env);
+        let first = pane.log_path.clone().unwrap();
+        assert!(first.ends_with("first.log"));
+        let mut renamed = session.clone();
+        renamed.log_path = Some("second.log".into());
+        pane.apply_saved(renamed, &env);
+        assert!(pane.log.is_some());
+        assert_eq!(pane.log_path.as_ref(), Some(&first), "still the same file");
+        // Stopped and started again: the new name.
+        pane.stop_log();
+        pane.start_log(&env);
+        assert!(pane.log_path.as_ref().unwrap().ends_with("second.log"));
+        pane.stop_log();
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
