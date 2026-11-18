@@ -77,6 +77,8 @@ pub(crate) enum Job {
     },
     /// For the shell of an SCP session.
     Password(zeroize::Zeroizing<String>),
+    /// An SCP session goes on without its shell, as the login user.
+    WithoutShell,
 }
 
 /// The GUI's handle on an SFTP session (or an SCP one, which takes the
@@ -135,6 +137,12 @@ impl SftpClient {
         let _ = self
             .jobs
             .send(Job::Password(zeroize::Zeroizing::new(password.to_string())));
+    }
+
+    /// An SCP session whose shell could not start goes on without it, as
+    /// the user logged in (nothing for SFTP).
+    pub fn without_shell(&self) {
+        let _ = self.jobs.send(Job::WithoutShell);
     }
 
     pub fn cancel(&self, id: u64) {
@@ -292,7 +300,7 @@ async fn run(
                 let r = sftp.rename(from.clone(), to).await;
                 done(&ev, r.map_err(|e| e.to_string()), "Cannot rename", &from);
             }
-            Job::Password(_) => {}
+            Job::Password(_) | Job::WithoutShell => {}
         }
     }
     let _ = sftp.close().await;

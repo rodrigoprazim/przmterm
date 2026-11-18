@@ -510,6 +510,10 @@ mode. The commands run in the session's **SCP shell** (session settings,
 *Shells ▾*: *Default* is the login shell; `/bin/bash`, `/bin/ksh`, or
 `sudo su -` and `su -` to work as root — the same as typing `sudo su -`
 first). When the shell asks for a password, the browser asks for it once.
+If the shell cannot start (`sudo su -` on a host without sudo, say), the
+browser says why and offers *Open without the SCP shell*: it then works as
+the user logged in, with that user's permissions, and says so at its top;
+closing the window gives up.
 **⇅ Transfer** › protocol *SCP* sends or fetches files the same way, beside
 the terminal, with the progress in the status bar. The other side needs
 `scp`; with the *Default* shell nothing else is typed, so routers and

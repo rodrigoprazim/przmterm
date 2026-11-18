@@ -94,6 +94,10 @@ pub struct SftpBrowser {
     /// width (Permissions takes the rest). Dragging a header's edge
     /// changes them.
     columns: [f32; 3],
+    /// The SCP shell the session runs its commands in, if one is set.
+    shell: Option<String>,
+    /// It could not start and the user went on without it.
+    without_shell: bool,
     /// The height of what is under the list (hint, transfers), as drawn
     /// last time: the list takes the rest of the window, no more, so the
     /// window keeps the size it is given.
@@ -160,7 +164,16 @@ impl SftpBrowser {
             sort: (SortBy::Name, true),
             columns: COLUMNS,
             footer_h: 40.0,
+            shell: None,
+            without_shell: false,
         }
+    }
+
+    /// The SCP shell (`sudo su -`…) the session uses, to offer going on
+    /// without it if it cannot start.
+    pub fn with_shell(mut self, shell: Option<String>) -> Self {
+        self.shell = shell.filter(|s| !s.trim().is_empty());
+        self
     }
 
     fn go(&mut self, dir: &str) {
@@ -339,13 +352,24 @@ impl SftpBrowser {
                     format!("Could not open {}.", self.protocol),
                 );
                 ui.label(e);
-                if self.protocol == "SCP" {
-                    ui.add_space(4.0);
+                if let Some(shell) = self.shell.clone() {
+                    ui.add_space(6.0);
+                    ui.label(format!(
+                        "It can open without the SCP shell ({shell}), as the user you \
+                         logged in with: files are then read and written with that user's \
+                         permissions, not those {shell} gives. To not go on, close this \
+                         window."
+                    ));
                     ui.weak(
-                        "With an SCP shell set (session settings › SSH › SCP shell), it must be a \
-                         command this server has: sudo su -, sudo -i, su -… Change it, save, \
-                         and open the file browser again.",
+                        "To fix the shell for next time: session settings › SSH › SCP shell \
+                         (a command this server has: sudo su -, sudo -i, su -…).",
                     );
+                    ui.add_space(4.0);
+                    if crate::theme::primary_button(ui, "Open without the SCP shell").clicked() {
+                        self.error = None;
+                        self.without_shell = true;
+                        self.client.without_shell();
+                    }
                 }
                 return;
             }
@@ -354,6 +378,17 @@ impl SftpBrowser {
                 ui.label(format!("Opening {}…", self.protocol));
             });
             return;
+        }
+        if self.without_shell
+            && let Some(shell) = &self.shell
+        {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                format!(
+                    "Without the SCP shell ({shell}): browsing as the user logged in, with \
+                     that user's permissions."
+                ),
+            );
         }
         let selected: Vec<(String, bool)> = self
             .entries

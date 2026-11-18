@@ -2177,15 +2177,13 @@ impl PrzmApp {
                     .as_ref()
                     .map_or_else(|| pane.title(), |s| s.name.clone());
                 let shell = pane.origin.as_ref().and_then(|s| s.scp_shell.clone());
-                match pane.transport.scp_browser(shell, waker) {
+                match pane.transport.scp_browser(shell.clone(), waker) {
                     Some(client) => {
                         self.sftp_next += 1;
-                        self.sftp_windows.push(sftp::SftpBrowser::new(
-                            name,
-                            self.sftp_next,
-                            client,
-                            "SCP",
-                        ));
+                        self.sftp_windows.push(
+                            sftp::SftpBrowser::new(name, self.sftp_next, client, "SCP")
+                                .with_shell(shell),
+                        );
                     }
                     None => {
                         self.notice =
@@ -2395,9 +2393,13 @@ impl PrzmApp {
             .iter()
             .find(|p| !p.transport.is_closed() && p.origin.as_ref().is_some_and(|o| o.path == path))
             .expect("found above");
+        let shell = pane
+            .origin
+            .as_ref()
+            .and_then(|o| o.scp_shell.clone())
+            .filter(|_| scp);
         let client = if scp {
-            let shell = pane.origin.as_ref().and_then(|o| o.scp_shell.clone());
-            pane.transport.scp_browser(shell, waker)
+            pane.transport.scp_browser(shell.clone(), waker)
         } else {
             pane.transport.sftp(waker)
         };
@@ -2409,12 +2411,9 @@ impl PrzmApp {
                 .unwrap_or_default();
             self.sftp_next += 1;
             let protocol = if scp { "SCP" } else { "SFTP" };
-            self.sftp_windows.push(sftp::SftpBrowser::new(
-                name,
-                self.sftp_next,
-                client,
-                protocol,
-            ));
+            self.sftp_windows.push(
+                sftp::SftpBrowser::new(name, self.sftp_next, client, protocol).with_shell(shell),
+            );
             self.sftp_pending = None;
         } else {
             // Not logged in yet.
