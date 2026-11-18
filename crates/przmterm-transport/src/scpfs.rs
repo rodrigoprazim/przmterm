@@ -365,7 +365,9 @@ async fn list(shared: &Shared, dir: &str) -> Result<(String, Vec<Entry>), String
         "cd -- {} && pwd && {{ LC_ALL=C ls -laL --full-time 2>/dev/null || LC_ALL=C ls -laL; }}",
         quote(dir)
     );
-    let out = command(shared, &script).await?;
+    let out = command(shared, &script)
+        .await
+        .map_err(|e| after_path(e, dir))?;
     let mut lines = out.lines();
     let dir = lines.next().unwrap_or(dir).trim().to_string();
     let mut entries: Vec<Entry> = lines
@@ -378,6 +380,16 @@ async fn list(shared: &Shared, dir: &str) -> Result<(String, Vec<Entry>), String
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
     Ok((dir, entries))
+}
+
+/// A shell's message about `path` without what comes before the reason
+/// ("bash: line 1: cd: /x: No such file or directory" is "No such file or
+/// directory": the browser says which folder already).
+fn after_path(message: String, path: &str) -> String {
+    match message.rfind(&format!("{path}: ")) {
+        Some(at) if !path.is_empty() => message[at + path.len() + 2..].trim().to_string(),
+        _ => message,
+    }
 }
 
 /// The words of `line` with where each starts.
@@ -533,6 +545,21 @@ fn parse_ls_line(line: &str) -> Option<Entry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_shell_message_keeps_only_the_reason() {
+        assert_eq!(
+            after_path(
+                "bash: line 1: cd: /root/test: No such file or directory".into(),
+                "/root/test"
+            ),
+            "No such file or directory"
+        );
+        assert_eq!(
+            after_path("Permission denied".into(), "/x"),
+            "Permission denied"
+        );
+    }
 
     #[test]
     fn ls_lines_from_several_systems() {

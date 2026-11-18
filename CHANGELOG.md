@@ -27,6 +27,9 @@ All notable changes to PrzmTerm are recorded here. The format follows
   SCP shell cannot start (e.g. `sudo su -` on a host without sudo): it
   says why and offers *Open without the SCP shell* (as the user logged in,
   marked in the window); closing the window gives up.
+- SFTP and SCP browser errors are said once and alike: a missing folder is
+  "No such file or directory" in both (SFTP said "No such file: No such
+  file", SCP repeated the shell's "bash: line 1: cd: …").
 
 ## [1.0.0-rc.6] - 2026-11-14
 
