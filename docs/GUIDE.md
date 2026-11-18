@@ -496,6 +496,12 @@ logging in again. Double-click a folder to open it and a file to download
 it; *Download…* takes several files or whole folders. *Upload files…*,
 *Upload folder…* or dropping files on the window sends them to the folder
 shown. Transfers run in the background with a progress bar and *Cancel*.
+Right-click a file or folder for its menu: *Open* (folders), *Download…*,
+*Rename…*, *Delete…*, *Copy Path* and *Copy Name*, and the folder's *New
+Folder…*, *Upload Files…*, *Upload Folder…* and *Refresh*. It acts on the
+selection; right-clicking something not selected selects it first. The
+empty part of the list has the folder's menu, with *Copy Folder Path*.
+
 Click a column's header to sort by it (name, size, date or permissions),
 again to reverse; folders stay on top. Drag the line between two headers
 to resize the columns; double-click it for the first widths. The window

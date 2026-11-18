@@ -11,6 +11,10 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 - Tabs can be dragged along the tab bar to reorder them; dropped among a
   group's tabs, a tab joins the group.
+- SFTP / SCP browser: a right-click menu on files and folders (Open,
+  Download, Rename, Delete, Copy Path, Copy Name, and the folder's New
+  Folder, Upload and Refresh), for the selection; right-clicking outside
+  it selects that item. The list's empty part has the folder's menu.
 - *Log to File…* (right-click **Log**): logs the current session to a file
   you name, anywhere, until it closes, without changing its log settings.
   *Save History As…* writes the history and the screen to a text file.

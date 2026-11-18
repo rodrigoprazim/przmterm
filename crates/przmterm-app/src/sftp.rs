@@ -104,6 +104,98 @@ pub struct SftpBrowser {
     footer_h: f32,
 }
 
+/// What a right-click menu of the list asks for.
+enum MenuChoice {
+    /// Open this folder.
+    Open(String),
+    Download(Vec<String>),
+    Rename(String),
+    Delete(Vec<(String, bool)>),
+    /// Copy these names' full paths.
+    CopyPath(Vec<String>),
+    CopyName(Vec<String>),
+    /// Copy the folder shown's path.
+    CopyFolderPath,
+    NewFolder,
+    UploadFiles,
+    UploadFolder,
+    Refresh,
+}
+
+/// The menu of files and folders right-clicked (`targets`: name, folder).
+fn item_menu(ui: &mut egui::Ui, targets: &[(String, bool)]) -> Option<MenuChoice> {
+    let mut chosen = None;
+    let names: Vec<String> = targets.iter().map(|(n, _)| n.clone()).collect();
+    let one = targets.len() == 1;
+    if targets.len() > 1 {
+        ui.weak(format!("{} selected", targets.len()));
+        ui.separator();
+    }
+    if let [(name, true)] = targets
+        && ui.button("Open").clicked()
+    {
+        chosen = Some(MenuChoice::Open(name.clone()));
+    }
+    if ui.button("Download…").clicked() {
+        chosen = Some(MenuChoice::Download(names.clone()));
+    }
+    ui.separator();
+    if ui.add_enabled(one, egui::Button::new("Rename…")).clicked() {
+        chosen = Some(MenuChoice::Rename(names[0].clone()));
+    }
+    if ui.button("Delete…").clicked() {
+        chosen = Some(MenuChoice::Delete(targets.to_vec()));
+    }
+    ui.separator();
+    let path = if one { "Copy Path" } else { "Copy Paths" };
+    if ui.button(path).clicked() {
+        chosen = Some(MenuChoice::CopyPath(names.clone()));
+    }
+    let name = if one { "Copy Name" } else { "Copy Names" };
+    if ui.button(name).clicked() {
+        chosen = Some(MenuChoice::CopyName(names));
+    }
+    ui.separator();
+    if let Some(c) = folder_items(ui) {
+        chosen = Some(c);
+    }
+    if chosen.is_some() {
+        ui.close();
+    }
+    chosen
+}
+
+/// The menu of the folder shown (right-click on the list's empty part).
+fn folder_menu(ui: &mut egui::Ui) -> Option<MenuChoice> {
+    let mut chosen = folder_items(ui);
+    ui.separator();
+    if ui.button("Copy Folder Path").clicked() {
+        chosen = Some(MenuChoice::CopyFolderPath);
+    }
+    if chosen.is_some() {
+        ui.close();
+    }
+    chosen
+}
+
+/// What can be done in the folder shown.
+fn folder_items(ui: &mut egui::Ui) -> Option<MenuChoice> {
+    let mut chosen = None;
+    if ui.button("New Folder…").clicked() {
+        chosen = Some(MenuChoice::NewFolder);
+    }
+    if ui.button("Upload Files…").clicked() {
+        chosen = Some(MenuChoice::UploadFiles);
+    }
+    if ui.button("Upload Folder…").clicked() {
+        chosen = Some(MenuChoice::UploadFolder);
+    }
+    if ui.button("Refresh").clicked() {
+        chosen = Some(MenuChoice::Refresh);
+    }
+    chosen
+}
+
 /// The window's size when it opens.
 const SIZE: egui::Vec2 = egui::vec2(760.0, 520.0);
 /// The columns' widths to start with, and after a double-click on an edge.
@@ -571,12 +663,28 @@ impl SftpBrowser {
         }
         let mut open_dir = None;
         let mut download = None;
+        // What was chosen in a right-click menu.
+        let mut chosen: Option<MenuChoice> = None;
         let (multi, range) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
         // Each row's place on screen, for selecting with a box.
         let mut rows: Vec<(String, egui::Rect)> = Vec::new();
         // The list fills what the window has left under the headers, less
         // what goes under it: no more, or the window would grow.
         let list_h = (ui.available_height() - self.footer_h).max(120.0);
+        // Right-click on the list's empty part: the folder's menu (made
+        // before the rows, which take their own clicks over it).
+        let behind = ui.interact(
+            egui::Rect::from_min_size(ui.cursor().min, egui::vec2(width, list_h)),
+            ui.scope_id().with(("sftp-list-menu", self.id)),
+            egui::Sense::click(),
+        );
+        if live {
+            behind.context_menu(|ui| {
+                if let Some(c) = folder_menu(ui) {
+                    chosen = Some(c);
+                }
+            });
+        }
         let list = egui::ScrollArea::vertical()
             .id_salt(("sftp-list", self.id))
             .max_height(list_h)
@@ -667,6 +775,28 @@ impl SftpBrowser {
                     });
                     rows.push((e.name.clone(), line.response.rect));
                     let row = line.inner;
+                    // Right-click on a row outside the selection selects it;
+                    // its menu is for the selection.
+                    if row.secondary_clicked() && !on {
+                        self.selected = BTreeSet::from([e.name.clone()]);
+                        self.anchor = Some(e.name.clone());
+                    }
+                    if live {
+                        row.context_menu(|ui| {
+                            let targets: Vec<(String, bool)> = if self.selected.contains(&e.name) {
+                                self.entries
+                                    .iter()
+                                    .filter(|x| self.selected.contains(&x.name))
+                                    .map(|x| (x.name.clone(), x.is_dir))
+                                    .collect()
+                            } else {
+                                vec![(e.name.clone(), e.is_dir)]
+                            };
+                            if let Some(c) = item_menu(ui, &targets) {
+                                chosen = Some(c);
+                            }
+                        });
+                    }
                     if row.clicked() {
                         if range && let Some(anchor) = &self.anchor {
                             // Shift+click: everything between the two rows.
@@ -744,6 +874,9 @@ impl SftpBrowser {
         if let Some(d) = open_dir {
             self.go(&d);
         }
+        if let Some(c) = chosen {
+            self.menu_chosen(ui.ctx(), c);
+        }
         if let Some(name) = download {
             self.start_downloads(vec![name]);
         }
@@ -758,7 +891,7 @@ impl SftpBrowser {
         )
         .on_hover_text(
             "Double-click a folder to open it and a file to download it. \
-                 Ctrl/⌘ adds to the selection.",
+                 Ctrl/⌘ adds to the selection. Right-click for more.",
         );
 
         self.transfers_ui(ui, row_h);
@@ -768,6 +901,54 @@ impl SftpBrowser {
         if !ui.is_sizing_pass() && (footer_h - self.footer_h).abs() > 0.5 {
             self.footer_h = footer_h;
             ui.ctx().request_repaint();
+        }
+    }
+
+    /// Does what was chosen in a right-click menu.
+    fn menu_chosen(&mut self, ctx: &egui::Context, choice: MenuChoice) {
+        let paths = |names: &[String]| -> String {
+            names
+                .iter()
+                .map(|n| join(&self.dir, n))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        match choice {
+            MenuChoice::Open(name) => self.go(&join(&self.dir, &name)),
+            MenuChoice::Download(names) => self.start_downloads(names),
+            MenuChoice::Rename(name) => {
+                self.ask = Some(Ask::Rename {
+                    from: name.clone(),
+                    to: name,
+                });
+            }
+            MenuChoice::Delete(items) => self.ask = Some(Ask::Delete(items)),
+            MenuChoice::CopyPath(names) => ctx.copy_text(paths(&names)),
+            MenuChoice::CopyName(names) => ctx.copy_text(names.join("\n")),
+            MenuChoice::CopyFolderPath => ctx.copy_text(self.dir.clone()),
+            MenuChoice::NewFolder => self.ask = Some(Ask::NewFolder(String::new())),
+            MenuChoice::UploadFiles => {
+                if let Some(files) = rfd::FileDialog::new()
+                    .set_title("Upload files")
+                    .pick_files()
+                {
+                    for f in files {
+                        self.start_upload(f);
+                    }
+                }
+            }
+            MenuChoice::UploadFolder => {
+                if let Some(folder) = rfd::FileDialog::new()
+                    .set_title("Upload a folder")
+                    .pick_folder()
+                {
+                    self.start_upload(folder);
+                }
+            }
+            MenuChoice::Refresh => {
+                let dir = self.dir.clone();
+                self.go(&dir);
+            }
         }
     }
 
