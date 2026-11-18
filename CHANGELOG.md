@@ -7,6 +7,34 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Tabs can be dragged along the tab bar to reorder them; dropped among a
+  group's tabs, a tab joins the group.
+- SFTP / SCP browser: a right-click menu on files and folders (Open,
+  Download, Rename, Delete, Copy Path, Copy Name, and the folder's New
+  Folder, Upload and Refresh), for the selection; right-clicking outside
+  it selects that item. The list's empty part has the folder's menu.
+- *Log to File…* (right-click **Log**): logs the current session to a file
+  you name, anywhere, until it closes, without changing its log settings.
+  *Save History As…* writes the history and the screen to a text file.
+
+### Fixed
+
+- A session that is open takes its changed settings when they are saved
+  (SCP shell, font and colours, history size, keyword set, triggers,
+  anti-idle, logon script, auto-reconnect) instead of only after every tab
+  of it was closed and opened again. A running log keeps its file; a new
+  log name is used when the log is next started. Connection settings are used at the
+  next reconnect, and the message after saving says so.
+- The SCP file browser no longer shows "Opening SCP…" for ever when the
+  SCP shell cannot start (e.g. `sudo su -` on a host without sudo): it
+  says why and offers *Open without the SCP shell* (as the user logged in,
+  marked in the window); closing the window gives up.
+- SFTP and SCP browser errors are said once and alike: a missing folder is
+  "No such file or directory" in both (SFTP said "No such file: No such
+  file", SCP repeated the shell's "bash: line 1: cd: …").
+
 ## [1.0.0-rc.6] - 2026-11-14
 
 ### Added

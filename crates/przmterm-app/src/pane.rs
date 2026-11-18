@@ -133,6 +133,9 @@ pub struct Pane {
     pub log: Option<SessionLog>,
     /// The file of the log running now or, once stopped, of the last one.
     pub log_path: Option<PathBuf>,
+    /// A log file chosen for this pane only ("Log to File…"), used instead
+    /// of the session's until the pane closes.
+    pub log_to: Option<PathBuf>,
     closed_announced: bool,
     /// A pending automatic reconnect.
     retry: Option<Retry>,
@@ -274,6 +277,7 @@ impl Pane {
             origin,
             log: None,
             log_path: None,
+            log_to: None,
             closed_announced: false,
             retry: None,
             attempts: 0,
@@ -920,7 +924,10 @@ impl Pane {
             .origin
             .clone()
             .unwrap_or_else(|| Session::quick_connect("przmterm").expect("valid quick-connect"));
-        let path = session.log_file(env.config_dir.as_deref(), &chrono::Local::now());
+        let path = match &self.log_to {
+            Some(path) => path.clone(),
+            None => session.log_file(env.config_dir.as_deref(), &chrono::Local::now()),
+        };
         match SessionLog::start(path.clone(), &session.name) {
             Ok(log) => {
                 self.log_path = Some(log.path.clone());
@@ -934,6 +941,79 @@ impl Pane {
 
     pub fn stop_log(&mut self) {
         self.log = None;
+    }
+
+    /// Logs to `path` from now on, for this pane only (the session's own
+    /// log settings are left as they are).
+    pub fn log_to(&mut self, path: PathBuf, env: &Env) {
+        self.stop_log();
+        // Chosen in a save dialog, which asked before replacing it: a new
+        // file (starting and stopping later adds to it).
+        let _ = File::create(&path);
+        self.log_to = Some(path);
+        self.start_log(env);
+    }
+
+    /// The history and the screen as text, one line per line (soft-wrapped
+    /// lines joined), for "Save History As…".
+    pub fn history_text(&self) -> String {
+        let screen = self.term.screen();
+        let total = screen.total_lines();
+        if total == 0 {
+            return String::new();
+        }
+        let mut text = screen.text_range((0, 0), (total - 1, screen.cols().saturating_sub(1)));
+        text.truncate(text.trim_end().len());
+        text.push('\n');
+        text
+    }
+
+    /// Takes the session's settings as saved again: what can change on an
+    /// open session changes now (look, history, keywords, triggers,
+    /// anti-idle, SCP shell, logon script and reconnecting; the log's file
+    /// at its next start). Returns
+    /// whether a setting of the connection itself changed, which only a
+    /// reconnect takes.
+    pub fn apply_saved(&mut self, session: Session, env: &Env) -> bool {
+        let Some(old) = self.origin.replace(session.clone()) else {
+            return false;
+        };
+        if old == session {
+            return false;
+        }
+        // The look only if it changed in the settings, so a size set with
+        // zoom or Font… stays otherwise.
+        let look = TerminalView::for_session(&session).look();
+        if TerminalView::for_session(&old).look() != look {
+            self.view.set_look(&look);
+        }
+        if old.scrollback != session.scrollback {
+            self.term.set_scrollback_limit(session.scrollback);
+        }
+        if old.keywords != session.keywords {
+            self.reload_keywords(env);
+        }
+        if old.triggers != session.triggers {
+            self.load_triggers(&session);
+        }
+        // A running log keeps its file: a new folder or name is used when
+        // the log is next started (stopped and started again, or the next
+        // connection), so nothing logged so far is split off. Logging
+        // switched on starts it now if it is not running.
+        if session.log_enabled && !old.log_enabled && self.log.is_none() {
+            self.start_log(env);
+        }
+        old.protocol != session.protocol
+            || old.target != session.target
+            || old.credential != session.credential
+            || old.identity_file != session.identity_file
+            || old.jump_host != session.jump_host
+            || old.tunnels != session.tunnels
+            || old.legacy_algorithms != session.legacy_algorithms
+            || old.x11_forwarding != session.x11_forwarding
+            || old.keepalive != session.keepalive
+            || old.term_type != session.term_type
+            || old.debug != session.debug
     }
 
     pub fn size(&self) -> Size {
@@ -1210,6 +1290,72 @@ mod tests {
         fn logged_in(&self) -> bool {
             self.logged_in.load(std::sync::atomic::Ordering::Relaxed)
         }
+    }
+
+    #[test]
+    fn saved_settings_reach_the_open_pane() {
+        let env = Env {
+            known_hosts: PathBuf::new(),
+            config_dir: None,
+            sessions: Vec::new(),
+            credentials: None,
+            headless: true,
+        };
+        let session = Session::quick_connect("10.0.0.1").unwrap();
+        let mut pane = Pane::launcher();
+        pane.origin = Some(session.clone());
+        pane.term.feed(&b"line\r\n".repeat(50));
+        // What an open session can take: taken, no reconnect needed.
+        let mut changed = session.clone();
+        changed.scp_shell = Some("sudo -i".into());
+        changed.scrollback = 10;
+        changed.font_size = 20;
+        assert!(!pane.apply_saved(changed, &env));
+        let origin = pane.origin.as_ref().unwrap();
+        assert_eq!(origin.scp_shell.as_deref(), Some("sudo -i"));
+        assert!(pane.term.screen().scrollback_len() <= 10);
+        assert_eq!(pane.view.font_size, 20.0);
+        // The connection's own settings: kept for the reconnect.
+        let mut moved = pane.origin.clone().unwrap();
+        moved.target = Target::Network {
+            host: "10.0.0.2".into(),
+            port: 22,
+            username: None,
+        };
+        assert!(pane.apply_saved(moved.clone(), &env));
+        assert_eq!(pane.origin, Some(moved.clone()));
+        assert!(!pane.apply_saved(moved, &env), "nothing changed");
+    }
+
+    #[test]
+    fn a_running_log_keeps_its_file_when_its_name_changes() {
+        let dir = std::env::temp_dir().join(format!("przmterm-logname-{}", std::process::id()));
+        let env = Env {
+            known_hosts: PathBuf::new(),
+            config_dir: Some(dir.clone()),
+            sessions: Vec::new(),
+            credentials: None,
+            headless: true,
+        };
+        let mut session = Session::quick_connect("10.0.0.1").unwrap();
+        session.log_enabled = true;
+        session.log_path = Some("first.log".into());
+        let mut pane = Pane::launcher();
+        pane.origin = Some(session.clone());
+        pane.start_log(&env);
+        let first = pane.log_path.clone().unwrap();
+        assert!(first.ends_with("first.log"));
+        let mut renamed = session.clone();
+        renamed.log_path = Some("second.log".into());
+        pane.apply_saved(renamed, &env);
+        assert!(pane.log.is_some());
+        assert_eq!(pane.log_path.as_ref(), Some(&first), "still the same file");
+        // Stopped and started again: the new name.
+        pane.stop_log();
+        pane.start_log(&env);
+        assert!(pane.log_path.as_ref().unwrap().ends_with("second.log"));
+        pane.stop_log();
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

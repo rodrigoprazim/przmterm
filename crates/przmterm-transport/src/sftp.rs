@@ -19,6 +19,29 @@ use crate::Waker;
 use crate::pipe::runtime;
 use crate::ssh::Handle;
 
+/// An SFTP error as a person would say it: the server's message, or the
+/// status in words ("No such file: No such file" was both, said twice).
+fn why(e: russh_sftp::client::error::Error) -> String {
+    use russh_sftp::protocol::StatusCode;
+    let russh_sftp::client::error::Error::Status(status) = e else {
+        return e.to_string();
+    };
+    let code = status.status_code;
+    let message = status.error_message.trim();
+    let plain = match code {
+        StatusCode::NoSuchFile => "No such file or directory".to_string(),
+        StatusCode::PermissionDenied => "Permission denied".to_string(),
+        StatusCode::Failure => "The operation failed".to_string(),
+        other => other.to_string(),
+    };
+    // A message that only repeats the status says nothing more.
+    if message.is_empty() || message.eq_ignore_ascii_case(&code.to_string()) {
+        plain
+    } else {
+        message.to_string()
+    }
+}
+
 /// One entry of a remote folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
@@ -77,6 +100,8 @@ pub(crate) enum Job {
     },
     /// For the shell of an SCP session.
     Password(zeroize::Zeroizing<String>),
+    /// An SCP session goes on without its shell, as the login user.
+    WithoutShell,
 }
 
 /// The GUI's handle on an SFTP session (or an SCP one, which takes the
@@ -135,6 +160,12 @@ impl SftpClient {
         let _ = self
             .jobs
             .send(Job::Password(zeroize::Zeroizing::new(password.to_string())));
+    }
+
+    /// An SCP session whose shell could not start goes on without it, as
+    /// the user logged in (nothing for SFTP).
+    pub fn without_shell(&self) {
+        let _ = self.jobs.send(Job::WithoutShell);
     }
 
     pub fn cancel(&self, id: u64) {
@@ -276,23 +307,21 @@ async fn run(
             },
             Job::Mkdir(path) => {
                 let r = sftp.create_dir(path.clone()).await;
-                done(&ev, r.map_err(|e| e.to_string()), "Cannot create", &path);
+                done(&ev, r.map_err(why), "Cannot create", &path);
             }
             Job::Remove { path, is_dir } => {
                 let r = if is_dir {
                     remove_tree(&sftp, &path).await
                 } else {
-                    sftp.remove_file(path.clone())
-                        .await
-                        .map_err(|e| e.to_string())
+                    sftp.remove_file(path.clone()).await.map_err(why)
                 };
                 done(&ev, r, "Cannot delete", &path);
             }
             Job::Rename { from, to } => {
                 let r = sftp.rename(from.clone(), to).await;
-                done(&ev, r.map_err(|e| e.to_string()), "Cannot rename", &from);
+                done(&ev, r.map_err(why), "Cannot rename", &from);
             }
-            Job::Password(_) => {}
+            Job::Password(_) | Job::WithoutShell => {}
         }
     }
     let _ = sftp.close().await;
@@ -311,14 +340,11 @@ fn done(ev: &Events, result: Result<(), String>, what: &str, path: &str) {
 }
 
 async fn list(sftp: &SftpSession, dir: &str) -> Result<(String, Vec<Entry>), String> {
-    let dir = sftp
-        .canonicalize(dir.to_string())
-        .await
-        .map_err(|e| e.to_string())?;
+    let dir = sftp.canonicalize(dir.to_string()).await.map_err(why)?;
     let mut entries: Vec<Entry> = sftp
         .read_dir(dir.clone())
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(why)?
         .filter(|e| e.file_name() != "." && e.file_name() != "..")
         .map(|e| {
             let meta = e.metadata();
@@ -353,10 +379,7 @@ async fn remote_tree(
     sftp: &SftpSession,
     path: &str,
 ) -> Result<(Vec<(String, u64)>, Vec<String>), String> {
-    let meta = sftp
-        .metadata(path.to_string())
-        .await
-        .map_err(|e| e.to_string())?;
+    let meta = sftp.metadata(path.to_string()).await.map_err(why)?;
     if !meta.is_dir() {
         return Ok((vec![(path.to_string(), meta.size.unwrap_or(0))], Vec::new()));
     }
@@ -439,7 +462,7 @@ async fn download(
     let mut buf = vec![0u8; CHUNK];
     for (path, _) in &files {
         let target = local_path(path);
-        let mut from = sftp.open(path.clone()).await.map_err(|e| e.to_string())?;
+        let mut from = sftp.open(path.clone()).await.map_err(why)?;
         let mut to = tokio::fs::File::create(&target)
             .await
             .map_err(|e| format!("{}: {e}", target.display()))?;
@@ -580,6 +603,31 @@ async fn remove_tree(sftp: &SftpSession, path: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn errors_are_said_once() {
+        use russh_sftp::protocol::{Status, StatusCode};
+        let status = |code, message: &str| {
+            russh_sftp::client::error::Error::Status(Status {
+                id: 0,
+                status_code: code,
+                error_message: message.into(),
+                language_tag: String::new(),
+            })
+        };
+        assert_eq!(
+            why(status(StatusCode::NoSuchFile, "No such file")),
+            "No such file or directory"
+        );
+        assert_eq!(
+            why(status(StatusCode::PermissionDenied, "")),
+            "Permission denied"
+        );
+        assert_eq!(
+            why(status(StatusCode::Failure, "Directory not empty")),
+            "Directory not empty"
+        );
+    }
 
     #[test]
     fn paths() {

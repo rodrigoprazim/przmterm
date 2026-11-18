@@ -70,6 +70,16 @@ and then the **global settings**. Set something once on a folder (a user
 name, a keyword set, a log) and every session in it follows. Every key is in
 the [configuration reference](CONFIG.md).
 
+A session that is open takes its changed settings as soon as they are
+saved (in the session, its folders or the global settings): the font and
+colours, history size, keyword set, triggers, anti-idle, SCP shell,
+logon script and auto-reconnect. A log that is running keeps its file, so
+nothing is split off: a new log folder or name is used once the log is
+stopped and started again (or at the next connection). Settings of the connection itself (host,
+port, user, protocol, credential, key, jump host, tunnels, X11, keepalive,
+terminal type) are used when it reconnects; the message after saving
+names the sessions this applies to.
+
 Sessions can also be created and edited from the app: **+** next to
 *Sessions*, or right-click a session for Edit, Duplicate and Delete. Right-click
 a folder to add a session or subfolder there, rename it, give it a colour
@@ -295,6 +305,10 @@ every pane of the tab (after a warning) until you turn it off.
 In a split tab, drag a pane by its caption onto another to swap them, or
 right-click the caption to move it left or right.
 
+Drag a tab along the tab bar to move it; a line shows where it will go.
+Dropped among the tabs of a group it joins the group; dragged away from
+its group it leaves it.
+
 **Tab groups.** *Group › New Group* in a tab's menu starts a group: its tabs
 sit together after a coloured label, each with a bar of its colour, and *Group › Add to …* puts more tabs in
 it. Clicking the label offers *Send Command to Group…* (one or more commands,
@@ -463,6 +477,15 @@ The file name can hold the session's name, the host, the date and the time
 colours or escape sequences. The codes are listed in the
 [configuration reference](CONFIG.md#log).
 
+Right-click **Log** for more:
+
+- *Log to File…* logs the current pane to a file you name, anywhere,
+  from now on. It is for this pane only and is forgotten when it closes;
+  the session's own log settings do not change. Stopping and starting the
+  log again adds to the same file.
+- *Save History As…* writes what the pane's history and screen hold now
+  to a text file.
+
 ## Files: SFTP, SCP, Zmodem
 
 ### SFTP
@@ -473,6 +496,12 @@ logging in again. Double-click a folder to open it and a file to download
 it; *Download…* takes several files or whole folders. *Upload files…*,
 *Upload folder…* or dropping files on the window sends them to the folder
 shown. Transfers run in the background with a progress bar and *Cancel*.
+Right-click a file or folder for its menu: *Open* (folders), *Download…*,
+*Rename…*, *Delete…*, *Copy Path* and *Copy Name*, and the folder's *New
+Folder…*, *Upload Files…*, *Upload Folder…* and *Refresh*. It acts on the
+selection; right-clicking something not selected selects it first. The
+empty part of the list has the folder's menu, with *Copy Folder Path*.
+
 Click a column's header to sort by it (name, size, date or permissions),
 again to reverse; folders stay on top. Drag the line between two headers
 to resize the columns; double-click it for the first widths. The window
@@ -487,6 +516,10 @@ mode. The commands run in the session's **SCP shell** (session settings,
 *Shells ▾*: *Default* is the login shell; `/bin/bash`, `/bin/ksh`, or
 `sudo su -` and `su -` to work as root — the same as typing `sudo su -`
 first). When the shell asks for a password, the browser asks for it once.
+If the shell cannot start (`sudo su -` on a host without sudo, say), the
+browser says why and offers *Open without the SCP shell*: it then works as
+the user logged in, with that user's permissions, and says so at its top;
+closing the window gives up.
 **⇅ Transfer** › protocol *SCP* sends or fetches files the same way, beside
 the terminal, with the progress in the status bar. The other side needs
 `scp`; with the *Default* shell nothing else is typed, so routers and

@@ -24,7 +24,7 @@ pub(crate) fn start(handle: Arc<Handle>, shell: Option<String>, waker: Waker) ->
     let (client, rx, ev, cancelled) = sftp::client(waker);
     let shared = Arc::new(Shared {
         handle,
-        shell,
+        shell: Mutex::new(shell),
         password: Mutex::new(Zeroizing::new(String::new())),
         session: tokio::sync::Mutex::new(None),
     });
@@ -34,7 +34,8 @@ pub(crate) fn start(handle: Arc<Handle>, shell: Option<String>, waker: Waker) ->
 
 struct Shared {
     handle: Arc<Handle>,
-    shell: Option<String>,
+    /// `None` after [`Job::WithoutShell`].
+    shell: Mutex<Option<String>>,
     /// For the shell's prompt, once the user gave it.
     password: Mutex<Zeroizing<String>>,
     /// The shell that runs the commands, kept open between them so each
@@ -43,6 +44,10 @@ struct Shared {
 }
 
 impl Shared {
+    fn shell(&self) -> Option<String> {
+        self.shell.lock().ok().and_then(|s| s.clone())
+    }
+
     fn password(&self) -> Zeroizing<String> {
         self.password
             .lock()
@@ -71,6 +76,17 @@ async fn run(
         match job {
             Job::Password(password) => {
                 shared.set_password(password);
+                if !ready {
+                    ready = init(&shared, &ev).await;
+                }
+            }
+            // The shell could not start: on as the login user.
+            Job::WithoutShell => {
+                if let Ok(mut shell) = shared.shell.lock() {
+                    *shell = None;
+                }
+                *shared.session.lock().await = None;
+                shared.set_password(Zeroizing::new(String::new()));
                 if !ready {
                     ready = init(&shared, &ev).await;
                 }
@@ -150,7 +166,7 @@ async fn init(shared: &Shared, ev: &Events) -> bool {
 
 /// Reports `e`; a password problem asks for the password instead.
 fn failed(shared: &Shared, ev: &Events, what: &str, e: String) {
-    let shell = shared.shell.as_deref().unwrap_or("the shell");
+    let shell = shared.shell().unwrap_or_else(|| "the shell".into());
     if e == PASSWORD_NEEDED {
         ev.send(SftpEvent::PasswordNeeded(format!(
             "{shell} asks for a password."
@@ -192,10 +208,11 @@ async fn moved(
         });
     };
     let password = shared.password();
+    let shell = shared.shell();
     let work = scp::transfer(
         &shared.handle,
         direction,
-        shared.shell.as_deref(),
+        shell.as_deref(),
         &password,
         &report,
         &stop,
@@ -235,7 +252,8 @@ async fn command(shared: &Shared, script: &str) -> Result<String, String> {
     let body = format!(
         "printf '%s%s\\n' PRZMTERM- BEGIN; {script}; printf '\\n%s%s %s\\n' PRZMTERM- END \"$?\""
     );
-    let (output, stderr) = match shared.shell.as_deref() {
+    let shell = shared.shell();
+    let (output, stderr) = match shell.as_deref() {
         None => {
             let mut conn = Conn::new(open_channel(&shared.handle, None, &body).await?);
             let out = tokio::time::timeout(Duration::from_secs(60), conn.read_all())
@@ -347,7 +365,9 @@ async fn list(shared: &Shared, dir: &str) -> Result<(String, Vec<Entry>), String
         "cd -- {} && pwd && {{ LC_ALL=C ls -laL --full-time 2>/dev/null || LC_ALL=C ls -laL; }}",
         quote(dir)
     );
-    let out = command(shared, &script).await?;
+    let out = command(shared, &script)
+        .await
+        .map_err(|e| after_path(e, dir))?;
     let mut lines = out.lines();
     let dir = lines.next().unwrap_or(dir).trim().to_string();
     let mut entries: Vec<Entry> = lines
@@ -360,6 +380,16 @@ async fn list(shared: &Shared, dir: &str) -> Result<(String, Vec<Entry>), String
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
     Ok((dir, entries))
+}
+
+/// A shell's message about `path` without what comes before the reason
+/// ("bash: line 1: cd: /x: No such file or directory" is "No such file or
+/// directory": the browser says which folder already).
+fn after_path(message: String, path: &str) -> String {
+    match message.rfind(&format!("{path}: ")) {
+        Some(at) if !path.is_empty() => message[at + path.len() + 2..].trim().to_string(),
+        _ => message,
+    }
 }
 
 /// The words of `line` with where each starts.
@@ -515,6 +545,21 @@ fn parse_ls_line(line: &str) -> Option<Entry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_shell_message_keeps_only_the_reason() {
+        assert_eq!(
+            after_path(
+                "bash: line 1: cd: /root/test: No such file or directory".into(),
+                "/root/test"
+            ),
+            "No such file or directory"
+        );
+        assert_eq!(
+            after_path("Permission denied".into(), "/x"),
+            "Permission denied"
+        );
+    }
 
     #[test]
     fn ls_lines_from_several_systems() {

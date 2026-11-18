@@ -285,6 +285,44 @@ fn status_color(ui: &egui::Ui, connected: bool) -> egui::Color32 {
 }
 
 /// A tab; `status`: a connection's tab, its icon before the title.
+/// `name` fit for a file name: characters file systems refuse become `_`.
+fn file_safe(name: &str) -> String {
+    let safe: String = name
+        .chars()
+        .map(|c| {
+            if c.is_control() || r#"/\:*?"<>|"#.contains(c) {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let safe = safe.trim().trim_matches('.').to_string();
+    if safe.is_empty() {
+        "session".to_string()
+    } else {
+        safe
+    }
+}
+
+/// Where a tab dropped at `at` goes, among the tabs `placed` (index and
+/// place in the bar): before which tab (an index; one past the last tab of
+/// the row for its end), and the line to show there (x, and the row's
+/// height). `None` off the bar.
+fn drop_slot(placed: &[(usize, egui::Rect)], at: egui::Pos2) -> Option<(usize, f32, egui::Rangef)> {
+    let row: Vec<&(usize, egui::Rect)> = placed
+        .iter()
+        .filter(|(_, r)| r.expand2(egui::vec2(0.0, 6.0)).y_range().contains(at.y))
+        .collect();
+    for (i, r) in &row {
+        if at.x < r.center().x {
+            return Some((*i, r.left() - 1.0, r.y_range()));
+        }
+    }
+    let (i, r) = row.last()?;
+    Some((i + 1, r.right() + 1.0, r.y_range()))
+}
+
 fn tab_widget(
     ui: &mut egui::Ui,
     title: &str,
@@ -308,7 +346,9 @@ fn tab_widget(
     let lock_w = if locked { 18.0 } else { 0.0 };
     let dot_w = if status.is_some() { 18.0 } else { 0.0 };
     let width = pad + lock_w + dot_w + galley.size().x + 6.0 + close_w + 6.0;
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+    // Dragged, a tab moves to another place in the bar.
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click_and_drag());
     let close_rect = egui::Rect::from_center_size(
         egui::pos2(rect.right() - 6.0 - close_w / 2.0, rect.center().y),
         egui::vec2(close_w, close_w - 2.0),
@@ -645,6 +685,9 @@ enum Action {
     NewShellTab,
     CloseTab(usize),
     SelectTab(usize),
+    /// Moves a tab (by index) to before the tab now at the second index
+    /// (the number of tabs: to the end).
+    MoveTab(usize, usize),
     /// Asks what to put next to the current session.
     Split(Layout),
     /// Splits the current tab: the panes `others` (tab, pane) move in from
@@ -685,6 +728,10 @@ enum Action {
     SwapPanes(usize, usize),
     Reconnect,
     ToggleLog,
+    /// Asks for a file and logs the active pane to it, for this pane only.
+    LogTo,
+    /// Asks for a file and writes the active pane's history to it.
+    SaveHistory,
     /// Opens the active pane's log file (the running one, or the last).
     OpenLog,
     /// Shows that file in Finder / Explorer.
@@ -1077,19 +1124,24 @@ impl PrzmApp {
         self.reload_sessions();
     }
 
-    fn reload_sessions(&mut self) {
+    /// Reads the sessions again; open sessions take what changed in their
+    /// settings. Returns the open sessions with a changed connection
+    /// setting, which they take when they reconnect.
+    fn reload_sessions(&mut self) -> Vec<String> {
         if let Some(dir) = &self.config_dir {
             self.sessions = SessionTree::load(dir);
         }
         self.share_sessions();
-        self.refresh_anti_idle();
+        self.refresh_open_sessions()
     }
 
-    /// Open sessions take a changed anti-idle at once: a saved session from
-    /// its file (and folders), a quick connect from the global settings.
-    fn refresh_anti_idle(&mut self) {
+    /// Open sessions take their settings as saved now: a saved session from
+    /// its file (and folders), a quick connect the global anti-idle.
+    fn refresh_open_sessions(&mut self) -> Vec<String> {
         let saved = self.sessions.root.all_sessions();
         let global = self.sessions.root.inherited.anti_idle();
+        let env = self.env();
+        let mut reconnect = Vec::new();
         for pane in self.tabs.iter_mut().flat_map(|t| &mut t.panes) {
             if pane.is_launcher() {
                 continue;
@@ -1097,15 +1149,22 @@ impl PrzmApp {
             let Some(origin) = &mut pane.origin else {
                 continue;
             };
-            origin.anti_idle = if origin.path.as_os_str().is_empty() {
-                global.clone()
-            } else {
-                match saved.iter().find(|s| s.path == origin.path) {
-                    Some(session) => session.anti_idle.clone(),
-                    None => continue,
-                }
+            if origin.path.as_os_str().is_empty() {
+                origin.anti_idle = global.clone();
+                continue;
+            }
+            let Some(session) = saved.iter().find(|s| s.path == origin.path) else {
+                continue;
             };
+            let name = session.name.clone();
+            if pane.apply_saved((*session).clone(), &env)
+                && !pane.transport.is_closed()
+                && !reconnect.contains(&name)
+            {
+                reconnect.push(name);
+            }
         }
+        reconnect
     }
 
     /// Tells the PrzmTerm shells which sessions there are, and gives them the
@@ -1903,6 +1962,30 @@ impl PrzmApp {
                     name: self.free_group_name(),
                 });
             }
+            Action::MoveTab(from, to) => {
+                if from < self.tabs.len() {
+                    let active = self.tabs.get(self.active_tab).map(|t| t.id);
+                    let mut tab = self.tabs.remove(from);
+                    let to = if to > from { to - 1 } else { to }.min(self.tabs.len());
+                    // Dropped among a group's tabs it joins the group; next
+                    // to its own it stays; elsewhere it leaves it.
+                    let before = to.checked_sub(1).and_then(|i| self.tabs.get(i)?.group);
+                    let after = self.tabs.get(to).and_then(|t| t.group);
+                    tab.group = if before.is_some() && before == after {
+                        before
+                    } else if tab.group.is_some() && (before == tab.group || after == tab.group) {
+                        tab.group
+                    } else {
+                        None
+                    };
+                    self.tabs.insert(to, tab);
+                    if let Some(i) = active.and_then(|id| self.tabs.iter().position(|t| t.id == id))
+                    {
+                        self.active_tab = i;
+                    }
+                    self.settle_tabs();
+                }
+            }
             Action::SetGroup(t, group) => {
                 if let Some(tab) = self.tabs.get_mut(t) {
                     tab.group = group;
@@ -2094,15 +2177,13 @@ impl PrzmApp {
                     .as_ref()
                     .map_or_else(|| pane.title(), |s| s.name.clone());
                 let shell = pane.origin.as_ref().and_then(|s| s.scp_shell.clone());
-                match pane.transport.scp_browser(shell, waker) {
+                match pane.transport.scp_browser(shell.clone(), waker) {
                     Some(client) => {
                         self.sftp_next += 1;
-                        self.sftp_windows.push(sftp::SftpBrowser::new(
-                            name,
-                            self.sftp_next,
-                            client,
-                            "SCP",
-                        ));
+                        self.sftp_windows.push(
+                            sftp::SftpBrowser::new(name, self.sftp_next, client, "SCP")
+                                .with_shell(shell),
+                        );
                     }
                     None => {
                         self.notice =
@@ -2185,6 +2266,54 @@ impl PrzmApp {
                     pane.start_log(&env);
                 }
             }
+            Action::LogTo | Action::SaveHistory => {
+                let log = matches!(action, Action::LogTo);
+                let pane = self.tab().pane();
+                let stamp = chrono::Local::now().format("%Y-%m-%d_%H%M");
+                let name = format!(
+                    "{}-{stamp}.{}",
+                    file_safe(&pane_name(pane)),
+                    if log { "log" } else { "txt" }
+                );
+                // Next to the last log, else in the logs folder.
+                let dir = pane
+                    .log_path
+                    .as_ref()
+                    .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
+                    .or_else(|| {
+                        self.config_dir
+                            .as_ref()
+                            .map(|d| d.join(przmterm_session::LOGS_DIR))
+                    })
+                    .filter(|d| d.is_dir());
+                let mut dialog = rfd::FileDialog::new()
+                    .set_title(if log {
+                        "Log this session to"
+                    } else {
+                        "Save the history as"
+                    })
+                    .set_file_name(name);
+                if let Some(dir) = dir {
+                    dialog = dialog.set_directory(dir);
+                }
+                if let Some(path) = dialog.save_file() {
+                    let shown = path.display().to_string();
+                    let pane = self.tab_mut().pane_mut();
+                    self.notice = Some(if log {
+                        pane.log_to(path, &env);
+                        if pane.log.is_some() {
+                            format!("Logging this session to {shown} until it closes.")
+                        } else {
+                            format!("Could not log to {shown}.")
+                        }
+                    } else {
+                        match std::fs::write(&path, pane.history_text()) {
+                            Ok(()) => format!("History saved to {shown}."),
+                            Err(e) => format!("Could not save the history: {e}"),
+                        }
+                    });
+                }
+            }
             Action::OpenLog | Action::RevealLog => {
                 let open = matches!(action, Action::OpenLog);
                 if let Some(path) = self.tab().pane().log_path.clone() {
@@ -2264,9 +2393,13 @@ impl PrzmApp {
             .iter()
             .find(|p| !p.transport.is_closed() && p.origin.as_ref().is_some_and(|o| o.path == path))
             .expect("found above");
+        let shell = pane
+            .origin
+            .as_ref()
+            .and_then(|o| o.scp_shell.clone())
+            .filter(|_| scp);
         let client = if scp {
-            let shell = pane.origin.as_ref().and_then(|o| o.scp_shell.clone());
-            pane.transport.scp_browser(shell, waker)
+            pane.transport.scp_browser(shell.clone(), waker)
         } else {
             pane.transport.sftp(waker)
         };
@@ -2278,12 +2411,9 @@ impl PrzmApp {
                 .unwrap_or_default();
             self.sftp_next += 1;
             let protocol = if scp { "SCP" } else { "SFTP" };
-            self.sftp_windows.push(sftp::SftpBrowser::new(
-                name,
-                self.sftp_next,
-                client,
-                protocol,
-            ));
+            self.sftp_windows.push(
+                sftp::SftpBrowser::new(name, self.sftp_next, client, protocol).with_shell(shell),
+            );
             self.sftp_pending = None;
         } else {
             // Not logged in yet.
@@ -2469,7 +2599,12 @@ impl PrzmApp {
         )
         .on_hover_text(match (&name, logging) {
             (Some(name), true) => format!(
-                "Logging to {name}.\nClick to stop{}; right-click for more.",
+                "Logging to {name}{}.\nClick to stop{}; right-click for more.",
+                if pane.log_to.is_some() {
+                    " (chosen for this session, until it closes)"
+                } else {
+                    ""
+                },
                 self.keys_hint("toggle_log")
             ),
             _ => format!(
@@ -2503,6 +2638,26 @@ impl PrzmApp {
                 actions.push(Action::ToggleLog);
                 ui.close();
             }
+            if ui
+                .button("Log to File…")
+                .on_hover_text(
+                    "Log this session to a file you name, wherever you want. Only until \
+                     it closes: the session's own log settings stay as they are.",
+                )
+                .clicked()
+            {
+                actions.push(Action::LogTo);
+                ui.close();
+            }
+            if ui
+                .button("Save History As…")
+                .on_hover_text("Write what the session's history and screen hold now to a file")
+                .clicked()
+            {
+                actions.push(Action::SaveHistory);
+                ui.close();
+            }
+            ui.separator();
             let exists = pane.log_path.as_ref().is_some_and(|p| p.is_file());
             if ui
                 .add_enabled(exists, egui::Button::new("Open Log"))
@@ -3255,6 +3410,10 @@ impl PrzmApp {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
             let mut last_group = None;
+            // Where each tab is, and the one being dragged or let go.
+            let mut placed: Vec<(usize, egui::Rect)> = Vec::new();
+            let mut dragged = None;
+            let mut dropped = None;
             for (i, tab) in self.tabs.iter().enumerate() {
                 if tab.window != self.cur_window {
                     continue;
@@ -3317,7 +3476,18 @@ impl PrzmApp {
                     color,
                     tab.pane().view.ink(),
                 );
-                let tab_button = tab_button.on_hover_text(hover);
+                placed.push((i, tab_button.rect));
+                if tab_button.dragged() {
+                    dragged = Some(i);
+                }
+                if tab_button.drag_stopped() {
+                    dropped = Some(i);
+                }
+                let tab_button = if dragged.is_some() {
+                    tab_button
+                } else {
+                    tab_button.on_hover_text(hover)
+                };
                 if tab_button.clicked() {
                     actions.push(Action::SelectTab(i));
                 }
@@ -3336,6 +3506,28 @@ impl PrzmApp {
                         actions,
                     );
                 });
+            }
+            // A tab being dragged: a line where it would go; let go, it
+            // moves there.
+            if let (Some(from), Some(at)) = (dragged.or(dropped), ui.ctx().pointer_latest_pos()) {
+                let slot = drop_slot(&placed, at);
+                if dragged.is_some() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    if let Some((_, x, rows)) = slot {
+                        ui.painter().vline(
+                            x,
+                            rows,
+                            egui::Stroke::new(3.0, ui.visuals().selection.bg_fill),
+                        );
+                    }
+                }
+                if dropped.is_some()
+                    && let Some((to, _, _)) = slot
+                    && to != from
+                    && to != from + 1
+                {
+                    actions.push(Action::MoveTab(from, to));
+                }
             }
             if icons::button(ui, icons::Icon::Plus, false)
                 .on_hover_text(format!(
@@ -4553,8 +4745,16 @@ impl PrzmApp {
                 EditorResult::Cancel => self.editor = None,
                 EditorResult::Saved(name) => {
                     self.editor = None;
-                    self.notice = Some(format!("Saved {name}."));
-                    self.reload_sessions();
+                    let reconnect = self.reload_sessions();
+                    self.notice = Some(if reconnect.is_empty() {
+                        format!("Saved {name}.")
+                    } else {
+                        format!(
+                            "Saved {name}. Open sessions use the changes now; the connection \
+                             settings of {} take effect when it reconnects.",
+                            reconnect.join(", ")
+                        )
+                    });
                 }
             }
         }

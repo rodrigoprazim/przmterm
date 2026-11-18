@@ -590,6 +590,17 @@ impl Screen {
         self.wrap_pending = false;
     }
 
+    /// Keeps at most `limit` lines of history from now on, dropping the
+    /// oldest ones if there are more.
+    pub fn set_scrollback_limit(&mut self, limit: usize) {
+        while self.scrollback.len() > limit {
+            self.scrollback.pop_front();
+            self.history_base += 1;
+        }
+        self.display_offset = self.display_offset.min(self.scrollback.len());
+        self.scrollback_limit = limit;
+    }
+
     fn push_scrollback(&mut self, line: Vec<Cell>) {
         if self.scrollback_limit == 0 {
             return;
@@ -1135,6 +1146,12 @@ impl Terminal {
         self.generation += 1;
     }
 
+    /// See [`Screen::set_scrollback_limit`].
+    pub fn set_scrollback_limit(&mut self, limit: usize) {
+        self.screen.set_scrollback_limit(limit);
+        self.generation += 1;
+    }
+
     /// Changes with every change to the contents.
     pub fn generation(&self) -> u64 {
         self.generation
@@ -1162,6 +1179,19 @@ impl Terminal {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_smaller_history_drops_the_oldest_lines() {
+        let mut t = Terminal::with_scrollback(10, 2, 100);
+        t.feed(b"1\r\n2\r\n3\r\n4\r\n5");
+        assert_eq!(t.screen().scrollback_len(), 3);
+        let base = t.screen().history_base();
+        t.set_scrollback_limit(1);
+        let s = t.screen();
+        assert_eq!(s.scrollback_len(), 1);
+        assert_eq!(s.history_base(), base + 2);
+        assert_eq!(s.line_at(0).unwrap()[0].ch, '3');
+    }
 
     fn row_text(t: &Terminal, row: usize) -> String {
         t.screen()
