@@ -70,6 +70,14 @@ and then the **global settings**. Set something once on a folder (a user
 name, a keyword set, a log) and every session in it follows. Every key is in
 the [configuration reference](CONFIG.md).
 
+A session that is open takes its changed settings as soon as they are
+saved (in the session, its folders or the global settings): the font and
+colours, history size, keyword set, triggers, log, anti-idle, SCP shell,
+logon script and auto-reconnect. Settings of the connection itself (host,
+port, user, protocol, credential, key, jump host, tunnels, X11, keepalive,
+terminal type) are used when it reconnects; the message after saving
+names the sessions this applies to.
+
 Sessions can also be created and edited from the app: **+** next to
 *Sessions*, or right-click a session for Edit, Duplicate and Delete. Right-click
 a folder to add a session or subfolder there, rename it, give it a colour
@@ -295,6 +303,10 @@ every pane of the tab (after a warning) until you turn it off.
 In a split tab, drag a pane by its caption onto another to swap them, or
 right-click the caption to move it left or right.
 
+Drag a tab along the tab bar to move it; a line shows where it will go.
+Dropped among the tabs of a group it joins the group; dragged away from
+its group it leaves it.
+
 **Tab groups.** *Group › New Group* in a tab's menu starts a group: its tabs
 sit together after a coloured label, each with a bar of its colour, and *Group › Add to …* puts more tabs in
 it. Clicking the label offers *Send Command to Group…* (one or more commands,
@@ -462,6 +474,15 @@ The file name can hold the session's name, the host, the date and the time
 (`<config>/logs` by default). The log holds the text as shown, without
 colours or escape sequences. The codes are listed in the
 [configuration reference](CONFIG.md#log).
+
+Right-click **Log** for more:
+
+- *Log to File…* logs the current pane to a file you name, anywhere,
+  from now on. It is for this pane only and is forgotten when it closes;
+  the session's own log settings do not change. Stopping and starting the
+  log again adds to the same file.
+- *Save History As…* writes what the pane's history and screen hold now
+  to a text file.
 
 ## Files: SFTP, SCP, Zmodem
 

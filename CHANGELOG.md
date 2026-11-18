@@ -7,6 +7,22 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Tabs can be dragged along the tab bar to reorder them; dropped among a
+  group's tabs, a tab joins the group.
+- *Log to File…* (right-click **Log**): logs the current session to a file
+  you name, anywhere, until it closes, without changing its log settings.
+  *Save History As…* writes the history and the screen to a text file.
+
+### Fixed
+
+- A session that is open takes its changed settings when they are saved
+  (SCP shell, font and colours, history size, keyword set, triggers, log,
+  anti-idle, logon script, auto-reconnect) instead of only after every tab
+  of it was closed and opened again. Connection settings are used at the
+  next reconnect, and the message after saving says so.
+
 ## [1.0.0-rc.6] - 2026-11-14
 
 ### Added
