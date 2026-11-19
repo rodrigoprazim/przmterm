@@ -670,6 +670,11 @@ SSH key, `-J` a jump host and `-d` a description; quote what has spaces.
 A session that exists is left alone unless `--replace` is added. `add` on
 its own prints this help.
 
+`-c` must name an entry of the password vault (letter case aside), and Tab
+after it lists them. While the vault is locked only the entries other
+sessions use can be checked: for another one PrzmTerm asks to unlock the
+vault, then run the line again.
+
 `export [text]` prints the `add` lines of the saved sessions (or those
 whose name, address or description has the text). Copy them, paste them into
 the PrzmTerm shell of another computer, and the sessions are there: where

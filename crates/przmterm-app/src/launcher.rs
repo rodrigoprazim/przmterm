@@ -126,6 +126,20 @@ fn config_dir() -> Option<PathBuf> {
     CONFIG_DIR.read().ok().and_then(|d| d.clone())
 }
 
+/// The vault's entry names while it is open (`None` while locked), for
+/// `add -c`; set by the app.
+static VAULT_NAMES: RwLock<Option<Vec<String>>> = RwLock::new(None);
+
+pub fn set_vault_names(names: Option<Vec<String>>) {
+    if let Ok(mut slot) = VAULT_NAMES.write() {
+        *slot = names;
+    }
+}
+
+fn vault_names() -> Option<Vec<String>> {
+    VAULT_NAMES.read().ok().and_then(|n| n.clone())
+}
+
 /// The saved sessions every PrzmTerm shell sees; set when they load.
 static CATALOG: RwLock<Vec<Entry>> = RwLock::new(Vec::new());
 
@@ -140,7 +154,7 @@ fn catalog() -> Vec<Entry> {
 }
 
 /// What the shell asks the application to do.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Request {
     /// Open the saved session with this label (see [`Entry::label`]).
     Open(String),
@@ -150,6 +164,8 @@ pub enum Request {
     Connect(String),
     /// Sessions were added or deleted: read them again.
     Reload,
+    /// `add -c` named an entry it could not check: ask to unlock the vault.
+    UnlockVault,
 }
 
 pub type Requests = Arc<Mutex<Vec<Request>>>;
@@ -432,6 +448,18 @@ impl Launcher {
             return self.error("add: there is no settings folder to save sessions in");
         };
         let mut spec = spec;
+        // A vault entry that is there, as it is written.
+        if let Some(name) = spec.settings.credential.clone().filter(|c| !c.is_empty()) {
+            match vault_entry(&dir, &name) {
+                Ok(entry) => spec.settings.credential = Some(entry),
+                Err((why, unlock)) => {
+                    if unlock {
+                        self.request(Request::UnlockVault);
+                    }
+                    return self.error(&format!("add: {why}"));
+                }
+            }
+        }
         // Into a folder that is there, as it is written (`lab` is `Lab`).
         spec.folder = existing_folder(&dir, &spec.folder);
         let label = if spec.folder.is_empty() {
@@ -619,8 +647,16 @@ impl Launcher {
     /// Tab: completes the command, the session name after `ssh`, `open`
     /// or `delete`, or the folder after `-f`.
     fn complete(&mut self) {
-        if let Some((head, partial)) = folder_word(&self.line) {
+        let folder = [" -f ", " --folder "];
+        if let Some((head, partial)) =
+            arg_word(&self.line, &["add", "new", "delete", "rm"], &folder)
+        {
             return self.complete_folder(&head, &partial);
+        }
+        if let Some((head, partial)) =
+            arg_word(&self.line, &["add", "new"], &[" -c ", " --credential "])
+        {
+            return self.complete_credential(&head, &partial);
         }
         let (head, word) = match self.line.rfind(' ') {
             Some(i) => (self.line[..=i].to_string(), self.line[i + 1..].to_string()),
@@ -670,6 +706,46 @@ impl Launcher {
                     self.emit(&format!("\r\n{list}"));
                     self.redraw();
                 }
+            }
+        }
+    }
+
+    /// Tab after `-c`: the vault's entries (while it is locked, those the
+    /// sessions use).
+    fn complete_credential(&mut self, head: &str, partial: &str) {
+        let open = vault_names();
+        let locked = open.is_none();
+        let names = open.unwrap_or_else(|| {
+            config_dir()
+                .map(|d| przmterm_session::vault::names_in_use(&d))
+                .unwrap_or_default()
+        });
+        let start = partial.to_lowercase();
+        let options: Vec<String> = names
+            .into_iter()
+            .filter(|n| n.to_lowercase().starts_with(&start))
+            .collect();
+        let note = "\x1b[2m(the vault is locked: unlock it for all of its entries)\x1b[0m\r\n";
+        match options.as_slice() {
+            [] if locked => {
+                self.emit(&format!("\r\n{note}"));
+                self.redraw();
+            }
+            [] => self.emit("\x07"),
+            [one] => {
+                self.line = format!("{head}{} ", quote(one));
+                self.redraw();
+            }
+            many => {
+                let common = common_prefix(many);
+                if common.chars().count() > partial.chars().count() {
+                    self.line = format!("{head}{}", quote(&common));
+                } else {
+                    let cols = usize::from(self.size.cols);
+                    let list = columns(many, cols, "");
+                    self.emit(&format!("\r\n{list}{}", if locked { note } else { "" }));
+                }
+                self.redraw();
             }
         }
     }
@@ -829,7 +905,7 @@ const ADD_USAGE: &str = "usage: add <name> <target> [options]\r\n  \
      -f <folder>       the folder, e.g. Lab/Core (made if it is not there)\r\n  \
      -l <user>         the user (or user@ in the target)\r\n  \
      -p <port>         the port (or :port in the target)\r\n  \
-     -c <credential>   a credential of the vault\r\n  \
+     -c <credential>   an entry of the password vault (Tab lists them)\r\n  \
      -i <key file>     an SSH private key\r\n  \
      -J <jump host>    connect through this host\r\n  \
      -d <text>         a description\r\n  \
@@ -892,14 +968,14 @@ fn count_inside(dir: &std::path::Path) -> (usize, usize) {
     counts
 }
 
-/// The folder being typed after `-f` (or `--folder`) in `add` or
-/// `delete`, quotes and all, as it reads: the line before it and the word.
-fn folder_word(line: &str) -> Option<(String, String)> {
+/// The word being typed after one of `flags` (`" -f "`) in one of
+/// `commands`, quotes and all, as it reads: the line before it and the word.
+fn arg_word(line: &str, commands: &[&str], flags: &[&str]) -> Option<(String, String)> {
     let command = line.split_whitespace().next()?;
-    if !matches!(command, "add" | "new" | "delete" | "rm") {
+    if !commands.contains(&command) {
         return None;
     }
-    let at = [" -f ", " --folder "]
+    let at = flags
         .iter()
         .filter_map(|flag| line.rfind(flag).map(|i| i + flag.len()))
         .max()?;
@@ -917,6 +993,43 @@ fn folder_word(line: &str) -> Option<(String, String)> {
         [] => Some((line.to_string(), String::new())),
         [word] => Some((line[..at].to_string(), word.clone())),
         _ => None,
+    }
+}
+
+/// The vault entry `name` stands for, as the vault writes it (letter case
+/// aside); else why not, and whether unlocking the vault would tell.
+fn vault_entry(dir: &std::path::Path, name: &str) -> Result<String, (String, bool)> {
+    if !przmterm_session::vault::vault_path(dir).is_file() {
+        return Err((
+            format!("-c {name}: there is no password vault yet (+ › Password vault… makes one)"),
+            false,
+        ));
+    }
+    let found = |names: &[String]| names.iter().find(|n| n.eq_ignore_ascii_case(name)).cloned();
+    match vault_names() {
+        Some(names) => found(&names).ok_or_else(|| {
+            let known = if names.is_empty() {
+                "it is empty".to_string()
+            } else if names.len() <= 8 {
+                format!("it has {}", names.join(", "))
+            } else {
+                format!("{} entries; Tab after -c lists them", names.len())
+            };
+            (
+                format!("-c {name}: the vault has no entry by that name ({known})"),
+                false,
+            )
+        }),
+        // Locked: an entry another session uses is there.
+        None => found(&przmterm_session::vault::names_in_use(dir)).ok_or_else(|| {
+            (
+                format!(
+                    "-c {name}: the vault is locked, so the entry cannot be checked; \
+                     unlock it and run the line again"
+                ),
+                true,
+            )
+        }),
     }
 }
 
@@ -1577,6 +1690,62 @@ mod tests {
         ] {
             assert!(AddSpec::parse(&words(bad)).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn add_checks_the_vault_entry() {
+        let _turn = SHARED.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("przmterm-vault-c-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        set_config_dir(Some(dir.clone()));
+        set_catalog(Vec::new());
+        set_vault_names(None);
+        let (mut t, requests) = shell();
+        let credential = |name: &str| {
+            przmterm_session::SessionTree::load(&dir)
+                .root
+                .all_sessions()
+                .into_iter()
+                .find(|s| s.name == name)
+                .and_then(|s| s.credential.clone())
+        };
+        // No vault at all.
+        t.write(b"add a 10.0.0.1 -c \"Lab Admin\"\r").unwrap();
+        assert!(drain(&mut t).contains("no password vault"));
+        assert!(credential("a").is_none());
+
+        // Open: its entries, completed and checked, letter case aside.
+        std::fs::write(przmterm_session::vault::vault_path(&dir), "").unwrap();
+        set_vault_names(Some(vec!["Lab Admin".into(), "netops".into()]));
+        t.write(b"add a 10.0.0.1 -c la\t").unwrap();
+        assert_eq!(t.line, "add a 10.0.0.1 -c \"Lab Admin\" ");
+        t.write(b"\r").unwrap();
+        assert!(drain(&mut t).contains("Added"));
+        t.write(b"add b 10.0.0.2 -c NETOPS\r").unwrap();
+        assert!(drain(&mut t).contains("Added"));
+        assert_eq!(credential("b").as_deref(), Some("netops"));
+        t.write(b"add c 10.0.0.3 -c nobody\r").unwrap();
+        let said = drain(&mut t);
+        assert!(
+            said.contains("no entry by that name") && said.contains("netops"),
+            "{said}"
+        );
+        assert!(credential("c").is_none());
+
+        // Locked: an entry the sessions use passes; another asks to unlock.
+        set_vault_names(None);
+        requests.lock().unwrap().clear();
+        t.write(b"add c 10.0.0.3 -c \"lab admin\"\r").unwrap();
+        assert!(drain(&mut t).contains("Added"));
+        assert_eq!(credential("c").as_deref(), Some("Lab Admin"));
+        t.write(b"add d 10.0.0.4 -c nobody\r").unwrap();
+        assert!(drain(&mut t).contains("locked"));
+        assert!(requests.lock().unwrap().contains(&Request::UnlockVault));
+        t.write(b"add d 10.0.0.4 -c n\t").unwrap();
+        assert_eq!(t.line, "add d 10.0.0.4 -c netops ");
+        let _ = std::fs::remove_dir_all(&dir);
+        set_config_dir(None);
     }
 
     #[test]

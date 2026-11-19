@@ -1279,6 +1279,8 @@ impl PrzmApp {
 
     /// What the PrzmTerm shells asked for, as actions.
     fn launcher_requests(&mut self) -> Vec<Action> {
+        // What `add -c` checks against, and Tab after it lists.
+        launcher::set_vault_names(self.vault.names());
         let mut actions = Vec::new();
         let mut reload = false;
         for (t, tab) in self.tabs.iter_mut().enumerate() {
@@ -1287,6 +1289,14 @@ impl PrzmApp {
                     let session = match request {
                         launcher::Request::Reload => {
                             reload = true;
+                            continue;
+                        }
+                        launcher::Request::UnlockVault => {
+                            if !self.vault.is_unlocked() {
+                                self.vault.ask_unlock(
+                                    "Unlock the vault to check the entry add -c names.".into(),
+                                );
+                            }
                             continue;
                         }
                         launcher::Request::Connect(target) => {
