@@ -2247,10 +2247,7 @@ fn folder_picker(ui: &mut egui::Ui, root: &Folder, trail: &mut Vec<String>, pick
             ui.separator();
             if pick.new_name.is_none() {
                 let parent = shown(trail);
-                if ui
-                    .add(egui::Button::new(format!("＋ New folder in {parent}…")).frame(false))
-                    .clicked()
-                {
+                if new_folder_row(ui, &format!("New folder in {parent}…")) {
                     pick.new_name = Some(String::new());
                     pick.error = None;
                     pick.focus = true;
@@ -2300,6 +2297,36 @@ fn folder_picker(ui: &mut egui::Ui, root: &Folder, trail: &mut Vec<String>, pick
     if new_here {
         ui.weak("A new folder: it is made when you save.");
     }
+}
+
+/// The list's *New folder* line: a plus icon (drawn, so it shows whatever
+/// the fonts) and `text`, lit under the pointer. Returns whether it was clicked.
+fn new_folder_row(ui: &mut egui::Ui, text: &str) -> bool {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
+        egui::Sense::click(),
+    );
+    let visuals = ui.style().interact_selectable(&response, false);
+    if response.hovered() {
+        ui.painter().rect_filled(rect, 3.0, visuals.bg_fill);
+    }
+    let icon = egui::Rect::from_center_size(
+        egui::pos2(rect.left() + 14.0, rect.center().y),
+        egui::vec2(15.0, 15.0),
+    );
+    let accent = ui.visuals().selection.stroke.color;
+    crate::icons::draw(ui.painter(), crate::icons::Icon::Plus, icon, accent);
+    let galley = egui::WidgetText::from(text).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Truncate),
+        rect.width() - 34.0,
+        egui::TextStyle::Body,
+    );
+    let pos = egui::pos2(rect.left() + 26.0, rect.center().y - galley.size().y / 2.0);
+    ui.painter().galley(pos, galley, visuals.text_color());
+    response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .clicked()
 }
 
 /// One folder in the list: its icon (in its colour), indented by `depth`;
