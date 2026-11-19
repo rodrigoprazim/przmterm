@@ -13,6 +13,11 @@ ignore = [
     # once per login with the user's own key and never decrypts with RSA,
     # and no fixed release exists yet.
     { id = "RUSTSEC-2023-0071", reason = "RSA only signs at login; no decryption oracle" },
+    # chrono is unmaintained (informational, no vulnerability). PrzmTerm only
+    # formats local dates and times with it (log names and headers, backups,
+    # the SFTP Modified column), and russh-sftp depends on it as well. Move
+    # to jiff once russh-sftp has moved off chrono.
+    { id = "RUSTSEC-2026-0543", reason = "unmaintained only; leave with russh-sftp, for jiff" },
 ]
 # Unmaintained crates deeper in the tree (fonts, D-Bus, Rhai's strings) are
 # reported only when PrzmTerm depends on them directly.
