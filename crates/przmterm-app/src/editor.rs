@@ -132,6 +132,9 @@ pub struct Editor {
     /// The description is being typed in: Enter is a new line there, not
     /// Save.
     in_description: bool,
+    /// The folder list's search and the folders made in it (on disk only
+    /// once the session is saved).
+    folder_pick: FolderPick,
     data_bits: Option<u8>,
     parity: Option<Parity>,
     stop_bits: Option<u8>,
@@ -495,6 +498,7 @@ impl Editor {
             color: s.color.clone(),
             description: text(&s.description),
             in_description: false,
+            folder_pick: FolderPick::default(),
             known_vault_names: None,
             vault_request: false,
             unlock_request: false,
@@ -1048,7 +1052,8 @@ impl Editor {
                 }
                 if let Target::Session { trail, .. } = &mut self.target {
                     ui.label("Folder");
-                    folder_picker(ui, root, trail);
+                    let pick = &mut self.folder_pick;
+                    ui.vertical(|ui| folder_picker(ui, root, trail, pick));
                     ui.end_row();
                 }
                 if self.target != Target::Global {
@@ -2093,51 +2098,266 @@ fn pick_key_file() -> Option<PathBuf> {
 }
 
 /// A compact folder chooser: a button showing the path, opening a scrollable tree.
-fn folder_picker(ui: &mut egui::Ui, root: &Folder, trail: &mut Vec<String>) {
-    let label = if trail.is_empty() {
-        "Top level".to_string()
-    } else {
-        trail.join(" › ")
-    };
-    ui.menu_button(format!("{label}  ▾"), |ui| {
-        crate::theme::menu(ui);
-        egui::ScrollArea::vertical()
-            .max_height(260.0)
-            .show(ui, |ui| {
-                ui.set_min_width(240.0);
-                if ui.selectable_label(trail.is_empty(), "Top level").clicked() {
-                    trail.clear();
-                    ui.close();
-                }
-                picker_level(ui, root, trail);
-            });
-    });
+/// The folder list of the session form: its search, and a folder being
+/// made (`new_name`), and those made, which exist only in the form until
+/// the session is saved into one of them.
+#[derive(Default)]
+struct FolderPick {
+    filter: String,
+    new_name: Option<String>,
+    made: Vec<Vec<String>>,
+    error: Option<String>,
+    /// Focus the new name.
+    focus: bool,
+    /// The list showed last time: when not, it just opened.
+    open: bool,
 }
 
-fn picker_level(ui: &mut egui::Ui, folder: &Folder, trail: &mut Vec<String>) {
-    for f in &folder.folders {
-        let selected = *trail == f.trail;
-        if f.folders.is_empty() {
-            if ui.selectable_label(selected, f.name.as_str()).clicked() {
-                *trail = f.trail.clone();
-                ui.close();
-            }
-        } else {
-            egui::CollapsingHeader::new(f.name.as_str())
-                .id_salt(&f.dir)
-                .default_open(trail.starts_with(&f.trail))
-                .show(ui, |ui| {
-                    if ui
-                        .selectable_label(selected, format!("(in {})", f.name))
-                        .clicked()
-                    {
-                        *trail = f.trail.clone();
-                        ui.close();
-                    }
-                    picker_level(ui, f, trail);
-                });
+/// The session's folder: a list with every folder, a search, and New
+/// folder (made when the session is saved).
+fn folder_picker(ui: &mut egui::Ui, root: &Folder, trail: &mut Vec<String>, pick: &mut FolderPick) {
+    // Every folder, by path, with its depth and colour; then those made here.
+    let mut all: Vec<(Vec<String>, Option<egui::Color32>, bool)> = Vec::new();
+    fn walk(f: &Folder, out: &mut Vec<(Vec<String>, Option<egui::Color32>, bool)>) {
+        for sub in &f.folders {
+            out.push((
+                sub.trail.clone(),
+                crate::theme::folder_color(sub.own.color.as_deref()),
+                false,
+            ));
+            walk(sub, out);
         }
     }
+    walk(root, &mut all);
+    pick.made.retain(|m| root.find(m).is_none());
+    for made in &pick.made {
+        if !all.iter().any(|(t, ..)| t == made) {
+            // Right after its parent (and the parent's other folders).
+            let at = all
+                .iter()
+                .rposition(|(t, ..)| {
+                    t.starts_with(&made[..made.len() - 1]) && !made[..made.len() - 1].is_empty()
+                })
+                .map_or(all.len(), |i| i + 1);
+            all.insert(at, (made.clone(), None, true));
+        }
+    }
+    let shown = |t: &[String]| {
+        if t.is_empty() {
+            "Top level".to_string()
+        } else {
+            t.join(" › ")
+        }
+    };
+    let new_here = !trail.is_empty() && root.find(trail).is_none();
+    crate::theme::sunken_combos(ui);
+    let mut showing = false;
+    egui::ComboBox::from_id_salt("session-folder")
+        .width(crate::theme::combo_width(ui))
+        .height(400.0)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .selected_text(shown(trail))
+        .show_ui(ui, |ui| {
+            ui.set_min_width(crate::theme::combo_width(ui));
+            showing = true;
+            let opened = !std::mem::replace(&mut pick.open, true);
+            if opened {
+                // A fresh start each time the list opens.
+                pick.filter.clear();
+                pick.new_name = None;
+                pick.error = None;
+            }
+            let naming = pick.new_name.is_some();
+            let search = ui.add_enabled(
+                !naming,
+                egui::TextEdit::singleline(&mut pick.filter)
+                    .hint_text("Search folders")
+                    .desired_width(f32::INFINITY),
+            );
+            if opened {
+                search.request_focus();
+            }
+            ui.add_space(2.0);
+            let wanted = pick.filter.trim().to_lowercase();
+            let filtering = !wanted.is_empty();
+            let matches = |t: &[String]| t.join("/").to_lowercase().contains(&wanted);
+            // Enter in the search takes the first folder found.
+            if filtering
+                && search.lost_focus()
+                && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                && let Some((t, ..)) = all.iter().find(|(t, ..)| matches(t))
+            {
+                *trail = t.clone();
+                ui.close();
+            }
+            // One height whatever shows (every folder, those found, the new
+            // folder's name): the list keeps the size it opened with.
+            let row_h = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
+            let list_h = ((all.len() + 1) as f32 * row_h).clamp(5.0 * row_h, 240.0);
+            let width = ui.available_width();
+            let mut create = false;
+            let mut cancel = false;
+            ui.allocate_ui(egui::vec2(width, list_h), |ui| {
+                ui.set_min_size(egui::vec2(width, list_h));
+                let Some(name) = pick.new_name.as_mut() else {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .max_height(list_h)
+                        .show(ui, |ui| {
+                            if !filtering && folder_row(ui, &[], 0, None, false, trail.is_empty()) {
+                                trail.clear();
+                                ui.close();
+                            }
+                            for (t, color, made) in &all {
+                                if filtering && !matches(t) {
+                                    continue;
+                                }
+                                // Searching, the whole path shows; else the
+                                // name, indented.
+                                let depth = if filtering { 0 } else { t.len() - 1 };
+                                let label: Vec<String> = if filtering {
+                                    t.clone()
+                                } else {
+                                    t[t.len() - 1..].to_vec()
+                                };
+                                if folder_row(ui, &label, depth, *color, *made, trail == t) {
+                                    *trail = t.clone();
+                                    ui.close();
+                                }
+                            }
+                        });
+                    return;
+                };
+                ui.add_space(4.0);
+                ui.label(format!("New folder in {}:", shown(trail)));
+                let field = ui.add(
+                    egui::TextEdit::singleline(name)
+                        .hint_text("name")
+                        .desired_width(f32::INFINITY),
+                );
+                if std::mem::take(&mut pick.focus) {
+                    field.request_focus();
+                }
+                create = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if let Some(e) = &pick.error {
+                    ui.colored_label(ui.visuals().error_fg_color, e);
+                }
+                ui.weak("It is made when the session is saved.");
+            });
+            ui.separator();
+            if pick.new_name.is_none() {
+                let parent = shown(trail);
+                if ui
+                    .add(egui::Button::new(format!("＋ New folder in {parent}…")).frame(false))
+                    .clicked()
+                {
+                    pick.new_name = Some(String::new());
+                    pick.error = None;
+                    pick.focus = true;
+                }
+            } else {
+                ui.horizontal(|ui| {
+                    create |= crate::theme::primary_button(ui, "Create").clicked();
+                    cancel = ui.button("Cancel").clicked();
+                });
+            }
+            if cancel {
+                pick.new_name = None;
+                pick.error = None;
+            } else if create && let Some(name) = &pick.new_name {
+                let name = name.trim().to_string();
+                match przmterm_session::validate_name(&name) {
+                    Err(e) => {
+                        pick.error = Some(e);
+                        pick.focus = true;
+                    }
+                    Ok(()) => {
+                        let mut made = trail.clone();
+                        // One there already, letter case aside: that one.
+                        let existing = all.iter().find(|(t, ..)| {
+                            t.len() == made.len() + 1
+                                && t.starts_with(&made)
+                                && t[made.len()].eq_ignore_ascii_case(&name)
+                        });
+                        match existing {
+                            Some((t, ..)) => made = t.clone(),
+                            None => {
+                                made.push(name);
+                                pick.made.push(made.clone());
+                            }
+                        }
+                        *trail = made;
+                        pick.new_name = None;
+                        pick.error = None;
+                        ui.close();
+                    }
+                }
+            }
+        });
+    if !showing {
+        pick.open = false;
+    }
+    if new_here {
+        ui.weak("A new folder: it is made when you save.");
+    }
+}
+
+/// One folder in the list: its icon (in its colour), indented by `depth`;
+/// a folder made in the form is in italics. Returns whether it was picked.
+fn folder_row(
+    ui: &mut egui::Ui,
+    path: &[String],
+    depth: usize,
+    color: Option<egui::Color32>,
+    made: bool,
+    selected: bool,
+) -> bool {
+    let text = if path.is_empty() {
+        "Top level".to_string()
+    } else {
+        path.join(" › ")
+    };
+    let mut rich = egui::RichText::new(text);
+    if made {
+        rich = rich.italics();
+    }
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
+        egui::Sense::click(),
+    );
+    let visuals = ui.style().interact_selectable(&response, selected);
+    if selected || response.hovered() {
+        ui.painter().rect_filled(rect, 3.0, visuals.bg_fill);
+    }
+    let x = rect.left() + 6.0 + depth as f32 * 16.0;
+    let icon =
+        egui::Rect::from_center_size(egui::pos2(x + 8.0, rect.center().y), egui::vec2(15.0, 15.0));
+    let tint = color.unwrap_or(ui.visuals().weak_text_color());
+    crate::icons::draw(ui.painter(), crate::icons::Icon::Folder, icon, tint);
+    let galley = egui::WidgetText::from(rich).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Truncate),
+        rect.right() - x - 24.0,
+        egui::TextStyle::Body,
+    );
+    let text_pos = egui::pos2(x + 20.0, rect.center().y - galley.size().y / 2.0);
+    ui.painter().galley(text_pos, galley, visuals.text_color());
+    if made {
+        let tag = egui::RichText::new("new").small().weak();
+        let tag = egui::WidgetText::from(tag).into_galley(
+            ui,
+            None,
+            f32::INFINITY,
+            egui::TextStyle::Small,
+        );
+        let pos = egui::pos2(
+            rect.right() - tag.size().x - 6.0,
+            rect.center().y - tag.size().y / 2.0,
+        );
+        ui.painter()
+            .galley(pos, tag, ui.visuals().weak_text_color());
+    }
+    response.clicked()
 }
 
 /// The value a list shows: the one set here, or the inherited one in grey.

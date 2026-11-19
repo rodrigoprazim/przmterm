@@ -95,6 +95,11 @@ global settings and the settings folder. Deleting a folder can keep what is in
 it: its sessions and subfolders move up a level and keep the folder's
 settings (written into each), so they connect as before.
 
+The *Folder* list in a session's settings shows every folder as a tree, with
+a search (Enter takes the first folder found). *New folder in …* at its
+bottom names a folder inside the one selected; it is made only when the
+session is saved, so Cancel leaves nothing behind.
+
 When a settings file has a problem (a session without a host, a typo in a
 file edited by hand, a setting from a newer version), a warning under the
 session list says how many. Click it for the list: each file, what is
@@ -672,7 +677,11 @@ they connect, how they log in, their folder and description; the rest
 takes that PrzmTerm's defaults. Lines starting with `#` are comments.
 
 `delete <session>` (or `rm`) deletes a saved session after asking `[y/N]`;
-Tab completes the name.
+Tab completes the name. `delete <name> -f <folder>` deletes the session of
+that name in that folder, and `delete -f <folder>` deletes a folder with the
+sessions and folders in it, saying how many first (`delete <folder>` does
+the same when no session has that name). Letter case does not matter for
+folders, in `add` or `delete`.
 
 ### Several computers
 

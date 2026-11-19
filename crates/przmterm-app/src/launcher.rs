@@ -169,8 +169,8 @@ pub struct Launcher {
     draft: String,
     closed: bool,
     requests: Requests,
-    /// A session `delete` asked about: the next line answers.
-    confirm_delete: Option<Entry>,
+    /// What `delete` asked about: the next line answers.
+    confirm_delete: Option<Deletion>,
 }
 
 impl Launcher {
@@ -239,6 +239,7 @@ impl Launcher {
                  sessions [text]          list the saved sessions, or those matching text\r\n  \
                  add <name> <target> ...  save a session (add with no more says how)\r\n  \
                  delete <session>         delete a saved session, after asking\r\n  \
+                 delete -f <folder>       delete a folder and what is in it, after asking\r\n  \
                  export [text]            print add lines for the saved sessions, to\r\n  \
                  \x20                        paste into another PrzmTerm\r\n  \
                  clear                    clear the screen (also Ctrl+L)\r\n\
@@ -246,19 +247,7 @@ impl Launcher {
                  Terminal checks: colors, styles, size, version\r\n",
             ),
             "add" | "new" => self.add(cmd.trim_start()[first.len()..].trim()),
-            "delete" | "rm" => match rest {
-                "" => self.error("usage: delete <session>"),
-                name => {
-                    if let Some(entry) = self.find(name) {
-                        self.emit(&format!(
-                            "Delete \x1b[1m{}\x1b[0m ({} {})? Its settings file is removed. \
-                             [y/N] ",
-                            entry.label, entry.protocol, entry.target
-                        ));
-                        self.confirm_delete = Some(entry);
-                    }
-                }
-            },
+            "delete" | "rm" => self.delete(cmd.trim_start()[first.len()..].trim()),
             "export" => self.export(&args.join(" ")),
             "ssh" => self.ssh(rest, args),
             "telnet" => self.telnet(args),
@@ -480,20 +469,102 @@ impl Launcher {
         }
     }
 
+    /// `delete <session>`, `delete <name> -f <folder>` (the session in that
+    /// folder) or `delete -f <folder>`: asks before deleting.
+    fn delete(&mut self, text: &str) {
+        let words = match split_args(text) {
+            Ok(w) => w,
+            Err(e) => return self.error(&format!("delete: {e}")),
+        };
+        let mut folder = None;
+        let mut names = Vec::new();
+        let mut words = words.into_iter();
+        while let Some(word) = words.next() {
+            match word.as_str() {
+                "-f" | "--folder" => match words.next() {
+                    Some(f) => folder = Some(f),
+                    None => return self.error("delete: -f needs a folder"),
+                },
+                flag if flag.starts_with('-') && flag.len() > 1 => {
+                    return self.error(&format!("delete: unknown option {flag}"));
+                }
+                _ => names.push(word),
+            }
+        }
+        // A name typed without quotes, spaces and all.
+        let name = names.join(" ");
+        let folder = folder.map(|f| clean_folder(&f));
+        let path = match (&folder, name.is_empty()) {
+            (None, true) => {
+                return self.error("usage: delete <session>, or delete -f <folder>");
+            }
+            (Some(f), true) => return self.ask_folder(f),
+            (Some(f), false) if !f.is_empty() => format!("{f}/{name}"),
+            _ => name,
+        };
+        let found = matching(&catalog(), &path);
+        match found.as_slice() {
+            [entry] => {
+                self.emit(&format!(
+                    "Delete \x1b[1m{}\x1b[0m ({} {})? Its settings file is removed. [y/N] ",
+                    entry.label, entry.protocol, entry.target
+                ));
+                self.confirm_delete = Some(Deletion::Session(entry.clone()));
+            }
+            [] if folder.is_none() && found_folder(&path).is_some() => self.ask_folder(&path),
+            [] => self.error(&format!(
+                "{path}: no saved session by that name (try sessions; delete -f for a folder)"
+            )),
+            many => self.ambiguous(&path, many),
+        }
+    }
+
+    /// Asks before deleting the folder `path` and what is in it.
+    fn ask_folder(&mut self, path: &str) {
+        let Some((dir, label)) = found_folder(path) else {
+            return self.error(&format!("{path}: no folder by that name"));
+        };
+        let (sessions, folders) = count_inside(&dir);
+        let inside = match (sessions, folders) {
+            (0, 0) => "It is empty.".to_string(),
+            (s, 0) => format!("{s} session{} in it will be deleted too.", plural(s)),
+            (0, f) => format!("{f} folder{} in it will be deleted too.", plural(f)),
+            (s, f) => format!(
+                "{s} session{} and {f} folder{} in it will be deleted too.",
+                plural(s),
+                plural(f)
+            ),
+        };
+        self.emit(&format!(
+            "Delete the folder \x1b[1m{label}\x1b[0m? {inside} [y/N] "
+        ));
+        self.confirm_delete = Some(Deletion::Folder { dir, label });
+    }
+
     /// The answer to `delete`'s question.
-    fn answer_delete(&mut self, answer: &str, entry: Entry) {
+    fn answer_delete(&mut self, answer: &str, what: Deletion) {
         if !matches!(
             answer.trim().to_lowercase().as_str(),
             "y" | "yes" | "s" | "sim"
         ) {
             return self.emit("Not deleted.\r\n");
         }
-        match std::fs::remove_file(&entry.path) {
+        let (done, label) = match &what {
+            Deletion::Session(entry) => (
+                std::fs::remove_file(&entry.path).map_err(|e| e.to_string()),
+                entry.label.clone(),
+            ),
+            Deletion::Folder { dir, label } => (
+                przmterm_session::delete_folder(dir).map_err(|e| e.reason()),
+                format!("the folder {label}"),
+            ),
+        };
+        match done {
             Ok(()) => {
-                self.emit(&format!("Deleted \x1b[1m{}\x1b[0m.\r\n", entry.label));
+                self.emit(&format!("Deleted \x1b[1m{label}\x1b[0m.\r\n"));
                 self.request(Request::Reload);
             }
-            Err(e) => self.error(&format!("delete: {}: {e}", entry.label)),
+            Err(e) => self.error(&format!("delete: {label}: {e}")),
         }
     }
 
@@ -723,6 +794,62 @@ const ADD_USAGE: &str = "usage: add <name> <target> [options]\r\n  \
      --replace         write over a session of that name\r\n\
      Quote what has spaces: add \"Core DB\" admin@10.0.0.5 -f \"Data Center\" -d \"main DB\"\r\n";
 
+/// What `delete` asked about.
+#[derive(Debug, Clone)]
+enum Deletion {
+    Session(Entry),
+    Folder { dir: PathBuf, label: String },
+}
+
+fn plural(n: usize) -> &'static str {
+    if n == 1 { "" } else { "s" }
+}
+
+/// A folder path as typed (`" Lab / Core/"`) as it is kept (`Lab/Core`).
+fn clean_folder(folder: &str) -> String {
+    folder
+        .split('/')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// The folder `path` names (letter case aside) in the settings folder: its
+/// directory and its path as written there.
+fn found_folder(path: &str) -> Option<(PathBuf, String)> {
+    let dir = config_dir()?;
+    let path = clean_folder(path);
+    if path.is_empty() {
+        return None;
+    }
+    let label = existing_folder(&dir, &path);
+    let mut at = dir.join(przmterm_session::SESSIONS_DIR);
+    for part in label.split('/') {
+        at.push(part);
+    }
+    at.is_dir().then_some((at, label))
+}
+
+/// The sessions and folders inside `dir`, all the way down.
+fn count_inside(dir: &std::path::Path) -> (usize, usize) {
+    let mut counts = (0, 0);
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            let (s, f) = count_inside(&path);
+            counts = (counts.0 + s, counts.1 + f + 1);
+        } else if path.extension().is_some_and(|e| e == "toml")
+            && path
+                .file_name()
+                .is_some_and(|n| n != przmterm_session::FOLDER_FILE)
+        {
+            counts.0 += 1;
+        }
+    }
+    counts
+}
+
 /// What `add` makes, from its words.
 #[derive(Debug)]
 struct AddSpec {
@@ -776,12 +903,7 @@ impl AddSpec {
                 ));
             }
         };
-        let folder = folder
-            .split('/')
-            .map(str::trim)
-            .filter(|p| !p.is_empty())
-            .collect::<Vec<_>>()
-            .join("/");
+        let folder = clean_folder(&folder);
         // The target as Quick connect takes it, with -l and -p in it.
         let serial = target.starts_with("serial://");
         let mut quick = target.clone();
@@ -1405,6 +1527,28 @@ mod tests {
         t.write(b"rm Core DB\ryes\r").unwrap();
         assert!(drain(&mut t).contains("Deleted"));
         assert!(load().is_empty());
+        // Folders made by add, deleted with what is in them.
+        t.write(
+            b"add r1 10.0.0.1 -f \"Data Center/Network\"\radd r2 10.0.0.2 -f \"data center\"\r",
+        )
+        .unwrap();
+        drain(&mut t);
+        assert_eq!(load().len(), 2);
+        assert!(dir.join("sessions/Data Center/Network/r1.toml").is_file());
+        assert!(dir.join("sessions/Data Center/r2.toml").is_file());
+        t.write(b"delete r1 -f \"Data Center/Network\"\rn\r")
+            .unwrap();
+        assert!(drain(&mut t).contains("Data Center/Network/r1"));
+        t.write(b"delete -f \"data center\"\r").unwrap();
+        let asked = drain(&mut t);
+        assert!(asked.contains("2 sessions and 1 folder"), "{asked}");
+        t.write(b"y\r").unwrap();
+        assert!(drain(&mut t).contains("Deleted"));
+        assert!(!dir.join("sessions/Data Center").exists());
+        assert!(load().is_empty());
+        t.write(b"delete -f Nowhere\r").unwrap();
+        assert!(drain(&mut t).contains("no folder"));
+
         set_config_dir(None);
         set_catalog(Vec::new());
         let _ = std::fs::remove_dir_all(dir);
