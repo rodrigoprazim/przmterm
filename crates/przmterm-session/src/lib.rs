@@ -19,6 +19,7 @@
 
 pub mod bundle;
 pub mod buttons;
+pub mod commands;
 pub mod keymap;
 pub mod location;
 pub mod preferences;

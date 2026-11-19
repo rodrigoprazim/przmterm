@@ -24,6 +24,7 @@ przmterm-script.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+clap_complete.workspace = true
 
 [build-dependencies]
 # Windows version information (see build.rs).

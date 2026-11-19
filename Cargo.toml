@@ -31,6 +31,8 @@ toml = "1"
 vte = "0.15"
 unicode-width = "0.2"
 clap = { version = "4.6", features = ["derive"] }
+# Tab completion for `przm` in bash, zsh, fish…, with folders and sessions.
+clap_complete = { version = "4.6", features = ["unstable-dynamic"] }
 dirs = "6"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 tracing = "0.1"

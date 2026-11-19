@@ -9,6 +9,7 @@ use przmterm_session::{Folder, SessionTree};
 use przmterm_term::Terminal;
 
 mod headless;
+mod manage;
 mod mcp;
 mod run;
 use headless::Asker;
@@ -29,6 +30,30 @@ struct Cli {
 enum Command {
     /// Lists saved sessions as a tree.
     Sessions,
+    /// Saves a session: `przm add "Core DB" admin@10.0.0.5:2222 -f "Data
+    /// Center"`. Folders that are not there are made (letter case aside, the
+    /// ones there are used); a session that exists is left alone unless
+    /// --replace. -c must name an entry of the password vault.
+    Add(manage::AddArgs),
+    /// Deletes a saved session (its name, or Folder/name; -f says the
+    /// folder), or with -f alone a folder with what is in it. Asks first.
+    Delete(manage::DeleteArgs),
+    /// Prints the `add` lines of the saved sessions (or those whose name,
+    /// address or description has TEXT), for `przm import` or another
+    /// PrzmTerm's shell. Passwords are never in them.
+    Export {
+        /// Only the sessions whose name, address or description has this.
+        text: Option<String>,
+    },
+    /// Adds the sessions of a list `export` printed (a file, or stdin):
+    /// one `add` line each; blank lines and # comments are skipped.
+    Import {
+        /// The list; stdin when omitted or `-`.
+        file: Option<PathBuf>,
+        /// Write over sessions of the same names.
+        #[arg(long)]
+        replace: bool,
+    },
     /// Feeds bytes (a file or stdin) through the emulator and prints the screen.
     Render {
         /// File with raw terminal output; reads stdin when omitted.
@@ -58,6 +83,7 @@ enum Command {
     /// the keychain; other login questions are asked on the terminal.
     Run {
         /// A saved session (its name, or Folder/name), or user@host[:port].
+        #[arg(add = clap_complete::engine::ArgValueCompleter::new(manage::complete_session))]
         session: String,
         /// A command to send; repeat for several, run in order.
         #[arg(short, long = "cmd", value_name = "COMMAND")]
@@ -99,9 +125,20 @@ fn main() {
 }
 
 fn real_main() -> Result<()> {
+    // `COMPLETE=bash przm`: the shell asking for completions (see GUIDE).
+    clap_complete::CompleteEnv::with_factory(<Cli as clap::CommandFactory>::command).complete();
     let cli = Cli::parse();
     match cli.command {
         Command::Sessions => sessions(cli.config),
+        Command::Add(args) => manage::add(cli.config, &args),
+        Command::Delete(args) => manage::delete(cli.config, &args),
+        Command::Export { text } => manage::export(cli.config, text.as_deref()),
+        Command::Import { file, replace } => {
+            if !manage::import(cli.config, file.as_deref(), replace)? {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
         Command::Render { file, cols, rows } => render(file, cols, rows),
         Command::ImportSecurecrt {
             paths,
@@ -378,8 +415,14 @@ fn print_folder(folder: &Folder, depth: usize) {
         print_folder(f, depth + 1);
     }
     for s in &folder.sessions {
+        let about = s
+            .description
+            .as_deref()
+            .and_then(|d| d.lines().next())
+            .map(|d| format!("  — {d}"))
+            .unwrap_or_default();
         println!(
-            "{indent}{}  [{}] {}",
+            "{indent}{}  [{}] {}{about}",
             s.name,
             s.protocol,
             s.display_target()

@@ -592,6 +592,38 @@ the like. The exit code is 0 when all commands ran, 1 when the connection or
 login failed and 2 when a prompt did not come back. `-v` shows the login on
 stderr, `--raw` keeps the escape sequences.
 
+The saved sessions can be managed from a shell too, with the same rules as
+the [PrzmTerm shell's commands](#sessions-from-the-przmterm-shell):
+
+```sh
+przm add "Core DB" admin@10.0.0.5:2222 -f "Data Center" -d "Main database"
+przm add sw-core-01 10.0.0.1 -l netops -f "Data Center/Network" -c netops
+przm delete sw-core-01 -f "Data Center/Network"
+przm delete -f Lab --yes                        # a folder and what is in it
+przm export > hosts.txt                         # on the old computer
+przm import hosts.txt                           # on the new one (or: < hosts.txt)
+przm sessions                                   # the tree, with descriptions
+```
+
+`delete` asks first; in a script add `--yes`. For `-c`, the vault is
+opened (master password from `PRZMTERM_VAULT_PASSWORD`, or asked) only when
+the entry is not used by a session yet. `import` adds every `add` line of
+the list (the ones `export` prints, also pasted into a PrzmTerm shell),
+skipping blank lines and `#` comments; it goes on past a line it cannot
+add, says which, and exits with 1. `--replace` writes over sessions of the
+same names.
+
+Tab completes `przm`'s commands and options, saved sessions (`przm run`,
+`przm delete`, `-J`), folders a level at a time (`-f`) and the vault
+entries the sessions use (`-c`). Turn it on once in the shell's startup
+file:
+
+```sh
+echo 'source <(COMPLETE=zsh przm)' >> ~/.zshrc     # zsh
+echo 'source <(COMPLETE=bash przm)' >> ~/.bashrc   # bash
+echo 'COMPLETE=fish przm | source' >> ~/.config/fish/config.fish
+```
+
 ## AI assistants (MCP)
 
 `przm mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)

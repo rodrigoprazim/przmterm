@@ -9,7 +9,11 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
-use przmterm_session::{Session, SessionSettings, Target};
+use przmterm_session::Session;
+use przmterm_session::commands::{
+    AddSpec, VaultMiss, add_session, clean_folder, count_inside, export_line, quote, split_args,
+    subfolders, vault_entry,
+};
 use przmterm_transport::{Protocol, Size, Transport, TransportError};
 
 const PROMPT: &str = "\x1b[1;36mprzmterm\x1b[0m \x1b[1;34m~>\x1b[0m ";
@@ -54,63 +58,6 @@ impl Entry {
             export: export_line(session),
         }
     }
-}
-
-/// The `add` line that makes `session` again: where it connects and how
-/// it logs in, its folder and description (other settings stay the new
-/// PrzmTerm's defaults).
-fn export_line(session: &Session) -> Option<String> {
-    let target = match &session.target {
-        Target::Network {
-            host,
-            port,
-            username,
-        } => {
-            let scheme = if session.protocol == Protocol::Telnet {
-                "telnet://"
-            } else {
-                ""
-            };
-            let user = username
-                .as_deref()
-                .map(|u| format!("{u}@"))
-                .unwrap_or_default();
-            let host = if host.contains(':') {
-                format!("[{host}]")
-            } else {
-                host.clone()
-            };
-            // The protocol's own port goes without saying.
-            if session.protocol.default_port() == Some(*port) {
-                format!("{scheme}{user}{host}")
-            } else {
-                format!("{scheme}{user}{host}:{port}")
-            }
-        }
-        Target::Serial(line) => format!("serial://{}@{}", line.port, line.baud_rate),
-        Target::Local => return None,
-    };
-    let mut words = vec!["add".to_string(), quote(&session.name), quote(&target)];
-    let mut option = |flag: &str, value: &str| {
-        words.push(flag.to_string());
-        words.push(quote(value));
-    };
-    if !session.folder.is_empty() {
-        option("-f", &session.folder.join("/"));
-    }
-    if let Some(c) = &session.credential {
-        option("-c", c);
-    }
-    if let Some(key) = &session.identity_file {
-        option("-i", &key.display().to_string());
-    }
-    if let Some(jump) = &session.jump_host {
-        option("-J", jump);
-    }
-    if let Some(d) = &session.description {
-        option("-d", d);
-    }
-    Some(words.join(" "))
 }
 
 /// The settings folder, where `add` and `delete` work; set at start.
@@ -450,50 +397,37 @@ impl Launcher {
         let mut spec = spec;
         // A vault entry that is there, as it is written.
         if let Some(name) = spec.settings.credential.clone().filter(|c| !c.is_empty()) {
-            match vault_entry(&dir, &name) {
+            let open = vault_names();
+            match vault_entry(&dir, &name, open.as_deref()) {
                 Ok(entry) => spec.settings.credential = Some(entry),
-                Err((why, unlock)) => {
-                    if unlock {
+                Err(miss) => {
+                    let hint = match &miss {
+                        VaultMiss::NoVault => " (+ › Password vault… makes one)",
+                        VaultMiss::Unknown(names) if names.len() > 8 => "; Tab after -c lists them",
+                        VaultMiss::Unknown(_) => "",
+                        VaultMiss::Locked => "; unlock it and run the line again",
+                    };
+                    if miss == VaultMiss::Locked {
                         self.request(Request::UnlockVault);
                     }
-                    return self.error(&format!("add: {why}"));
+                    return self.error(&format!("add: -c {name}: {}{hint}", miss.reason()));
                 }
             }
         }
-        // Into a folder that is there, as it is written (`lab` is `Lab`).
-        spec.folder = existing_folder(&dir, &spec.folder);
-        let label = if spec.folder.is_empty() {
-            spec.name.clone()
-        } else {
-            format!("{}/{}", spec.folder, spec.name)
-        };
-        // Already there: by its file, or by its label (letter case aside).
-        let file = spec.file(&dir);
-        let taken = catalog()
-            .into_iter()
-            .find(|e| e.label.eq_ignore_ascii_case(&label))
-            .map(|e| e.path)
-            .or_else(|| file.is_file().then(|| file.clone()));
-        if let Some(old) = &taken {
-            if !spec.replace {
-                return self.error(&format!(
-                    "add: {label} exists already (add --replace to write over it)"
-                ));
-            }
-            if old != &file {
-                let _ = std::fs::remove_file(old);
-            }
-        }
-        match przmterm_session::write_session(&dir, &spec.folder, &spec.name, &spec.settings) {
-            Ok(_) => {
+        // Already there: by its label (letter case aside) or its file.
+        let known: Vec<(String, PathBuf)> =
+            catalog().into_iter().map(|e| (e.label, e.path)).collect();
+        let shown = spec.shown.clone();
+        match add_session(&dir, spec, &known) {
+            Ok(added) => {
                 self.emit(&format!(
-                    "{} \x1b[1m{label}\x1b[0m \x1b[2m{}\x1b[0m\r\n",
-                    if taken.is_some() { "Replaced" } else { "Added" },
-                    spec.shown
+                    "{} \x1b[1m{}\x1b[0m \x1b[2m{shown}\x1b[0m\r\n",
+                    if added.replaced { "Replaced" } else { "Added" },
+                    added.label
                 ));
                 self.request(Request::Reload);
             }
-            Err(e) => self.error(&format!("add: {}", e.reason())),
+            Err(e) => self.error(&format!("add: {e}")),
         }
     }
 
@@ -607,7 +541,7 @@ impl Launcher {
         }
         let mut text = format!(
             "# PrzmTerm {}: {} session{}. Paste these lines into another PrzmTerm \
-             shell to add them.\r\n",
+             shell, or give them to `przm import`, to add them.\r\n",
             przmterm_core::VERSION,
             lines.len(),
             if lines.len() == 1 { "" } else { "s" }
@@ -923,49 +857,10 @@ fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
 }
 
-/// A folder path as typed (`" Lab / Core/"`) as it is kept (`Lab/Core`).
-fn clean_folder(folder: &str) -> String {
-    folder
-        .split('/')
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
 /// The folder `path` names (letter case aside) in the settings folder: its
 /// directory and its path as written there.
 fn found_folder(path: &str) -> Option<(PathBuf, String)> {
-    let dir = config_dir()?;
-    let path = clean_folder(path);
-    if path.is_empty() {
-        return None;
-    }
-    let label = existing_folder(&dir, &path);
-    let mut at = dir.join(przmterm_session::SESSIONS_DIR);
-    for part in label.split('/') {
-        at.push(part);
-    }
-    at.is_dir().then_some((at, label))
-}
-
-/// The sessions and folders inside `dir`, all the way down.
-fn count_inside(dir: &std::path::Path) -> (usize, usize) {
-    let mut counts = (0, 0);
-    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            let (s, f) = count_inside(&path);
-            counts = (counts.0 + s, counts.1 + f + 1);
-        } else if path.extension().is_some_and(|e| e == "toml")
-            && path
-                .file_name()
-                .is_some_and(|n| n != przmterm_session::FOLDER_FILE)
-        {
-            counts.0 += 1;
-        }
-    }
-    counts
+    przmterm_session::commands::found_folder(&config_dir()?, path)
 }
 
 /// The word being typed after one of `flags` (`" -f "`) in one of
@@ -996,43 +891,6 @@ fn arg_word(line: &str, commands: &[&str], flags: &[&str]) -> Option<(String, St
     }
 }
 
-/// The vault entry `name` stands for, as the vault writes it (letter case
-/// aside); else why not, and whether unlocking the vault would tell.
-fn vault_entry(dir: &std::path::Path, name: &str) -> Result<String, (String, bool)> {
-    if !przmterm_session::vault::vault_path(dir).is_file() {
-        return Err((
-            format!("-c {name}: there is no password vault yet (+ › Password vault… makes one)"),
-            false,
-        ));
-    }
-    let found = |names: &[String]| names.iter().find(|n| n.eq_ignore_ascii_case(name)).cloned();
-    match vault_names() {
-        Some(names) => found(&names).ok_or_else(|| {
-            let known = if names.is_empty() {
-                "it is empty".to_string()
-            } else if names.len() <= 8 {
-                format!("it has {}", names.join(", "))
-            } else {
-                format!("{} entries; Tab after -c lists them", names.len())
-            };
-            (
-                format!("-c {name}: the vault has no entry by that name ({known})"),
-                false,
-            )
-        }),
-        // Locked: an entry another session uses is there.
-        None => found(&przmterm_session::vault::names_in_use(dir)).ok_or_else(|| {
-            (
-                format!(
-                    "-c {name}: the vault is locked, so the entry cannot be checked; \
-                     unlock it and run the line again"
-                ),
-                true,
-            )
-        }),
-    }
-}
-
 /// The folders `partial` can complete to (letter case aside), by path,
 /// and whether each has folders in it.
 fn folder_completions(partial: &str) -> Vec<(String, bool)> {
@@ -1040,7 +898,10 @@ fn folder_completions(partial: &str) -> Vec<(String, bool)> {
         return Vec::new();
     };
     let (parent, start) = match partial.rsplit_once('/') {
-        Some((parent, start)) => (existing_folder(&dir, &clean_folder(parent)), start),
+        Some((parent, start)) => (
+            przmterm_session::commands::existing_folder(&dir, &clean_folder(parent)),
+            start,
+        ),
         None => (String::new(), partial),
     };
     let mut at = dir.join(przmterm_session::SESSIONS_DIR);
@@ -1063,244 +924,6 @@ fn folder_completions(partial: &str) -> Vec<(String, bool)> {
         .collect();
     out.sort_by_key(|(path, _)| path.to_lowercase());
     out
-}
-
-/// The names of the folders in `dir`.
-fn subfolders(dir: &std::path::Path) -> Vec<String> {
-    std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.path().is_dir())
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|name| !name.starts_with('.'))
-        .collect()
-}
-
-/// What `add` makes, from its words.
-#[derive(Debug)]
-struct AddSpec {
-    name: String,
-    folder: String,
-    settings: SessionSettings,
-    /// Where it connects, to say so.
-    shown: String,
-    replace: bool,
-}
-
-impl AddSpec {
-    fn parse(words: &[String]) -> Result<AddSpec, String> {
-        let mut positional = Vec::new();
-        let mut folder = String::new();
-        let mut user = None;
-        let mut port = None;
-        let mut settings = SessionSettings::default();
-        let mut replace = false;
-        let mut words = words.iter();
-        while let Some(word) = words.next() {
-            let mut value = |flag: &str| {
-                words
-                    .next()
-                    .cloned()
-                    .ok_or_else(|| format!("{flag} needs a value"))
-            };
-            match word.as_str() {
-                "-f" | "--folder" => folder = value(word)?,
-                "-l" | "--user" => user = Some(value(word)?),
-                "-p" | "--port" => port = Some(value(word)?),
-                "-c" | "--credential" => settings.credential = Some(value(word)?),
-                "-i" | "--key" => settings.identity_file = Some(value(word)?),
-                "-J" | "--jump" => settings.jump_host = Some(value(word)?),
-                "-d" | "--description" => settings.description = Some(value(word)?),
-                "--replace" => replace = true,
-                flag if flag.starts_with('-') && flag.len() > 1 => {
-                    return Err(format!("unknown option {flag}"));
-                }
-                _ => positional.push(word.clone()),
-            }
-        }
-        let (name, target) = match positional.as_slice() {
-            [name, target] => (name.trim().to_string(), target.clone()),
-            [_] => return Err("say where it connects: add <name> <target>".into()),
-            [] => return Err("say a name and where it connects: add <name> <target>".into()),
-            _ => {
-                return Err(format!(
-                    "too many words ({}): quote a name with spaces",
-                    positional.join(" ")
-                ));
-            }
-        };
-        let folder = clean_folder(&folder);
-        // The target as Quick connect takes it, with -l and -p in it.
-        let serial = target.starts_with("serial://");
-        let mut quick = target.clone();
-        if let Some(user) = &user {
-            if serial || target.contains('@') {
-                return Err("a user is given twice (-l and user@)".into());
-            }
-            quick = match quick.split_once("://") {
-                Some((scheme, rest)) => format!("{scheme}://{user}@{rest}"),
-                None => format!("{user}@{quick}"),
-            };
-        }
-        if let Some(port) = &port {
-            if serial {
-                return Err("-p is for a network host, not a serial port".into());
-            }
-            port.parse::<u16>()
-                .map_err(|_| format!("`{port}` is not a port"))?;
-            quick.push(':');
-            quick.push_str(port);
-        }
-        let session = Session::quick_connect(&quick)?;
-        settings.protocol = Some(session.protocol);
-        match &session.target {
-            Target::Network {
-                host,
-                port,
-                username,
-            } => {
-                settings.host = Some(host.clone());
-                // The protocol's own port is left to it.
-                if session.protocol.default_port() != Some(*port) {
-                    settings.port = Some(*port);
-                }
-                settings.username = username.clone();
-            }
-            Target::Serial(line) => {
-                settings.serial_port = Some(line.port.clone());
-                if target.contains('@') {
-                    settings.baud_rate = Some(line.baud_rate);
-                }
-            }
-            Target::Local => return Err("a local shell is not something to add".into()),
-        }
-        for value in [
-            &mut settings.credential,
-            &mut settings.identity_file,
-            &mut settings.jump_host,
-            &mut settings.description,
-        ] {
-            if value.as_deref().is_some_and(|v| v.trim().is_empty()) {
-                *value = None;
-            }
-        }
-        Ok(AddSpec {
-            shown: format!("{} {}", session.protocol, session.display_target()),
-            name,
-            folder,
-            settings,
-            replace,
-        })
-    }
-
-    /// The file it is written to.
-    fn file(&self, config_dir: &std::path::Path) -> PathBuf {
-        let mut path = config_dir.join(przmterm_session::SESSIONS_DIR);
-        for part in self.folder.split('/').filter(|p| !p.is_empty()) {
-            path.push(part);
-        }
-        path.join(format!("{}.toml", self.name))
-    }
-}
-
-/// `folder` (`A/B`) with each part as the folder already there writes it,
-/// letter case aside; parts not there as they are.
-fn existing_folder(config_dir: &std::path::Path, folder: &str) -> String {
-    let mut dir = config_dir.join(przmterm_session::SESSIONS_DIR);
-    let mut parts = Vec::new();
-    for part in folder.split('/').filter(|p| !p.is_empty()) {
-        let found = std::fs::read_dir(&dir).ok().and_then(|entries| {
-            entries
-                .flatten()
-                .filter(|e| e.path().is_dir())
-                .map(|e| e.file_name().to_string_lossy().into_owned())
-                .find(|name| name.eq_ignore_ascii_case(part))
-        });
-        let part = found.unwrap_or_else(|| part.to_string());
-        dir.push(&part);
-        parts.push(part);
-    }
-    parts.join("/")
-}
-
-/// The words of `text` as a shell splits them: spaces apart, '…' as it
-/// is, "…" with \" and \\ in it, \ before a character outside quotes.
-fn split_args(text: &str) -> Result<Vec<String>, String> {
-    let mut words = Vec::new();
-    let mut word = String::new();
-    let mut in_word = false;
-    let mut chars = text.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            c if c.is_whitespace() => {
-                if in_word {
-                    words.push(std::mem::take(&mut word));
-                    in_word = false;
-                }
-            }
-            '\'' => {
-                in_word = true;
-                loop {
-                    match chars.next() {
-                        Some('\'') => break,
-                        Some(c) => word.push(c),
-                        None => return Err("a ' is not closed".into()),
-                    }
-                }
-            }
-            '"' => {
-                in_word = true;
-                loop {
-                    match chars.next() {
-                        Some('"') => break,
-                        Some('\\') => match chars.next() {
-                            Some(c @ ('"' | '\\')) => word.push(c),
-                            Some(c) => {
-                                word.push('\\');
-                                word.push(c);
-                            }
-                            None => return Err("a \" is not closed".into()),
-                        },
-                        Some(c) => word.push(c),
-                        None => return Err("a \" is not closed".into()),
-                    }
-                }
-            }
-            '\\' => {
-                in_word = true;
-                if let Some(c) = chars.next() {
-                    word.push(c);
-                }
-            }
-            c => {
-                in_word = true;
-                word.push(c);
-            }
-        }
-    }
-    if in_word {
-        words.push(word);
-    }
-    Ok(words)
-}
-
-/// `text` as one word for [`split_args`]: in quotes when it has to be.
-fn quote(text: &str) -> String {
-    let plain = !text.is_empty()
-        && text
-            .chars()
-            .all(|c| !c.is_whitespace() && !matches!(c, '"' | '\'' | '\\' | '#'));
-    if plain {
-        text.to_string()
-    } else {
-        format!(
-            "\"{}\"",
-            text.replace('\\', "\\\\")
-                .replace('"', "\\\"")
-                .replace('\n', " ")
-        )
-    }
 }
 
 /// The entries whose label, target or description has `filter` in it
@@ -1632,64 +1255,6 @@ mod tests {
         t.write(b"open nothing\r").unwrap();
         assert!(drain(&mut t).contains("no saved session"));
         assert!(requests.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn splits_words_like_a_shell_and_quotes_back() {
-        assert_eq!(
-            split_args(r#"add "Core DB" admin@10.0.0.5 -d 'a b' x\ y "q\"t""#).unwrap(),
-            [
-                "add",
-                "Core DB",
-                "admin@10.0.0.5",
-                "-d",
-                "a b",
-                "x y",
-                "q\"t"
-            ]
-        );
-        assert!(split_args("add \"open").is_err());
-        for text in ["plain", "with space", "q\"uote", "back\\slash", "", "#tag"] {
-            assert_eq!(split_args(&quote(text)).unwrap(), [text], "{text}");
-        }
-    }
-
-    #[test]
-    fn add_reads_targets_and_options() {
-        let words = |t: &str| split_args(t).unwrap();
-        let spec = AddSpec::parse(&words(
-            "\"Core DB\" 10.0.0.5 -l admin -p 2222 -f ' Lab / Core ' -d \"main db\" -J bastion",
-        ))
-        .unwrap();
-        assert_eq!(spec.name, "Core DB");
-        assert_eq!(spec.folder, "Lab/Core");
-        let s = &spec.settings;
-        assert_eq!(s.protocol, Some(Protocol::Ssh));
-        assert_eq!(s.host.as_deref(), Some("10.0.0.5"));
-        assert_eq!(s.port, Some(2222));
-        assert_eq!(s.username.as_deref(), Some("admin"));
-        assert_eq!(s.description.as_deref(), Some("main db"));
-        assert_eq!(s.jump_host.as_deref(), Some("bastion"));
-        // The protocol's own port is not written.
-        let spec = AddSpec::parse(&words("sw telnet://10.0.0.9")).unwrap();
-        assert_eq!(spec.settings.protocol, Some(Protocol::Telnet));
-        assert_eq!(spec.settings.port, None);
-        // A user with @ in it (a vault proxy's): the last @ splits.
-        let spec = AddSpec::parse(&words("seg 'a1[root@srv]@pam.example.com'")).unwrap();
-        assert_eq!(spec.settings.username.as_deref(), Some("a1[root@srv]"));
-        assert_eq!(spec.settings.host.as_deref(), Some("pam.example.com"));
-        let spec = AddSpec::parse(&words("console serial:///dev/ttyUSB0@115200")).unwrap();
-        assert_eq!(spec.settings.serial_port.as_deref(), Some("/dev/ttyUSB0"));
-        assert_eq!(spec.settings.baud_rate, Some(115200));
-        for bad in [
-            "only-a-name",
-            "a b c",
-            "x admin@h -l root",
-            "x h -p port",
-            "x h -z",
-        ] {
-            assert!(AddSpec::parse(&words(bad)).is_err(), "{bad}");
-        }
     }
 
     #[test]

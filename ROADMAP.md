@@ -213,6 +213,8 @@ and, when a device is at hand, a serial console (Xmodem or Ymodem).
   shell to save, delete and move sessions between computers
 - [x] Folder list in session settings: tree, search and a new folder made
   on save; `delete -f` for folders in the PrzmTerm shell
+- [x] `przm add`, `delete`, `export` and `import`, and shell completion
+  for `przm`
 - [x] User guide and scripting reference: [docs/GUIDE.md](docs/GUIDE.md)
   and [docs/SCRIPTING.md](docs/SCRIPTING.md)
 - [x] Buttons and shortcuts that type a password can require the prompt
