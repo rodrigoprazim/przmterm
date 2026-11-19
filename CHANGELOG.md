@@ -12,7 +12,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
 - PrzmTerm shell: `add <name> <target> [-f folder] [-l user] [-p port] [-c
   credential] [-i key] [-J jump] [-d description] [--replace]` saves a
   session, making its folders; `delete <session>` (or `rm`) deletes one
-  after asking, and `delete -f <folder>` a folder and what is in it;
+  after asking, and `delete -f <folder>` a folder and what is in it (Tab
+  after `-f` completes folders and subfolders);
   `export [text]` prints the `add` lines of the saved sessions, to paste into
   another PrzmTerm and move them there.
 - The *Folder* list in a session's settings is a tree with a search and

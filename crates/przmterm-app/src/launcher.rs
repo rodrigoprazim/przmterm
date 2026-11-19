@@ -616,9 +616,12 @@ impl Launcher {
         self.emit(&s);
     }
 
-    /// Tab: completes the command, or the session name after `ssh`, `open`
-    /// or `delete`.
+    /// Tab: completes the command, the session name after `ssh`, `open`
+    /// or `delete`, or the folder after `-f`.
     fn complete(&mut self) {
+        if let Some((head, partial)) = folder_word(&self.line) {
+            return self.complete_folder(&head, &partial);
+        }
         let (head, word) = match self.line.rfind(' ') {
             Some(i) => (self.line[..=i].to_string(), self.line[i + 1..].to_string()),
             None => (String::new(), self.line.clone()),
@@ -667,6 +670,45 @@ impl Launcher {
                     self.emit(&format!("\r\n{list}"));
                     self.redraw();
                 }
+            }
+        }
+    }
+
+    /// Tab after `-f`: the folder, a level at a time. One with folders in it
+    /// ends in `/` for the next Tab; the others end the word.
+    fn complete_folder(&mut self, head: &str, partial: &str) {
+        let options = folder_completions(partial);
+        match options.as_slice() {
+            [] => self.emit("\x07"),
+            [(path, inside)] => {
+                self.line = if *inside {
+                    format!("{head}{}", quote(&format!("{path}/")))
+                } else {
+                    format!("{head}{} ", quote(path))
+                };
+                self.redraw();
+            }
+            many => {
+                let paths: Vec<String> = many.iter().map(|(p, _)| p.clone()).collect();
+                let common = common_prefix(&paths);
+                if common.chars().count() > partial.chars().count() {
+                    self.line = format!("{head}{}", quote(&common));
+                } else {
+                    let names: Vec<String> = many
+                        .iter()
+                        .map(|(path, inside)| {
+                            let name = path.rsplit('/').next().unwrap_or(path);
+                            if *inside {
+                                format!("{name}/")
+                            } else {
+                                name.to_string()
+                            }
+                        })
+                        .collect();
+                    let cols = usize::from(self.size.cols);
+                    self.emit(&format!("\r\n{}", columns(&names, cols, "")));
+                }
+                self.redraw();
             }
         }
     }
@@ -848,6 +890,78 @@ fn count_inside(dir: &std::path::Path) -> (usize, usize) {
         }
     }
     counts
+}
+
+/// The folder being typed after `-f` (or `--folder`) in `add` or
+/// `delete`, quotes and all, as it reads: the line before it and the word.
+fn folder_word(line: &str) -> Option<(String, String)> {
+    let command = line.split_whitespace().next()?;
+    if !matches!(command, "add" | "new" | "delete" | "rm") {
+        return None;
+    }
+    let at = [" -f ", " --folder "]
+        .iter()
+        .filter_map(|flag| line.rfind(flag).map(|i| i + flag.len()))
+        .max()?;
+    let rest = &line[at..];
+    let words = match split_args(rest) {
+        // A space after it: the folder is done.
+        Ok(_) if rest.ends_with(char::is_whitespace) => return None,
+        Ok(words) => words,
+        // A quote still open.
+        Err(_) => split_args(&format!("{rest}\""))
+            .or_else(|_| split_args(&format!("{rest}'")))
+            .ok()?,
+    };
+    match words.as_slice() {
+        [] => Some((line.to_string(), String::new())),
+        [word] => Some((line[..at].to_string(), word.clone())),
+        _ => None,
+    }
+}
+
+/// The folders `partial` can complete to (letter case aside), by path,
+/// and whether each has folders in it.
+fn folder_completions(partial: &str) -> Vec<(String, bool)> {
+    let Some(dir) = config_dir() else {
+        return Vec::new();
+    };
+    let (parent, start) = match partial.rsplit_once('/') {
+        Some((parent, start)) => (existing_folder(&dir, &clean_folder(parent)), start),
+        None => (String::new(), partial),
+    };
+    let mut at = dir.join(przmterm_session::SESSIONS_DIR);
+    for part in parent.split('/').filter(|p| !p.is_empty()) {
+        at.push(part);
+    }
+    let start = start.trim_start().to_lowercase();
+    let mut out: Vec<(String, bool)> = subfolders(&at)
+        .into_iter()
+        .filter(|name| name.to_lowercase().starts_with(&start))
+        .map(|name| {
+            let inside = !subfolders(&at.join(&name)).is_empty();
+            let path = if parent.is_empty() {
+                name
+            } else {
+                format!("{parent}/{name}")
+            };
+            (path, inside)
+        })
+        .collect();
+    out.sort_by_key(|(path, _)| path.to_lowercase());
+    out
+}
+
+/// The names of the folders in `dir`.
+fn subfolders(dir: &std::path::Path) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| !name.starts_with('.'))
+        .collect()
 }
 
 /// What `add` makes, from its words.
@@ -1539,9 +1653,32 @@ mod tests {
         t.write(b"delete r1 -f \"Data Center/Network\"\rn\r")
             .unwrap();
         assert!(drain(&mut t).contains("Data Center/Network/r1"));
+        // Tab completes folders a level at a time, letter case aside.
+        std::fs::create_dir_all(dir.join("sessions/Data Center/Nothing here")).unwrap();
+        t.write(b"delete -f da\t").unwrap();
+        assert_eq!(t.line, "delete -f \"Data Center/\"");
+        t.write(b"\t").unwrap();
+        assert_eq!(t.line, "delete -f \"Data Center/N\"");
+        drain(&mut t);
+        t.write(b"\t").unwrap();
+        let listed = drain(&mut t);
+        assert!(
+            listed.contains("Network") && listed.contains("Nothing here"),
+            "{listed}"
+        );
+        // Typed after the closing quote, as a shell reads it.
+        t.write(b"et\t").unwrap();
+        assert_eq!(t.line, "delete -f \"Data Center/Network\" ");
+        t.write(b"\x15add x 10.0.0.3 -f \"data center/no\t")
+            .unwrap();
+        assert_eq!(t.line, "add x 10.0.0.3 -f \"Data Center/Nothing here\" ");
+        t.write(b"\x15delete -f zz\t").unwrap();
+        assert_eq!(t.line, "delete -f zz");
+        t.write(b"\x15").unwrap();
+        drain(&mut t);
         t.write(b"delete -f \"data center\"\r").unwrap();
         let asked = drain(&mut t);
-        assert!(asked.contains("2 sessions and 1 folder"), "{asked}");
+        assert!(asked.contains("2 sessions and 2 folders"), "{asked}");
         t.write(b"y\r").unwrap();
         assert!(drain(&mut t).contains("Deleted"));
         assert!(!dir.join("sessions/Data Center").exists());

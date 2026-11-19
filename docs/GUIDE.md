@@ -681,7 +681,9 @@ Tab completes the name. `delete <name> -f <folder>` deletes the session of
 that name in that folder, and `delete -f <folder>` deletes a folder with the
 sessions and folders in it, saying how many first (`delete <folder>` does
 the same when no session has that name). Letter case does not matter for
-folders, in `add` or `delete`.
+folders, in `add` or `delete`, and Tab after `-f` completes the folder a
+level at a time (`-f da` Tab gives `-f "Data Center/"`, Tab again lists or
+completes what is in it).
 
 ### Several computers
 
