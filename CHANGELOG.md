@@ -7,6 +7,27 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- PrzmTerm shell: `add <name> <target> [-f folder] [-l user] [-p port] [-c
+  credential] [-i key] [-J jump] [-d description] [--replace]` saves a
+  session, making its folders; `delete <session>` (or `rm`) deletes one
+  after asking, and `delete -f <folder>` a folder and what is in it (Tab
+  after `-f` completes folders and subfolders, and `-c` must be an entry
+  of the password vault, which Tab after it lists);
+  `export [text]` prints the `add` lines of the saved sessions, to paste into
+  another PrzmTerm and move them there.
+- `przm add`, `przm delete`, `przm export` and `przm import`: the same
+  session commands from a system shell (`delete --yes` for scripts; `-c`
+  opens the vault only for an entry no session uses yet), and `przm
+  sessions` shows descriptions. Tab completion for `przm` in zsh, bash and
+  fish (`source <(COMPLETE=zsh przm)`), with sessions, folders and vault
+  entries.
+- The *Folder* list in a session's settings is a tree with a search and
+  *New folder in …*; the new folder is made when the session is saved.
+- Sessions and folders have a *Description*, shown in the session list
+  (also found by its search) and by `sessions`; imported from SecureCRT.
+
 ## [1.0.0-rc.7] - 2026-11-18
 
 ### Added

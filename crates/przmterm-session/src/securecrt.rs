@@ -319,6 +319,14 @@ fn convert(name: &str, f: &Fields, report: &mut Report) -> Option<SessionSetting
             dir: None,
         };
     }
+    // SecureCRT keeps a description as lines (an array).
+    if let Some(Value::List(lines)) = f.get("Description") {
+        let text = lines.join("\n");
+        let text = text.trim();
+        if !text.is_empty() {
+            s.description = Some(text.to_string());
+        }
+    }
     Some(s)
 }
 
@@ -1069,7 +1077,8 @@ Z:\"Port Forward Table V3\"=00000000\r\n";
         assert_eq!(r.tunnels, 0, "an empty table is no tunnel");
 
         let telnet = "D:\"Is Session\"=00000001\nS:\"Protocol Name\"=Telnet\n\
-                      S:\"Hostname\"=rtr\nD:\"Port\"=00000917\n";
+                      S:\"Hostname\"=rtr\nD:\"Port\"=00000917\n\
+                      Z:\"Description\"=00000002\n Core router\n call NOC\n";
         let serial = "D:\"Is Session\"=00000001\nS:\"Protocol Name\"=Serial\n\
                       S:\"Com Port\"=COM3\nD:\"Baud Rate\"=0001c200\nD:\"Data Bits\"=00000007\n\
                       D:\"Parity\"=00000002\nD:\"Stop Bits\"=00000002\nD:\"CTS Flow\"=00000001\n";
@@ -1081,6 +1090,7 @@ Z:\"Port Forward Table V3\"=00000000\r\n";
         assert_eq!(r.sessions.len(), 2);
         let t = &r.sessions[0].settings;
         assert_eq!((t.protocol, t.port), (Some(Protocol::Telnet), Some(2327)));
+        assert_eq!(t.description.as_deref(), Some("Core router\ncall NOC"));
         let c = &r.sessions[1].settings;
         assert_eq!(c.serial_port.as_deref(), Some("COM3"));
         assert_eq!(c.baud_rate, Some(115_200));

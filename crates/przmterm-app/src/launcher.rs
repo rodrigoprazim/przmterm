@@ -1,19 +1,27 @@
 //! The PrzmTerm shell: the tab PrzmTerm opens with. It connects to saved
 //! sessions (`ssh <name>`, with Tab completing the name) and to hosts that
-//! are not saved (`ssh user@host`), like the Quick connect bar. It is not
+//! are not saved (`ssh user@host`), like the Quick connect bar, and adds,
+//! deletes and exports saved sessions (`add`, `delete`, `export`: lines
+//! that `export` prints in one PrzmTerm are pasted into another). It is not
 //! a system shell: it only knows its own commands.
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
 use przmterm_session::Session;
+use przmterm_session::commands::{
+    AddSpec, VaultMiss, add_session, clean_folder, count_inside, export_line, quote, split_args,
+    subfolders, vault_entry,
+};
 use przmterm_transport::{Protocol, Size, Transport, TransportError};
 
 const PROMPT: &str = "\x1b[1;36mprzmterm\x1b[0m \x1b[1;34m~>\x1b[0m ";
 
 /// The commands, for `help` and Tab.
-const COMMANDS: [&str; 10] = [
-    "ssh", "telnet", "open", "sessions", "help", "clear", "colors", "styles", "size", "version",
+const COMMANDS: [&str; 13] = [
+    "ssh", "telnet", "open", "sessions", "add", "delete", "export", "help", "clear", "colors",
+    "styles", "size", "version",
 ];
 
 /// A saved session as the shell knows it.
@@ -25,6 +33,12 @@ pub struct Entry {
     pub protocol: Protocol,
     /// Where it connects, e.g. `admin@10.0.0.1:22`.
     pub target: String,
+    /// Its settings file.
+    pub path: PathBuf,
+    pub description: Option<String>,
+    /// The `add` line that makes it again (`export`); `None` for what
+    /// `add` cannot make (a local shell).
+    pub export: Option<String>,
 }
 
 impl Entry {
@@ -39,8 +53,38 @@ impl Entry {
             label,
             protocol: session.protocol,
             target: session.display_target(),
+            path: session.path.clone(),
+            description: session.description.clone(),
+            export: export_line(session),
         }
     }
+}
+
+/// The settings folder, where `add` and `delete` work; set at start.
+static CONFIG_DIR: RwLock<Option<PathBuf>> = RwLock::new(None);
+
+pub fn set_config_dir(dir: Option<PathBuf>) {
+    if let Ok(mut slot) = CONFIG_DIR.write() {
+        *slot = dir;
+    }
+}
+
+fn config_dir() -> Option<PathBuf> {
+    CONFIG_DIR.read().ok().and_then(|d| d.clone())
+}
+
+/// The vault's entry names while it is open (`None` while locked), for
+/// `add -c`; set by the app.
+static VAULT_NAMES: RwLock<Option<Vec<String>>> = RwLock::new(None);
+
+pub fn set_vault_names(names: Option<Vec<String>>) {
+    if let Ok(mut slot) = VAULT_NAMES.write() {
+        *slot = names;
+    }
+}
+
+fn vault_names() -> Option<Vec<String>> {
+    VAULT_NAMES.read().ok().and_then(|n| n.clone())
 }
 
 /// The saved sessions every PrzmTerm shell sees; set when they load.
@@ -57,7 +101,7 @@ fn catalog() -> Vec<Entry> {
 }
 
 /// What the shell asks the application to do.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Request {
     /// Open the saved session with this label (see [`Entry::label`]).
     Open(String),
@@ -65,6 +109,10 @@ pub enum Request {
     /// ([`Session::quick_connect`]), checked; the app adds the global
     /// settings.
     Connect(String),
+    /// Sessions were added or deleted: read them again.
+    Reload,
+    /// `add -c` named an entry it could not check: ask to unlock the vault.
+    UnlockVault,
 }
 
 pub type Requests = Arc<Mutex<Vec<Request>>>;
@@ -84,6 +132,8 @@ pub struct Launcher {
     draft: String,
     closed: bool,
     requests: Requests,
+    /// What `delete` asked about: the next line answers.
+    confirm_delete: Option<Deletion>,
 }
 
 impl Launcher {
@@ -99,6 +149,7 @@ impl Launcher {
             draft: String::new(),
             closed: false,
             requests,
+            confirm_delete: None,
         };
         shell.emit(&format!(
             "\x1b[1mPrzmTerm {}\x1b[0m\r\n\
@@ -131,6 +182,10 @@ impl Launcher {
     }
 
     fn run(&mut self, cmd: &str) {
+        // A comment (`export` starts with one).
+        if cmd.trim_start().starts_with('#') {
+            return;
+        }
         let words: Vec<&str> = cmd.split_whitespace().collect();
         let Some((&first, args)) = words.split_first() else {
             return;
@@ -145,10 +200,18 @@ impl Launcher {
                  telnet host [port]       connect with Telnet\r\n  \
                  open <session>           open a saved session of any kind (serial too)\r\n  \
                  sessions [text]          list the saved sessions, or those matching text\r\n  \
+                 add <name> <target> ...  save a session (add with no more says how)\r\n  \
+                 delete <session>         delete a saved session, after asking\r\n  \
+                 delete -f <folder>       delete a folder and what is in it, after asking\r\n  \
+                 export [text]            print add lines for the saved sessions, to\r\n  \
+                 \x20                        paste into another PrzmTerm\r\n  \
                  clear                    clear the screen (also Ctrl+L)\r\n\
                  \r\n  \
                  Terminal checks: colors, styles, size, version\r\n",
             ),
+            "add" | "new" => self.add(cmd.trim_start()[first.len()..].trim()),
+            "delete" | "rm" => self.delete(cmd.trim_start()[first.len()..].trim()),
+            "export" => self.export(&args.join(" ")),
             "ssh" => self.ssh(rest, args),
             "telnet" => self.telnet(args),
             "open" => match rest {
@@ -280,15 +343,7 @@ impl Launcher {
 
     fn list(&mut self, filter: &str) {
         let entries = catalog();
-        let wanted = filter.trim().to_lowercase();
-        let shown: Vec<&Entry> = entries
-            .iter()
-            .filter(|e| {
-                wanted.is_empty()
-                    || e.label.to_lowercase().contains(&wanted)
-                    || e.target.to_lowercase().contains(&wanted)
-            })
-            .collect();
+        let shown = filtered(&entries, filter);
         if shown.is_empty() {
             self.emit(if entries.is_empty() {
                 "No saved sessions yet: add one with + above the session list.\r\n"
@@ -305,10 +360,195 @@ impl Launcher {
         let mut text = String::new();
         for e in shown {
             let pad = " ".repeat(width - e.label.chars().count());
+            let about = e
+                .description
+                .as_deref()
+                .map(|d| {
+                    let line = d.lines().next().unwrap_or_default();
+                    let cut: String = line.chars().take(60).collect();
+                    let more = cut.len() < d.trim_end().len();
+                    format!("  \x1b[3m{cut}{}\x1b[0m", if more { "…" } else { "" })
+                })
+                .unwrap_or_default();
             text.push_str(&format!(
-                "  {}{pad}  \x1b[2m{} {}\x1b[0m\r\n",
+                "  {}{pad}  \x1b[2m{} {}\x1b[0m{about}\r\n",
                 e.label, e.protocol, e.target
             ));
+        }
+        self.emit(&text);
+    }
+
+    /// `add <name> <target> [options]`: writes a session file.
+    fn add(&mut self, text: &str) {
+        let words = match split_args(text) {
+            Ok(w) => w,
+            Err(e) => return self.error(&format!("add: {e}")),
+        };
+        if words.is_empty() {
+            return self.emit(ADD_USAGE);
+        }
+        let spec = match AddSpec::parse(&words) {
+            Ok(spec) => spec,
+            Err(e) => return self.error(&format!("add: {e}")),
+        };
+        let Some(dir) = config_dir() else {
+            return self.error("add: there is no settings folder to save sessions in");
+        };
+        let mut spec = spec;
+        // A vault entry that is there, as it is written.
+        if let Some(name) = spec.settings.credential.clone().filter(|c| !c.is_empty()) {
+            let open = vault_names();
+            match vault_entry(&dir, &name, open.as_deref()) {
+                Ok(entry) => spec.settings.credential = Some(entry),
+                Err(miss) => {
+                    let hint = match &miss {
+                        VaultMiss::NoVault => " (+ › Password vault… makes one)",
+                        VaultMiss::Unknown(names) if names.len() > 8 => "; Tab after -c lists them",
+                        VaultMiss::Unknown(_) => "",
+                        VaultMiss::Locked => "; unlock it and run the line again",
+                    };
+                    if miss == VaultMiss::Locked {
+                        self.request(Request::UnlockVault);
+                    }
+                    return self.error(&format!("add: -c {name}: {}{hint}", miss.reason()));
+                }
+            }
+        }
+        // Already there: by its label (letter case aside) or its file.
+        let known: Vec<(String, PathBuf)> =
+            catalog().into_iter().map(|e| (e.label, e.path)).collect();
+        let shown = spec.shown.clone();
+        match add_session(&dir, spec, &known) {
+            Ok(added) => {
+                self.emit(&format!(
+                    "{} \x1b[1m{}\x1b[0m \x1b[2m{shown}\x1b[0m\r\n",
+                    if added.replaced { "Replaced" } else { "Added" },
+                    added.label
+                ));
+                self.request(Request::Reload);
+            }
+            Err(e) => self.error(&format!("add: {e}")),
+        }
+    }
+
+    /// `delete <session>`, `delete <name> -f <folder>` (the session in that
+    /// folder) or `delete -f <folder>`: asks before deleting.
+    fn delete(&mut self, text: &str) {
+        let words = match split_args(text) {
+            Ok(w) => w,
+            Err(e) => return self.error(&format!("delete: {e}")),
+        };
+        let mut folder = None;
+        let mut names = Vec::new();
+        let mut words = words.into_iter();
+        while let Some(word) = words.next() {
+            match word.as_str() {
+                "-f" | "--folder" => match words.next() {
+                    Some(f) => folder = Some(f),
+                    None => return self.error("delete: -f needs a folder"),
+                },
+                flag if flag.starts_with('-') && flag.len() > 1 => {
+                    return self.error(&format!("delete: unknown option {flag}"));
+                }
+                _ => names.push(word),
+            }
+        }
+        // A name typed without quotes, spaces and all.
+        let name = names.join(" ");
+        let folder = folder.map(|f| clean_folder(&f));
+        let path = match (&folder, name.is_empty()) {
+            (None, true) => {
+                return self.error("usage: delete <session>, or delete -f <folder>");
+            }
+            (Some(f), true) => return self.ask_folder(f),
+            (Some(f), false) if !f.is_empty() => format!("{f}/{name}"),
+            _ => name,
+        };
+        let found = matching(&catalog(), &path);
+        match found.as_slice() {
+            [entry] => {
+                self.emit(&format!(
+                    "Delete \x1b[1m{}\x1b[0m ({} {})? Its settings file is removed. [y/N] ",
+                    entry.label, entry.protocol, entry.target
+                ));
+                self.confirm_delete = Some(Deletion::Session(entry.clone()));
+            }
+            [] if folder.is_none() && found_folder(&path).is_some() => self.ask_folder(&path),
+            [] => self.error(&format!(
+                "{path}: no saved session by that name (try sessions; delete -f for a folder)"
+            )),
+            many => self.ambiguous(&path, many),
+        }
+    }
+
+    /// Asks before deleting the folder `path` and what is in it.
+    fn ask_folder(&mut self, path: &str) {
+        let Some((dir, label)) = found_folder(path) else {
+            return self.error(&format!("{path}: no folder by that name"));
+        };
+        let (sessions, folders) = count_inside(&dir);
+        let inside = match (sessions, folders) {
+            (0, 0) => "It is empty.".to_string(),
+            (s, 0) => format!("{s} session{} in it will be deleted too.", plural(s)),
+            (0, f) => format!("{f} folder{} in it will be deleted too.", plural(f)),
+            (s, f) => format!(
+                "{s} session{} and {f} folder{} in it will be deleted too.",
+                plural(s),
+                plural(f)
+            ),
+        };
+        self.emit(&format!(
+            "Delete the folder \x1b[1m{label}\x1b[0m? {inside} [y/N] "
+        ));
+        self.confirm_delete = Some(Deletion::Folder { dir, label });
+    }
+
+    /// The answer to `delete`'s question.
+    fn answer_delete(&mut self, answer: &str, what: Deletion) {
+        if !matches!(
+            answer.trim().to_lowercase().as_str(),
+            "y" | "yes" | "s" | "sim"
+        ) {
+            return self.emit("Not deleted.\r\n");
+        }
+        let (done, label) = match &what {
+            Deletion::Session(entry) => (
+                std::fs::remove_file(&entry.path).map_err(|e| e.to_string()),
+                entry.label.clone(),
+            ),
+            Deletion::Folder { dir, label } => (
+                przmterm_session::delete_folder(dir).map_err(|e| e.reason()),
+                format!("the folder {label}"),
+            ),
+        };
+        match done {
+            Ok(()) => {
+                self.emit(&format!("Deleted \x1b[1m{label}\x1b[0m.\r\n"));
+                self.request(Request::Reload);
+            }
+            Err(e) => self.error(&format!("delete: {label}: {e}")),
+        }
+    }
+
+    /// `export [text]`: the `add` lines for the saved sessions (those
+    /// matching text).
+    fn export(&mut self, filter: &str) {
+        let entries = catalog();
+        let shown = filtered(&entries, filter);
+        let lines: Vec<&str> = shown.iter().filter_map(|e| e.export.as_deref()).collect();
+        if lines.is_empty() {
+            return self.emit("No saved session to export.\r\n");
+        }
+        let mut text = format!(
+            "# PrzmTerm {}: {} session{}. Paste these lines into another PrzmTerm \
+             shell, or give them to `przm import`, to add them.\r\n",
+            przmterm_core::VERSION,
+            lines.len(),
+            if lines.len() == 1 { "" } else { "s" }
+        );
+        for line in lines {
+            text.push_str(line);
+            text.push_str("\r\n");
         }
         self.emit(&text);
     }
@@ -338,8 +578,20 @@ impl Launcher {
         self.emit(&s);
     }
 
-    /// Tab: completes the command, or the session name after `ssh`/`open`.
+    /// Tab: completes the command, the session name after `ssh`, `open`
+    /// or `delete`, or the folder after `-f`.
     fn complete(&mut self) {
+        let folder = [" -f ", " --folder "];
+        if let Some((head, partial)) =
+            arg_word(&self.line, &["add", "new", "delete", "rm"], &folder)
+        {
+            return self.complete_folder(&head, &partial);
+        }
+        if let Some((head, partial)) =
+            arg_word(&self.line, &["add", "new"], &[" -c ", " --credential "])
+        {
+            return self.complete_credential(&head, &partial);
+        }
         let (head, word) = match self.line.rfind(' ') {
             Some(i) => (self.line[..=i].to_string(), self.line[i + 1..].to_string()),
             None => (String::new(), self.line.clone()),
@@ -347,7 +599,7 @@ impl Launcher {
         // After `ssh` or `open` without options the word is all the rest:
         // session names can have spaces.
         let (head, word) = match self.line.split_once(' ') {
-            Some((cmd @ ("ssh" | "open"), rest))
+            Some((cmd @ ("ssh" | "open" | "delete" | "rm"), rest))
                 if !rest.trim_start().starts_with('-') && !rest.trim().is_empty() =>
             {
                 (format!("{cmd} "), rest.trim_start().to_string())
@@ -362,7 +614,7 @@ impl Launcher {
                 .filter(|c| c.starts_with(&word))
                 .map(|c| c.to_string())
                 .collect()
-        } else if matches!(command, "ssh" | "open") && !word.starts_with('-') {
+        } else if matches!(command, "ssh" | "open" | "delete" | "rm") && !word.starts_with('-') {
             completions(&catalog(), &word)
         } else {
             Vec::new()
@@ -388,6 +640,85 @@ impl Launcher {
                     self.emit(&format!("\r\n{list}"));
                     self.redraw();
                 }
+            }
+        }
+    }
+
+    /// Tab after `-c`: the vault's entries (while it is locked, those the
+    /// sessions use).
+    fn complete_credential(&mut self, head: &str, partial: &str) {
+        let open = vault_names();
+        let locked = open.is_none();
+        let names = open.unwrap_or_else(|| {
+            config_dir()
+                .map(|d| przmterm_session::vault::names_in_use(&d))
+                .unwrap_or_default()
+        });
+        let start = partial.to_lowercase();
+        let options: Vec<String> = names
+            .into_iter()
+            .filter(|n| n.to_lowercase().starts_with(&start))
+            .collect();
+        let note = "\x1b[2m(the vault is locked: unlock it for all of its entries)\x1b[0m\r\n";
+        match options.as_slice() {
+            [] if locked => {
+                self.emit(&format!("\r\n{note}"));
+                self.redraw();
+            }
+            [] => self.emit("\x07"),
+            [one] => {
+                self.line = format!("{head}{} ", quote(one));
+                self.redraw();
+            }
+            many => {
+                let common = common_prefix(many);
+                if common.chars().count() > partial.chars().count() {
+                    self.line = format!("{head}{}", quote(&common));
+                } else {
+                    let cols = usize::from(self.size.cols);
+                    let list = columns(many, cols, "");
+                    self.emit(&format!("\r\n{list}{}", if locked { note } else { "" }));
+                }
+                self.redraw();
+            }
+        }
+    }
+
+    /// Tab after `-f`: the folder, a level at a time. One with folders in it
+    /// ends in `/` for the next Tab; the others end the word.
+    fn complete_folder(&mut self, head: &str, partial: &str) {
+        let options = folder_completions(partial);
+        match options.as_slice() {
+            [] => self.emit("\x07"),
+            [(path, inside)] => {
+                self.line = if *inside {
+                    format!("{head}{}", quote(&format!("{path}/")))
+                } else {
+                    format!("{head}{} ", quote(path))
+                };
+                self.redraw();
+            }
+            many => {
+                let paths: Vec<String> = many.iter().map(|(p, _)| p.clone()).collect();
+                let common = common_prefix(&paths);
+                if common.chars().count() > partial.chars().count() {
+                    self.line = format!("{head}{}", quote(&common));
+                } else {
+                    let names: Vec<String> = many
+                        .iter()
+                        .map(|(path, inside)| {
+                            let name = path.rsplit('/').next().unwrap_or(path);
+                            if *inside {
+                                format!("{name}/")
+                            } else {
+                                name.to_string()
+                            }
+                        })
+                        .collect();
+                    let cols = usize::from(self.size.cols);
+                    self.emit(&format!("\r\n{}", columns(&names, cols, "")));
+                }
+                self.redraw();
             }
         }
     }
@@ -454,11 +785,19 @@ impl Launcher {
                 self.emit("\r\n");
                 let line = std::mem::take(&mut self.line);
                 self.browsing = None;
+                if let Some(entry) = self.confirm_delete.take() {
+                    self.answer_delete(&line, entry);
+                    self.emit(PROMPT);
+                    return;
+                }
                 if !line.trim().is_empty() && self.history.last() != Some(&line) {
                     self.history.push(line.clone());
                 }
                 self.run(&line);
-                self.emit(PROMPT);
+                // A question (delete's) waits for its answer instead.
+                if self.confirm_delete.is_none() {
+                    self.emit(PROMPT);
+                }
             }
             b'\t' => self.complete(),
             0x7f | 0x08 => {
@@ -469,6 +808,11 @@ impl Launcher {
             0x03 => {
                 self.line.clear();
                 self.browsing = None;
+                if self.confirm_delete.take().is_some() {
+                    self.emit("^C Not deleted.\r\n");
+                    self.emit(PROMPT);
+                    return;
+                }
                 self.emit("^C\r\n");
                 self.emit(PROMPT);
             }
@@ -488,6 +832,115 @@ impl Launcher {
             _ => {}
         }
     }
+}
+
+const ADD_USAGE: &str = "usage: add <name> <target> [options]\r\n  \
+     <target>          [user@]host[:port], telnet://host[:port] or serial://port[@baud]\r\n  \
+     -f <folder>       the folder, e.g. Lab/Core (made if it is not there)\r\n  \
+     -l <user>         the user (or user@ in the target)\r\n  \
+     -p <port>         the port (or :port in the target)\r\n  \
+     -c <credential>   an entry of the password vault (Tab lists them)\r\n  \
+     -i <key file>     an SSH private key\r\n  \
+     -J <jump host>    connect through this host\r\n  \
+     -d <text>         a description\r\n  \
+     --replace         write over a session of that name\r\n\
+     Quote what has spaces: add \"Core DB\" admin@10.0.0.5 -f \"Data Center\" -d \"main DB\"\r\n";
+
+/// What `delete` asked about.
+#[derive(Debug, Clone)]
+enum Deletion {
+    Session(Entry),
+    Folder { dir: PathBuf, label: String },
+}
+
+fn plural(n: usize) -> &'static str {
+    if n == 1 { "" } else { "s" }
+}
+
+/// The folder `path` names (letter case aside) in the settings folder: its
+/// directory and its path as written there.
+fn found_folder(path: &str) -> Option<(PathBuf, String)> {
+    przmterm_session::commands::found_folder(&config_dir()?, path)
+}
+
+/// The word being typed after one of `flags` (`" -f "`) in one of
+/// `commands`, quotes and all, as it reads: the line before it and the word.
+fn arg_word(line: &str, commands: &[&str], flags: &[&str]) -> Option<(String, String)> {
+    let command = line.split_whitespace().next()?;
+    if !commands.contains(&command) {
+        return None;
+    }
+    let at = flags
+        .iter()
+        .filter_map(|flag| line.rfind(flag).map(|i| i + flag.len()))
+        .max()?;
+    let rest = &line[at..];
+    let words = match split_args(rest) {
+        // A space after it: the folder is done.
+        Ok(_) if rest.ends_with(char::is_whitespace) => return None,
+        Ok(words) => words,
+        // A quote still open.
+        Err(_) => split_args(&format!("{rest}\""))
+            .or_else(|_| split_args(&format!("{rest}'")))
+            .ok()?,
+    };
+    match words.as_slice() {
+        [] => Some((line.to_string(), String::new())),
+        [word] => Some((line[..at].to_string(), word.clone())),
+        _ => None,
+    }
+}
+
+/// The folders `partial` can complete to (letter case aside), by path,
+/// and whether each has folders in it.
+fn folder_completions(partial: &str) -> Vec<(String, bool)> {
+    let Some(dir) = config_dir() else {
+        return Vec::new();
+    };
+    let (parent, start) = match partial.rsplit_once('/') {
+        Some((parent, start)) => (
+            przmterm_session::commands::existing_folder(&dir, &clean_folder(parent)),
+            start,
+        ),
+        None => (String::new(), partial),
+    };
+    let mut at = dir.join(przmterm_session::SESSIONS_DIR);
+    for part in parent.split('/').filter(|p| !p.is_empty()) {
+        at.push(part);
+    }
+    let start = start.trim_start().to_lowercase();
+    let mut out: Vec<(String, bool)> = subfolders(&at)
+        .into_iter()
+        .filter(|name| name.to_lowercase().starts_with(&start))
+        .map(|name| {
+            let inside = !subfolders(&at.join(&name)).is_empty();
+            let path = if parent.is_empty() {
+                name
+            } else {
+                format!("{parent}/{name}")
+            };
+            (path, inside)
+        })
+        .collect();
+    out.sort_by_key(|(path, _)| path.to_lowercase());
+    out
+}
+
+/// The entries whose label, target or description has `filter` in it
+/// (all of them for none).
+fn filtered<'a>(entries: &'a [Entry], filter: &str) -> Vec<&'a Entry> {
+    let wanted = filter.trim().to_lowercase();
+    entries
+        .iter()
+        .filter(|e| {
+            wanted.is_empty()
+                || e.label.to_lowercase().contains(&wanted)
+                || e.target.to_lowercase().contains(&wanted)
+                || e.description
+                    .as_deref()
+                    .is_some_and(|d| d.to_lowercase().contains(&wanted))
+        })
+        .collect()
 }
 
 /// `text` without the quotes around it, if it has them.
@@ -685,8 +1138,15 @@ mod tests {
             label: label.to_string(),
             protocol: Protocol::Ssh,
             target: "admin@10.0.0.1:22".into(),
+            path: PathBuf::new(),
+            description: None,
+            export: None,
         }
     }
+
+    /// The catalog and settings folder are shared: tests that set them
+    /// take turns.
+    static SHARED: Mutex<()> = Mutex::new(());
 
     fn shell() -> (Launcher, Requests) {
         let requests = Requests::default();
@@ -763,6 +1223,7 @@ mod tests {
 
     #[test]
     fn tab_completes_commands_and_sessions() {
+        let _turn = SHARED.lock().unwrap_or_else(|e| e.into_inner());
         set_catalog(vec![entry("Lab/Core/router-lab"), entry("gw")]);
         let (mut t, requests) = shell();
         t.write(b"ss\t").unwrap();
@@ -794,6 +1255,174 @@ mod tests {
         t.write(b"open nothing\r").unwrap();
         assert!(drain(&mut t).contains("no saved session"));
         assert!(requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn add_checks_the_vault_entry() {
+        let _turn = SHARED.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("przmterm-vault-c-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        set_config_dir(Some(dir.clone()));
+        set_catalog(Vec::new());
+        set_vault_names(None);
+        let (mut t, requests) = shell();
+        let credential = |name: &str| {
+            przmterm_session::SessionTree::load(&dir)
+                .root
+                .all_sessions()
+                .into_iter()
+                .find(|s| s.name == name)
+                .and_then(|s| s.credential.clone())
+        };
+        // No vault at all.
+        t.write(b"add a 10.0.0.1 -c \"Lab Admin\"\r").unwrap();
+        assert!(drain(&mut t).contains("no password vault"));
+        assert!(credential("a").is_none());
+
+        // Open: its entries, completed and checked, letter case aside.
+        std::fs::write(przmterm_session::vault::vault_path(&dir), "").unwrap();
+        set_vault_names(Some(vec!["Lab Admin".into(), "netops".into()]));
+        t.write(b"add a 10.0.0.1 -c la\t").unwrap();
+        assert_eq!(t.line, "add a 10.0.0.1 -c \"Lab Admin\" ");
+        t.write(b"\r").unwrap();
+        assert!(drain(&mut t).contains("Added"));
+        t.write(b"add b 10.0.0.2 -c NETOPS\r").unwrap();
+        assert!(drain(&mut t).contains("Added"));
+        assert_eq!(credential("b").as_deref(), Some("netops"));
+        t.write(b"add c 10.0.0.3 -c nobody\r").unwrap();
+        let said = drain(&mut t);
+        assert!(
+            said.contains("no entry by that name") && said.contains("netops"),
+            "{said}"
+        );
+        assert!(credential("c").is_none());
+
+        // Locked: an entry the sessions use passes; another asks to unlock.
+        set_vault_names(None);
+        requests.lock().unwrap().clear();
+        t.write(b"add c 10.0.0.3 -c \"lab admin\"\r").unwrap();
+        assert!(drain(&mut t).contains("Added"));
+        assert_eq!(credential("c").as_deref(), Some("Lab Admin"));
+        t.write(b"add d 10.0.0.4 -c nobody\r").unwrap();
+        assert!(drain(&mut t).contains("locked"));
+        assert!(requests.lock().unwrap().contains(&Request::UnlockVault));
+        t.write(b"add d 10.0.0.4 -c n\t").unwrap();
+        assert_eq!(t.line, "add d 10.0.0.4 -c netops ");
+        let _ = std::fs::remove_dir_all(&dir);
+        set_config_dir(None);
+    }
+
+    #[test]
+    fn adds_exports_and_deletes_sessions() {
+        let _turn = SHARED.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("przmterm-launcher-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        set_config_dir(Some(dir.clone()));
+        set_catalog(Vec::new());
+        let load = || {
+            let tree = przmterm_session::SessionTree::load(&dir);
+            let entries: Vec<Entry> = tree
+                .root
+                .all_sessions()
+                .into_iter()
+                .map(Entry::of)
+                .collect();
+            set_catalog(entries.clone());
+            entries
+        };
+        let (mut t, requests) = shell();
+        t.write(b"add \"Core DB\" admin@10.0.0.5:2222 -f Lab -d \"main db\"\r")
+            .unwrap();
+        assert!(drain(&mut t).contains("Added"));
+        assert!(matches!(
+            &std::mem::take(&mut *requests.lock().unwrap())[..],
+            [Request::Reload]
+        ));
+        let entries = load();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].label, "Lab/Core DB");
+        assert_eq!(entries[0].description.as_deref(), Some("main db"));
+        // Not twice, unless replaced.
+        t.write(b"add \"Core DB\" 10.0.0.6 -f lab\r").unwrap();
+        assert!(drain(&mut t).contains("exists already"));
+        // Another into `lab`: the folder `Lab` there.
+        t.write(b"add sw1 10.0.0.7 -f lab\r").unwrap();
+        assert!(drain(&mut t).contains("Added"));
+        assert!(load().iter().any(|e| e.label == "Lab/sw1"));
+        t.write(b"rm sw1\ry\r").unwrap();
+        drain(&mut t);
+        // Exported, the line adds the same session again.
+        let line = entries[0].export.clone().unwrap();
+        assert_eq!(
+            line,
+            r#"add "Core DB" admin@10.0.0.5:2222 -f Lab -d "main db""#
+        );
+        let again = AddSpec::parse(&split_args(&line).unwrap()[1..]).unwrap();
+        let tree = przmterm_session::SessionTree::load(&dir);
+        let first =
+            przmterm_session::read_session_settings(&tree.root.all_sessions()[0].path).unwrap();
+        assert_eq!(again.settings, first);
+        t.write(b"export lab\r").unwrap();
+        assert!(drain(&mut t).contains(&line));
+        // Deleted only once said yes.
+        t.write(b"delete Core DB\r").unwrap();
+        assert!(drain(&mut t).contains("[y/N]"));
+        t.write(b"n\r").unwrap();
+        assert!(drain(&mut t).contains("Not deleted"));
+        assert_eq!(load().len(), 1);
+        t.write(b"rm Core DB\ryes\r").unwrap();
+        assert!(drain(&mut t).contains("Deleted"));
+        assert!(load().is_empty());
+        // Folders made by add, deleted with what is in them.
+        t.write(
+            b"add r1 10.0.0.1 -f \"Data Center/Network\"\radd r2 10.0.0.2 -f \"data center\"\r",
+        )
+        .unwrap();
+        drain(&mut t);
+        assert_eq!(load().len(), 2);
+        assert!(dir.join("sessions/Data Center/Network/r1.toml").is_file());
+        assert!(dir.join("sessions/Data Center/r2.toml").is_file());
+        t.write(b"delete r1 -f \"Data Center/Network\"\rn\r")
+            .unwrap();
+        assert!(drain(&mut t).contains("Data Center/Network/r1"));
+        // Tab completes folders a level at a time, letter case aside.
+        std::fs::create_dir_all(dir.join("sessions/Data Center/Nothing here")).unwrap();
+        t.write(b"delete -f da\t").unwrap();
+        assert_eq!(t.line, "delete -f \"Data Center/\"");
+        t.write(b"\t").unwrap();
+        assert_eq!(t.line, "delete -f \"Data Center/N\"");
+        drain(&mut t);
+        t.write(b"\t").unwrap();
+        let listed = drain(&mut t);
+        assert!(
+            listed.contains("Network") && listed.contains("Nothing here"),
+            "{listed}"
+        );
+        // Typed after the closing quote, as a shell reads it.
+        t.write(b"et\t").unwrap();
+        assert_eq!(t.line, "delete -f \"Data Center/Network\" ");
+        t.write(b"\x15add x 10.0.0.3 -f \"data center/no\t")
+            .unwrap();
+        assert_eq!(t.line, "add x 10.0.0.3 -f \"Data Center/Nothing here\" ");
+        t.write(b"\x15delete -f zz\t").unwrap();
+        assert_eq!(t.line, "delete -f zz");
+        t.write(b"\x15").unwrap();
+        drain(&mut t);
+        t.write(b"delete -f \"data center\"\r").unwrap();
+        let asked = drain(&mut t);
+        assert!(asked.contains("2 sessions and 2 folders"), "{asked}");
+        t.write(b"y\r").unwrap();
+        assert!(drain(&mut t).contains("Deleted"));
+        assert!(!dir.join("sessions/Data Center").exists());
+        assert!(load().is_empty());
+        t.write(b"delete -f Nowhere\r").unwrap();
+        assert!(drain(&mut t).contains("no folder"));
+
+        set_config_dir(None);
+        set_catalog(Vec::new());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

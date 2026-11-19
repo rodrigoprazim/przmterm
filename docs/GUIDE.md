@@ -33,9 +33,14 @@ The first tab is PrzmTerm's own small shell, not a system one: `ssh
 router-lab` opens a saved session (Tab completes the name, or `Lab/Core/` for
 a folder), `ssh -p 2222 admin@10.0.0.1` a host that is not saved, `telnet host
 [port]` a Telnet one, and `sessions [text]` lists them. Up and Down go
-through what was typed; `help` lists the commands. Open another with **+**
+through what was typed; `help` lists the commands. It also adds, deletes
+and exports saved sessions; see [Sessions from the PrzmTerm shell](#sessions-from-the-przmterm-shell). Open another with **+**
 at the end of the tabs, a double click on the free part of the tab bar, or
 Ctrl+Shift+N (⌘⇧N on macOS).
+
+A session's or folder's *Description* (in its settings) shows when the
+pointer rests on it in the session list, and the search above the list finds
+it too.
 
 The **+** above the session list holds the app's windows: password vault,
 keyword sets, keyboard shortcuts, script guide, appearance, settings folder,
@@ -89,6 +94,11 @@ folder at the top level, *Expand all*, *Collapse all*, *Reload*, the
 global settings and the settings folder. Deleting a folder can keep what is in
 it: its sessions and subfolders move up a level and keep the folder's
 settings (written into each), so they connect as before.
+
+The *Folder* list in a session's settings shows every folder as a tree, with
+a search (Enter takes the first folder found). *New folder in …* at its
+bottom names a folder inside the one selected; it is made only when the
+session is saved, so Cancel leaves nothing behind.
 
 When a settings file has a problem (a session without a host, a typo in a
 file edited by hand, a setting from a newer version), a warning under the
@@ -582,6 +592,38 @@ the like. The exit code is 0 when all commands ran, 1 when the connection or
 login failed and 2 when a prompt did not come back. `-v` shows the login on
 stderr, `--raw` keeps the escape sequences.
 
+The saved sessions can be managed from a shell too, with the same rules as
+the [PrzmTerm shell's commands](#sessions-from-the-przmterm-shell):
+
+```sh
+przm add "Core DB" admin@10.0.0.5:2222 -f "Data Center" -d "Main database"
+przm add sw-core-01 10.0.0.1 -l netops -f "Data Center/Network" -c netops
+przm delete sw-core-01 -f "Data Center/Network"
+przm delete -f Lab --yes                        # a folder and what is in it
+przm export > hosts.txt                         # on the old computer
+przm import hosts.txt                           # on the new one (or: < hosts.txt)
+przm sessions                                   # the tree, with descriptions
+```
+
+`delete` asks first; in a script add `--yes`. For `-c`, the vault is
+opened (master password from `PRZMTERM_VAULT_PASSWORD`, or asked) only when
+the entry is not used by a session yet. `import` adds every `add` line of
+the list (the ones `export` prints, also pasted into a PrzmTerm shell),
+skipping blank lines and `#` comments; it goes on past a line it cannot
+add, says which, and exits with 1. `--replace` writes over sessions of the
+same names.
+
+Tab completes `przm`'s commands and options, saved sessions (`przm run`,
+`przm delete`, `-J`), folders a level at a time (`-f`) and the vault
+entries the sessions use (`-c`). Turn it on once in the shell's startup
+file:
+
+```sh
+echo 'source <(COMPLETE=zsh przm)' >> ~/.zshrc     # zsh
+echo 'source <(COMPLETE=bash przm)' >> ~/.bashrc   # bash
+echo 'COMPLETE=fish przm | source' >> ~/.config/fish/config.fish
+```
+
 ## AI assistants (MCP)
 
 `przm mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
@@ -641,6 +683,44 @@ sessions arrive in a new folder; nothing of theirs is replaced. Passwords are
 never in these files (they stay in the system keychain), but triggers are
 copied as typed, so check them before sharing if they answer password
 prompts.
+
+### Sessions from the PrzmTerm shell
+
+The PrzmTerm shell (the first tab) saves sessions with one line, handy for
+moving many hosts from another client:
+
+```
+add "Core DB" admin@10.0.0.5:2222 -f "Data Center" -d "Main database, call DBA"
+add sw-core-01 10.0.0.1 -l netops -f "Data Center/Network" -J bastion
+add rtr-lab telnet://10.0.0.9
+add console serial:///dev/ttyUSB0@115200 -f Lab
+```
+
+The target is what Quick connect takes. `-f` is the folder (made if it is
+not there), `-l` the user, `-p` the port, `-c` a vault credential, `-i` an
+SSH key, `-J` a jump host and `-d` a description; quote what has spaces.
+A session that exists is left alone unless `--replace` is added. `add` on
+its own prints this help.
+
+`-c` must name an entry of the password vault (letter case aside), and Tab
+after it lists them. While the vault is locked only the entries other
+sessions use can be checked: for another one PrzmTerm asks to unlock the
+vault, then run the line again.
+
+`export [text]` prints the `add` lines of the saved sessions (or those
+whose name, address or description has the text). Copy them, paste them into
+the PrzmTerm shell of another computer, and the sessions are there: where
+they connect, how they log in, their folder and description; the rest
+takes that PrzmTerm's defaults. Lines starting with `#` are comments.
+
+`delete <session>` (or `rm`) deletes a saved session after asking `[y/N]`;
+Tab completes the name. `delete <name> -f <folder>` deletes the session of
+that name in that folder, and `delete -f <folder>` deletes a folder with the
+sessions and folders in it, saying how many first (`delete <folder>` does
+the same when no session has that name). Letter case does not matter for
+folders, in `add` or `delete`, and Tab after `-f` completes the folder a
+level at a time (`-f da` Tab gives `-f "Data Center/"`, Tab again lists or
+completes what is in it).
 
 ### Several computers
 

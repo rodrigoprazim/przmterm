@@ -1184,6 +1184,7 @@ impl PrzmApp {
                 }
             }
         }
+        launcher::set_config_dir(self.config_dir.clone());
         launcher::set_catalog(
             self.sessions
                 .root
@@ -1278,11 +1279,26 @@ impl PrzmApp {
 
     /// What the PrzmTerm shells asked for, as actions.
     fn launcher_requests(&mut self) -> Vec<Action> {
+        // What `add -c` checks against, and Tab after it lists.
+        launcher::set_vault_names(self.vault.names());
         let mut actions = Vec::new();
+        let mut reload = false;
         for (t, tab) in self.tabs.iter_mut().enumerate() {
             for (p, pane) in tab.panes.iter_mut().enumerate() {
                 for request in pane.take_requests() {
                     let session = match request {
+                        launcher::Request::Reload => {
+                            reload = true;
+                            continue;
+                        }
+                        launcher::Request::UnlockVault => {
+                            if !self.vault.is_unlocked() {
+                                self.vault.ask_unlock(
+                                    "Unlock the vault to check the entry add -c names.".into(),
+                                );
+                            }
+                            continue;
+                        }
                         launcher::Request::Connect(target) => {
                             Session::quick_connect_with(&target, &self.sessions.root.inherited).ok()
                         }
@@ -1302,6 +1318,10 @@ impl PrzmApp {
                     }
                 }
             }
+        }
+        // `add` or `delete` changed the session files.
+        if reload {
+            self.reload_sessions();
         }
         actions
     }
@@ -5228,12 +5248,15 @@ fn browser_menu(ui: &mut egui::Ui, enabled: bool, shell: Option<&str>) -> Option
     picked
 }
 
-/// True if the session's name, host or address contains `filter`
-/// (already lower-case).
+/// True if the session's name, host or address, or its description,
+/// contains `filter` (already lower-case).
 fn session_matches(s: &Session, filter: &str) -> bool {
     filter.is_empty()
         || s.name.to_lowercase().contains(filter)
         || s.display_target().to_lowercase().contains(filter)
+        || s.description
+            .as_deref()
+            .is_some_and(|d| d.to_lowercase().contains(filter))
 }
 
 /// One row of the session list: a grip while dragging is on, a folder icon
@@ -5425,9 +5448,17 @@ fn folder_ui(
             }
         }
         r.on_hover_text(if drag {
-            "Drag onto another folder to move it, or drop sessions and folders here"
+            "Drag onto another folder to move it, or drop sessions and folders here".to_string()
         } else {
-            "Right-click to add sessions, rename or set folder defaults"
+            let about = f
+                .own
+                .description
+                .as_deref()
+                .map(str::trim)
+                .filter(|d| !d.is_empty())
+                .map(|d| format!("{d}\n\n"))
+                .unwrap_or_default();
+            format!("{about}Right-click to add sessions, rename or set folder defaults")
         })
         .context_menu(|ui| {
             crate::theme::compact_menu(ui);
@@ -5495,9 +5526,13 @@ fn folder_ui(
             "Drag onto a folder to move it".to_string()
         } else {
             format!(
-                "[{}] {}{}\nDouble-click to connect, right-click for more",
+                "[{}] {}{}{}\nDouble-click to connect, right-click for more",
                 s.protocol,
                 s.display_target(),
+                s.description
+                    .as_deref()
+                    .map(|d| format!("\n\n{d}\n"))
+                    .unwrap_or_default(),
                 if is_open { "\nOpen in a tab" } else { "" }
             )
         });
