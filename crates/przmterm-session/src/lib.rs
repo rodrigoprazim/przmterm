@@ -338,6 +338,10 @@ pub struct SessionSettings {
     /// `#rrggbb`. Not passed down to what is inside.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    /// Free text about the session (or folder): what it is, who to call…
+    /// Shown in the session list. Not passed down to what is inside.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Keyword set used to highlight the output (`<config>/keywords/<name>.toml`);
     /// `""` turns an inherited one off.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -604,6 +608,7 @@ impl SessionSettings {
             legacy_algorithms: pick(&self.legacy_algorithms, &over.legacy_algorithms),
             // A folder's own: what is inside does not take it.
             color: over.color.clone(),
+            description: over.description.clone(),
             x11_forwarding: pick(&self.x11_forwarding, &over.x11_forwarding),
             keywords: pick(&self.keywords, &over.keywords),
             logon_script: pick(&self.logon_script, &over.logon_script),
@@ -701,6 +706,8 @@ pub enum Target {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Session {
     pub name: String,
+    /// See [`SessionSettings::description`].
+    pub description: Option<String>,
     /// Folder names from the root to the session's folder.
     pub folder: Vec<String>,
     pub path: PathBuf,
@@ -817,6 +824,12 @@ impl Session {
         };
         Ok(Session {
             name: name.into(),
+            description: settings
+                .description
+                .as_deref()
+                .map(str::trim)
+                .filter(|d| !d.is_empty())
+                .map(str::to_string),
             folder,
             protocol,
             target,
@@ -1453,8 +1466,9 @@ pub fn dissolve_folder(dir: &Path) -> Result<usize, SessionError> {
         .parent()
         .ok_or_else(|| invalid(dir, "not a folder".into()))?;
     let mut own = read_session_settings(&dir.join(FOLDER_FILE))?;
-    // The folder's colour goes with it.
+    // The folder's colour and description go with it.
     own.color = None;
+    own.description = None;
     let mut items = Vec::new();
     for entry in fs::read_dir(dir).map_err(io(dir))?.flatten() {
         let name = entry.file_name();

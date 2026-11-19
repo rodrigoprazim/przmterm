@@ -7,6 +7,16 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- PrzmTerm shell: `add <name> <target> [-f folder] [-l user] [-p port] [-c
+  credential] [-i key] [-J jump] [-d description] [--replace]` saves a
+  session; `delete <session>` (or `rm`) deletes one after asking; `export
+  [text]` prints the `add` lines of the saved sessions, to paste into
+  another PrzmTerm and move them there.
+- Sessions and folders have a *Description*, shown in the session list
+  (also found by its search) and by `sessions`; imported from SecureCRT.
+
 ## [1.0.0-rc.7] - 2026-11-18
 
 ### Added

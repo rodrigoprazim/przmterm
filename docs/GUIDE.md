@@ -33,9 +33,14 @@ The first tab is PrzmTerm's own small shell, not a system one: `ssh
 router-lab` opens a saved session (Tab completes the name, or `Lab/Core/` for
 a folder), `ssh -p 2222 admin@10.0.0.1` a host that is not saved, `telnet host
 [port]` a Telnet one, and `sessions [text]` lists them. Up and Down go
-through what was typed; `help` lists the commands. Open another with **+**
+through what was typed; `help` lists the commands. It also adds, deletes
+and exports saved sessions; see [Sessions from the PrzmTerm shell](#sessions-from-the-przmterm-shell). Open another with **+**
 at the end of the tabs, a double click on the free part of the tab bar, or
 Ctrl+Shift+N (⌘⇧N on macOS).
+
+A session's or folder's *Description* (in its settings) shows when the
+pointer rests on it in the session list, and the search above the list finds
+it too.
 
 The **+** above the session list holds the app's windows: password vault,
 keyword sets, keyboard shortcuts, script guide, appearance, settings folder,
@@ -641,6 +646,33 @@ sessions arrive in a new folder; nothing of theirs is replaced. Passwords are
 never in these files (they stay in the system keychain), but triggers are
 copied as typed, so check them before sharing if they answer password
 prompts.
+
+### Sessions from the PrzmTerm shell
+
+The PrzmTerm shell (the first tab) saves sessions with one line, handy for
+moving many hosts from another client:
+
+```
+add "Core DB" admin@10.0.0.5:2222 -f "Data Center" -d "Main database, call DBA"
+add sw-core-01 10.0.0.1 -l netops -f "Data Center/Network" -J bastion
+add rtr-lab telnet://10.0.0.9
+add console serial:///dev/ttyUSB0@115200 -f Lab
+```
+
+The target is what Quick connect takes. `-f` is the folder (made if it is
+not there), `-l` the user, `-p` the port, `-c` a vault credential, `-i` an
+SSH key, `-J` a jump host and `-d` a description; quote what has spaces.
+A session that exists is left alone unless `--replace` is added. `add` on
+its own prints this help.
+
+`export [text]` prints the `add` lines of the saved sessions (or those
+whose name, address or description has the text). Copy them, paste them into
+the PrzmTerm shell of another computer, and the sessions are there: where
+they connect, how they log in, their folder and description; the rest
+takes that PrzmTerm's defaults. Lines starting with `#` are comments.
+
+`delete <session>` (or `rm`) deletes a saved session after asking `[y/N]`;
+Tab completes the name.
 
 ### Several computers
 

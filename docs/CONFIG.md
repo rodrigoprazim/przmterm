@@ -161,6 +161,7 @@ send = ' '
 | `legacy_algorithms` | `true` or `false` | `false` | SSH: also offer old algorithms (SHA-1 key exchange, CBC, HMAC-SHA1, DSA) for old equipment. |
 | `x11_forwarding` | `true` or `false` | `false` | SSH: show remote graphical programs on this screen (`ssh -X`). |
 | `color` | `#rrggbb` | none | `folder.toml` only: the folder's colour in the session list (its icon and name). Not passed down to what is inside. |
+| `description` | text | none | What the session or folder is (several lines are fine); shown in the session list. Not passed down to what is inside. |
 | `debug` | `true` or `false` | `false` | SSH: show each step of the connection and login (like `ssh -v`). |
 
 ### Serial port

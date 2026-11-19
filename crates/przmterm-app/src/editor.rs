@@ -127,6 +127,11 @@ pub struct Editor {
     baud_rate: String,
     /// A folder's colour in the session list (`#rrggbb`).
     color: Option<String>,
+    /// About the session or folder, shown in the session list.
+    description: String,
+    /// The description is being typed in: Enter is a new line there, not
+    /// Save.
+    in_description: bool,
     data_bits: Option<u8>,
     parity: Option<Parity>,
     stop_bits: Option<u8>,
@@ -488,6 +493,8 @@ impl Editor {
             credential: s.credential.clone(),
             vault_names: None,
             color: s.color.clone(),
+            description: text(&s.description),
+            in_description: false,
             known_vault_names: None,
             vault_request: false,
             unlock_request: false,
@@ -675,6 +682,7 @@ impl Editor {
                 },
             },
             color: self.color.clone(),
+            description: Some(self.description.trim().to_string()).filter(|d| !d.is_empty()),
             ..SessionSettings::default()
         })
     }
@@ -953,7 +961,9 @@ impl Editor {
                 }
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if crate::theme::primary_button(ui, "Save").clicked() || (enter && !popup) {
+                        if crate::theme::primary_button(ui, "Save").clicked()
+                            || (enter && !popup && !self.in_description)
+                        {
                             match self
                                 .check_session(&inherited)
                                 .and_then(|()| self.save_or_confirm(config_dir))
@@ -1039,6 +1049,20 @@ impl Editor {
                 if let Target::Session { trail, .. } = &mut self.target {
                     ui.label("Folder");
                     folder_picker(ui, root, trail);
+                    ui.end_row();
+                }
+                if self.target != Target::Global {
+                    ui.label("Description").on_hover_text(
+                        "What it is, who to call, anything worth knowing: shown when \
+                         the pointer rests on it in the session list",
+                    );
+                    let field = ui.add(
+                        egui::TextEdit::multiline(&mut self.description)
+                            .hint_text("optional")
+                            .desired_rows(2)
+                            .desired_width(280.0),
+                    );
+                    self.in_description = field.has_focus();
                     ui.end_row();
                 }
                 if matches!(self.target, Target::Folder { .. }) {
