@@ -25,13 +25,16 @@ pub struct Preferences {
     pub mouse: MouseOptions,
 }
 
-/// What the mouse does in the terminal (`[mouse]`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// What the mouse does in the terminal (`[mouse]`). Everything is off
+/// unless chosen.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MouseOptions {
     /// Copy what is selected at once.
     pub copy_on_select: bool,
-    /// The button that pastes.
+    /// A mouse button pastes: `paste_button`.
+    pub paste: bool,
+    /// The button that pastes, when `paste` is on.
     pub paste_button: PasteButton,
     /// Hide the pointer while typing, until it moves.
     pub hide_pointer: bool,
@@ -41,26 +44,13 @@ pub struct MouseOptions {
     pub triple_click_newline: bool,
 }
 
-impl Default for MouseOptions {
-    fn default() -> Self {
-        Self {
-            copy_on_select: false,
-            paste_button: PasteButton::Middle,
-            hide_pointer: false,
-            open_urls: true,
-            triple_click_newline: false,
-        }
-    }
-}
-
-/// The mouse button that pastes, if any.
+/// The mouse button that pastes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PasteButton {
-    Off,
     #[default]
     Middle,
-    /// The right button: the menu then opens with Ctrl (⌘) + right-click.
+    /// The right button: the terminal then has no right-click menu.
     Right,
 }
 
@@ -132,6 +122,7 @@ mod tests {
             skipped_version: Some("1.0.0-rc.2".into()),
             mouse: MouseOptions {
                 copy_on_select: true,
+                paste: true,
                 paste_button: PasteButton::Right,
                 ..MouseOptions::default()
             },

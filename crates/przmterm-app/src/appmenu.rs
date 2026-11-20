@@ -17,7 +17,7 @@ pub const DEVELOPER: &str = "Rodrigo Prazim";
 pub enum AppCommand {
     About,
     CheckUpdates,
-    Settings,
+    /// The app's own settings (look, mouse).
     Appearance,
     Shortcuts,
     Vault,
@@ -30,10 +30,9 @@ pub enum AppCommand {
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 impl AppCommand {
-    const ALL: [AppCommand; 10] = [
+    const ALL: [AppCommand; 9] = [
         Self::About,
         Self::CheckUpdates,
-        Self::Settings,
         Self::Appearance,
         Self::Shortcuts,
         Self::Vault,
@@ -47,7 +46,6 @@ impl AppCommand {
         match self {
             Self::About => "about",
             Self::CheckUpdates => "check-updates",
-            Self::Settings => "settings",
             Self::Appearance => "appearance",
             Self::Shortcuts => "shortcuts",
             Self::Vault => "vault",
@@ -113,8 +111,7 @@ pub fn install(ctx: &egui::Context) -> Option<MenuBar> {
             &item(AppCommand::About, "About PrzmTerm", None),
             &item(AppCommand::CheckUpdates, "Check for Updates…", None),
             &PredefinedMenuItem::separator(),
-            &item(AppCommand::Settings, "Settings…", Some(Code::Comma)),
-            &item(AppCommand::Appearance, "Preferences…", None),
+            &item(AppCommand::Appearance, "Settings…", Some(Code::Comma)),
             &item(AppCommand::Shortcuts, "Keyboard Shortcuts…", None),
             &item(AppCommand::Vault, "Password Vault…", None),
             &item(AppCommand::SettingsFolder, "Settings Folder…", None),

@@ -12,18 +12,23 @@ All notable changes to PrzmTerm are recorded here. The format follows
 - *Backspace sends* in the session settings (*Terminal*): `^?` (DEL, the
   default) or `^H` (BS), for Huawei VRP, Nokia and other equipment that
   erase the character under the cursor on DEL.
-- *Mouse* options in *Preferences…* (for the whole app): copy on select,
-  paste on the middle or right button (or neither), hide the pointer while
-  typing, open web addresses with Ctrl+click (⌘+click), and triple-click
-  with the line break.
+- *Mouse* options in *Settings…* (for the whole app, all off until chosen):
+  copy on select, paste on the middle or right button (the right one then
+  replaces the terminal's menu), hide the pointer while typing, open web
+  addresses with Ctrl+click (⌘+click), and triple-click with the line break.
 
 ### Changed
 
-- *Appearance…* is now *Preferences…*: the interface's look and the mouse.
-- Keyword sets are chosen and managed in the session settings (*Terminal* ›
-  *Keywords*: *New set…*, *Edit …*); the *Keyword sets…* menu entry is gone.
-  The keyword window picks the set to edit from a list, says which sessions
-  use it, and has a clearer layout.
+- *Appearance…* is now *Settings…* (PrzmTerm's own: the look and the mouse,
+  ⌘, on macOS). The macOS menu no longer has the sessions' global settings
+  as a second *Settings…* (they stay on the gear), and its items have no
+  icons (macOS 26 put icons on only some of them).
+- Keyword sets have their own *Keywords* page in the session, folder and
+  global settings: the set the session uses at the top (a set that is gone
+  shows as *not found*), the sets' editor below (no separate window, no
+  *Keyword sets…* menu entry). *Editing* picks the set to edit and says
+  which sessions use it; deleting asks in a popup; the rules take the
+  whole width; changes are saved with the settings.
 - Open sessions that use an imported keyword set highlight with it at once.
 
 ### Fixed

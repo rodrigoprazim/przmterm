@@ -63,6 +63,16 @@ fn wgpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
     }
 }
 
+/// macOS 26 puts icons on some menu items by itself (Settings, Hide, Quit…)
+/// and not on the others: none at all, so every item looks the same. Read
+/// by AppKit when it starts, so before the window is made.
+#[cfg(target_os = "macos")]
+fn plain_menus() {
+    use objc2_foundation::{NSString, NSUserDefaults};
+    NSUserDefaults::standardUserDefaults()
+        .setBool_forKey(false, &NSString::from_str("NSMenuEnableActionImages"));
+}
+
 fn main() -> eframe::Result {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -87,6 +97,8 @@ fn main() -> eframe::Result {
         wgpu_options: wgpu_options(),
         ..Default::default()
     };
+    #[cfg(target_os = "macos")]
+    plain_menus();
     eframe::run_native(
         "PrzmTerm",
         options,
@@ -831,8 +843,6 @@ struct PrzmApp {
     import_result: Option<Vec<String>>,
     /// What a SecureCRT import found, to choose from.
     import_wizard: Option<importwizard::ImportWizard>,
-    /// The keyword set editor, when open.
-    keyword_editor: Option<keywords::KeywordEditor>,
     /// The password vault and its windows.
     vault: vault::VaultUi,
     /// What to do once the vault is unlocked (opening a session that uses it).
@@ -1019,7 +1029,6 @@ impl PrzmApp {
             status: None,
             import_result: None,
             import_wizard: None,
-            keyword_editor: None,
             vault: vault::VaultUi::new(),
             after_unlock: None,
             master_for: None,
@@ -1127,6 +1136,29 @@ impl PrzmApp {
     /// Reads the sessions again; open sessions take what changed in their
     /// settings. Returns the open sessions with a changed connection
     /// setting, which they take when they reconnect.
+    /// After keyword sets were saved, renamed or deleted: renamed or deleted
+    /// ones changed session files, read again (open sessions follow); saved
+    /// ones are read again by the open sessions that use them.
+    fn keyword_sets_changed(&mut self, changes: &[keywords::KeywordChange]) {
+        if changes.is_empty() {
+            return;
+        }
+        if changes
+            .iter()
+            .any(|c| !matches!(c, keywords::KeywordChange::Saved(_)))
+        {
+            self.reload_sessions();
+        }
+        let saved: Vec<String> = changes
+            .iter()
+            .filter_map(|c| match c {
+                keywords::KeywordChange::Saved(name) => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
+        self.reload_keyword_sets(&saved);
+    }
+
     /// Open sessions using one of the keyword sets `names` read it again.
     fn reload_keyword_sets(&mut self, names: &[String]) {
         if names.is_empty() {
@@ -2860,7 +2892,6 @@ impl PrzmApp {
             || self.confirm_delete.is_some()
             || self.import_result.is_some()
             || self.import_wizard.is_some()
-            || self.keyword_editor.is_some()
             || self.buttons.modal()
             || self.confirm_broadcast
             || self.confirm_quit
@@ -2896,11 +2927,6 @@ impl PrzmApp {
             AppCommand::Appearance => {
                 self.appearance_window = true;
             }
-            AppCommand::Settings => {
-                if let Some(dir) = &self.config_dir {
-                    self.editor = Some(Editor::global(dir));
-                }
-            }
             AppCommand::Shortcuts => {
                 self.keymap_editor = Some(keymap::KeymapEditor::new(&self.shortcuts));
             }
@@ -2925,16 +2951,16 @@ impl PrzmApp {
         }
     }
 
-    /// The Preferences window: the interface's look and the mouse.
+    /// The Settings window: the interface's look and the mouse.
     fn appearance_ui(&mut self, ctx: &egui::Context) {
-        use przmterm_session::preferences::{Look, MouseOptions, PasteButton};
+        use przmterm_session::preferences::{Look, PasteButton};
         if !self.appearance_window {
             return;
         }
         let mut open = true;
         let mut look = self.prefs.look;
         let mut mouse = self.prefs.mouse;
-        egui::Window::new(crate::theme::window_title(ctx, "Preferences"))
+        egui::Window::new(crate::theme::window_title(ctx, "Settings"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -2962,24 +2988,26 @@ impl PrzmApp {
                 theme::section_title(ui, "Mouse");
                 theme::checkbox(ui, &mut mouse.copy_on_select, "Copy on select");
                 ui.horizontal(|ui| {
-                    ui.label("Paste on");
-                    let options = [
-                        (PasteButton::Middle, "middle button"),
-                        (PasteButton::Right, "right button"),
-                        (PasteButton::Off, "off"),
-                    ];
-                    let labels = options.map(|o| o.1);
-                    let chosen = options.iter().position(|o| o.0 == mouse.paste_button);
-                    if let Some(i) = theme::segmented(ui, chosen, &labels) {
-                        mouse.paste_button = options[i].0;
-                    }
-                });
-                if mouse.paste_button == PasteButton::Right {
-                    ui.weak(if cfg!(target_os = "macos") {
-                        "The menu then opens with ⌘+right-click."
-                    } else {
-                        "The menu then opens with Ctrl+right-click."
+                    theme::checkbox(ui, &mut mouse.paste, "Paste on");
+                    ui.add_enabled_ui(mouse.paste, |ui| {
+                        theme::sunken_combos(ui);
+                        let name = |b: PasteButton| match b {
+                            PasteButton::Middle => "middle",
+                            PasteButton::Right => "right",
+                        };
+                        egui::ComboBox::from_id_salt("paste-button")
+                            .width(90.0)
+                            .selected_text(name(mouse.paste_button))
+                            .show_ui(ui, |ui| {
+                                for b in [PasteButton::Middle, PasteButton::Right] {
+                                    ui.selectable_value(&mut mouse.paste_button, b, name(b));
+                                }
+                            });
                     });
+                    ui.label("button");
+                });
+                if mouse.paste && mouse.paste_button == PasteButton::Right {
+                    ui.weak("The terminal then has no right-click menu.");
                 }
                 theme::checkbox(
                     ui,
@@ -3000,11 +3028,6 @@ impl PrzmApp {
                     &mut mouse.triple_click_newline,
                     "Triple-click selects the line break too",
                 );
-                if mouse != MouseOptions::default()
-                    && ui.small_button("Back to the defaults").clicked()
-                {
-                    mouse = MouseOptions::default();
-                }
             });
         if look != self.prefs.look || mouse != self.prefs.mouse {
             self.prefs.mouse = mouse;
@@ -3472,7 +3495,6 @@ impl PrzmApp {
         self.shortcuts = keymap::Shortcuts::load(Some(dir));
         self.vault.lock();
         self.editor = None;
-        self.keyword_editor = None;
         self.prefs = przmterm_session::preferences::Preferences::load(dir);
         Ok(if copied > 0 {
             format!("Settings folder changed; {copied} file(s) copied.")
@@ -4745,31 +4767,13 @@ impl PrzmApp {
             }
         }
         self.highlights_ui(ctx);
-        if let Some(editor) = &mut self.keyword_editor
-            && let keywords::KeywordResult::Closed(changes) = editor.show(ctx)
-        {
-            self.keyword_editor = None;
-            if let Some(editor) = &mut self.editor {
-                editor.keywords_changed(&changes);
-            }
-            // Renamed or deleted sets changed session files: read them again
-            // (open sessions follow). Saved ones are read again by the open
-            // sessions that use them.
-            if changes
-                .iter()
-                .any(|c| !matches!(c, keywords::KeywordChange::Saved(_)))
-            {
-                self.reload_sessions();
-            }
-            let saved: Vec<String> = changes
-                .iter()
-                .filter_map(|c| match c {
-                    keywords::KeywordChange::Saved(name) => Some(name.clone()),
-                    _ => None,
-                })
-                .collect();
-            self.reload_keyword_sets(&saved);
-        }
+        // Keyword sets changed in the session settings.
+        let changes = self
+            .editor
+            .as_mut()
+            .map(|e| e.take_keyword_changes())
+            .unwrap_or_default();
+        self.keyword_sets_changed(&changes);
         if let Some(editor) = &mut self.editor {
             editor.vault_names = self.vault.names();
             if editor.font_families.is_none() {
@@ -4792,16 +4796,6 @@ impl PrzmApp {
             if editor.take_vault_request() {
                 self.vault.open_window();
             }
-        }
-        if let Some(editor) = &mut self.editor
-            && let Some(select) = editor.take_keyword_request()
-            && let Some(dir) = &self.config_dir
-        {
-            self.keyword_editor = Some(keywords::KeywordEditor::new(
-                dir,
-                select.select.as_deref(),
-                select.new,
-            ));
         }
         if let Some(wizard) = &mut self.import_wizard {
             match wizard.show(ctx) {
@@ -4843,7 +4837,11 @@ impl PrzmApp {
             }
         }
         if let (Some(editor), Some(dir)) = (&mut self.editor, self.config_dir.clone()) {
-            match editor.show(ctx, &dir, &self.sessions.root) {
+            let result = editor.show(ctx, &dir, &self.sessions.root);
+            // Sets saved with the settings, before the form goes.
+            let changes = editor.take_keyword_changes();
+            self.keyword_sets_changed(&changes);
+            match result {
                 EditorResult::Open => {}
                 EditorResult::Cancel => self.editor = None,
                 EditorResult::Saved(name) => {
@@ -6232,8 +6230,8 @@ impl eframe::App for PrzmApp {
                             }
                             ui.separator();
                             if ui
-                                .button("Preferences…")
-                                .on_hover_text("The app's own: its look and the mouse")
+                                .button("Settings…")
+                                .on_hover_text("PrzmTerm's own: its look and the mouse")
                                 .clicked()
                             {
                                 menu_command = Some(appmenu::AppCommand::Appearance);

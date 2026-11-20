@@ -53,6 +53,8 @@ bytemuck = { version = "1.25", features = ["derive"] }
 # The menu bar on macOS: the app menu with About, Settings and the like.
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = { version = "0.21", default-features = false }
+# Turns off the icons macOS 26 adds to some menu items only (see main.rs).
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSUserDefaults"] }
 
 # Unpacking an update: the Linux .tar.gz and the Windows .zip.
 [target.'cfg(target_os = "linux")'.dependencies]

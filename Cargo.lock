@@ -4285,6 +4285,7 @@ dependencies = [
  "flate2",
  "fontdb",
  "muda",
+ "objc2-foundation 0.3.2",
  "przmterm-connect",
  "przmterm-core",
  "przmterm-script",

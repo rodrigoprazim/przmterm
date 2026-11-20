@@ -856,14 +856,11 @@ impl TerminalView {
             {
                 ui.ctx().copy_text(text);
             }
-            let paste = match self.mouse.paste_button {
-                PasteButton::Middle => response.clicked_by(PointerButton::Middle),
-                // The menu then needs Ctrl (⌘).
-                PasteButton::Right => {
-                    response.secondary_clicked() && !ui.input(|i| i.modifiers.command)
-                }
-                PasteButton::Off => false,
-            };
+            let paste = self.mouse.paste
+                && match self.mouse.paste_button {
+                    PasteButton::Middle => response.clicked_by(PointerButton::Middle),
+                    PasteButton::Right => response.secondary_clicked(),
+                };
             if paste && let Some(text) = read_clipboard() {
                 let bracketed = term.screen().bracketed_paste();
                 self.paste(text, bracketed, input);
@@ -1067,11 +1064,8 @@ impl TerminalView {
             .as_deref()
             .map(str::trim)
             .filter(|t| !t.is_empty() && !t.contains('\n') && t.chars().count() <= 200);
-        // With paste on the right button, the menu takes Ctrl (⌘) too.
-        if self.mouse.paste_button == PasteButton::Right
-            && response.secondary_clicked()
-            && !response.ctx.input(|i| i.modifiers.command)
-        {
+        // The right button pastes: no menu.
+        if self.mouse.paste && self.mouse.paste_button == PasteButton::Right {
             return choice;
         }
         response.context_menu(|ui| {
