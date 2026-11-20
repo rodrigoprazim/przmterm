@@ -188,11 +188,13 @@ pub struct TerminalSettings {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Backspace {
-    /// DEL, `^?` (0x7F): what Linux and most systems expect.
-    #[default]
+    /// DEL, `^?` (0x7F): what Linux terminals send; programs reading a
+    /// line without editing it (`cat`, `read`) erase only with this one.
     Delete,
-    /// BS, `^H` (0x08): Huawei VRP, Nokia and other equipment that read
-    /// DEL as "delete the character under the cursor".
+    /// BS, `^H` (0x08), as SecureCRT sends: shells and network equipment
+    /// (Huawei VRP and Nokia read DEL as "delete the character under the
+    /// cursor") erase with it.
+    #[default]
     Backspace,
 }
 
@@ -712,7 +714,7 @@ impl SessionSettings {
             "terminal.cursor_blink" => s.terminal.cursor_blink = Some(false),
             "terminal.background" => s.terminal.background = Some(color_text(DEFAULT_BACKGROUND)),
             "terminal.foreground" => s.terminal.foreground = Some(color_text(DEFAULT_FOREGROUND)),
-            "terminal.backspace" => s.terminal.backspace = Some(Backspace::Delete),
+            "terminal.backspace" => s.terminal.backspace = Some(Backspace::Backspace),
             "log.enabled" => s.log.enabled = Some(false),
             "debug" => s.debug = Some(false),
             "keepalive" => s.keepalive = Some(DEFAULT_KEEPALIVE),

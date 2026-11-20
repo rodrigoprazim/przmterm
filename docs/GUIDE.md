@@ -288,10 +288,11 @@ options, for the whole app, all off until chosen:
   hand over an address while Ctrl (⌘) is held.
 - *Triple-click selects the line break too*.
 
-*Backspace sends*, on the *Terminal* page of the session settings, picks `^?` (DEL, what Linux expects) or
-`^H` (BS). Huawei VRP, Nokia and other equipment want `^H`: with `^?` they
-delete the character under the cursor, so Backspace seems to work
-backwards. Set it on their sessions or on a folder of them.
+*Backspace sends*, on the *Terminal* page of the session settings, is `^H`
+(BS), as in SecureCRT: shells erase with it, and Huawei VRP and Nokia
+equipment need it (they read `^?` as "delete the character under the
+cursor"). `^?` (DEL, what Linux terminals send) is for the rare program that
+erases only with it, such as `cat` or a script's `read`, which show `^H`.
 
 *Font, Colors and Cursor…* in a tab's menu picks the font (the built-in one or
 any installed monospace font), its size, the terminal's background and text

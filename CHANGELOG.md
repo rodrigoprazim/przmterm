@@ -9,9 +9,10 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Added
 
-- *Backspace sends* in the session settings (*Terminal*): `^?` (DEL, the
-  default) or `^H` (BS), for Huawei VRP, Nokia and other equipment that
-  erase the character under the cursor on DEL.
+- *Backspace sends* in the session settings (*Terminal*): `^H` (BS, now
+  the default, as in SecureCRT) or `^?` (DEL, what PrzmTerm sent before).
+  Huawei VRP and Nokia read DEL as "delete the character under the
+  cursor", so Backspace seemed to work backwards there.
 - *Mouse* options in *Settings…* (for the whole app, all off until chosen):
   copy on select, paste on the middle or right button (the right one then
   replaces the terminal's menu), hide the pointer while typing, open web

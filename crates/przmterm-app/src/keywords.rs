@@ -490,10 +490,25 @@ impl KeywordEditor {
             .inner_margin(egui::Margin::same(6))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
+                // A scroll bar that shows, beside the rows (not over them).
+                ui.style_mut().spacing.scroll = egui::style::ScrollStyle {
+                    // The handle in the text's colour: the usual one is the
+                    // box's own and would not show.
+                    foreground_color: true,
+                    ..egui::style::ScrollStyle::solid()
+                };
                 rule_header(ui);
+                ui.separator();
+                // As tall as the rules, up to about eight of them.
+                let row = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
+                let height = (row * count.max(1) as f32).min(row * 8.0);
                 egui::ScrollArea::vertical()
                     .id_salt("keyword-rules")
-                    .max_height(240.0)
+                    .min_scrolled_height(height)
+                    .max_height(height)
+                    .scroll_bar_visibility(
+                        egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded,
+                    )
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
                         let filter = self.filter.trim().to_lowercase();
@@ -605,6 +620,7 @@ fn plain(font: &egui::FontId) -> egui::TextFormat {
 const MOVE_W: f32 = 48.0;
 const KIND_W: f32 = 76.0;
 const COLOR_W: f32 = 60.0;
+const BACK_W: f32 = 84.0;
 const BOLD_W: f32 = 52.0;
 const REMOVE_W: f32 = 24.0;
 
@@ -619,7 +635,7 @@ fn upper_first(text: &str) -> String {
 /// The width left for a rule's text in `ui`.
 fn text_width(ui: &egui::Ui) -> f32 {
     let gaps = ui.spacing().item_spacing.x * 6.0;
-    (ui.available_width() - MOVE_W - KIND_W - 2.0 * COLOR_W - BOLD_W - REMOVE_W - gaps).max(80.0)
+    (ui.available_width() - MOVE_W - KIND_W - COLOR_W - BACK_W - BOLD_W - REMOVE_W - gaps).max(80.0)
 }
 
 /// A cell `width` wide in a row.
@@ -638,13 +654,14 @@ fn cell<R>(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui::Ui) -> R) 
 
 /// The column titles, lined up with [`rule_row`].
 fn rule_header(ui: &mut egui::Ui) {
-    let text = text_width(ui);
+    // The rows below leave room for their scroll bar.
+    let text = text_width(ui) - ui.spacing().scroll.allocated_width();
     ui.horizontal(|ui| {
         cell(ui, MOVE_W, |_| ());
         cell(ui, KIND_W, |ui| ui.weak("Type"));
         cell(ui, text, |ui| ui.weak("Word or expression"));
         cell(ui, COLOR_W, |ui| ui.weak("Colour"));
-        cell(ui, COLOR_W, |ui| ui.weak("Back"));
+        cell(ui, BACK_W, |ui| ui.weak("Background"));
         cell(ui, BOLD_W, |_| ());
         cell(ui, REMOVE_W, |_| ());
     });
@@ -721,7 +738,7 @@ fn rule_row(
         cell(ui, COLOR_W, |ui| {
             color_pick(ui, &mut rule.color, [255, 255, 0], "Text colour")
         });
-        cell(ui, COLOR_W, |ui| {
+        cell(ui, BACK_W, |ui| {
             color_pick(ui, &mut rule.background, [60, 60, 60], "Background")
         });
         cell(ui, BOLD_W, |ui| {

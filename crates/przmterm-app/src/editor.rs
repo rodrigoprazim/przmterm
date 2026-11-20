@@ -337,7 +337,7 @@ impl Context<'_> {
             "terminal.cursor_color" => "default".into(),
             "terminal.background" => "default".into(),
             "terminal.foreground" => "default".into(),
-            "terminal.backspace" => "Delete (^?)".into(),
+            "terminal.backspace" => "Backspace (^H)".into(),
             "log.enabled" => "no".into(),
             "log.path" => przmterm_session::DEFAULT_LOG_TEMPLATE.into(),
             "log.dir" => self.logs_dir.clone(),
@@ -1841,17 +1841,20 @@ impl Editor {
             &cx.hint("terminal.scrollback"),
         );
         ui.label("Backspace sends").on_hover_text(
-            "Huawei VRP, Nokia and other equipment want ^H: with ^? they \
-             delete the character under the cursor instead",
+            "^H, as SecureCRT sends, erases in shells and on Huawei and Nokia \
+             equipment. ^? (what Linux terminals send) is for the rare program \
+             that erases only with it",
         );
-        let inherited = cx.inherited.terminal.backspace.unwrap_or_default();
-        choice_pick(
-            ui,
-            &mut self.backspace,
-            inherited,
-            &Backspace::ALL.map(|b| (b, b.label())),
-            &cx.hint("terminal.backspace"),
-        );
+        // Two choices, both shown: no way back to "inherited" needed.
+        let effective = self
+            .backspace
+            .unwrap_or(cx.inherited.terminal.backspace.unwrap_or_default());
+        let options = [Backspace::Backspace, Backspace::Delete];
+        let labels = options.map(|b| b.label());
+        let chosen = options.iter().position(|b| *b == effective);
+        if let Some(i) = crate::theme::segmented(ui, chosen, &labels) {
+            self.backspace = Some(options[i]);
+        }
         ui.end_row();
     }
 
