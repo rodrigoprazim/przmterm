@@ -21,29 +21,43 @@ enum Pending {
     New,
 }
 
+/// What happened to the sets while the window was open.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeywordChange {
+    /// Saved (made, or its rules changed).
+    Saved(String),
+    /// Renamed: the files that chose it were pointed at the new name.
+    Renamed(String, String),
+    /// Deleted: the files that chose it no longer name it.
+    Deleted(String),
+}
+
 pub enum KeywordResult {
     Open,
-    /// Closed; the named sets were saved or deleted.
-    Closed(Vec<String>),
+    Closed(Vec<KeywordChange>),
 }
 
 pub struct KeywordEditor {
     config_dir: PathBuf,
     sets: Vec<String>,
-    /// The set being edited, by its name on disk (`None` for a new one).
+    /// The set being edited, by its name on disk.
     current: Option<String>,
+    /// A new set is being made (not saved yet). With no `current` either,
+    /// there is nothing to edit: the window says how to start.
+    creating: bool,
     name: String,
     set: KeywordSet,
     /// The set as last saved or loaded, to see unsaved changes.
     saved: KeywordSet,
+    /// Who chose the set being edited (settings files), for "used by".
+    users: Vec<PathBuf>,
     sample: String,
     /// Shows only rules containing this text.
     filter: String,
     /// Compiled for the preview, with the set it was built from.
     compiled: Option<(KeywordSet, Highlighter, Vec<String>)>,
     confirm_delete: bool,
-    /// Sets saved or deleted while the window was open.
-    touched: Vec<String>,
+    changes: Vec<KeywordChange>,
     /// An action held back because of unsaved changes.
     pending: Option<Pending>,
     /// Close on the next frame (the pending close was confirmed).
@@ -52,19 +66,24 @@ pub struct KeywordEditor {
 }
 
 impl KeywordEditor {
-    pub fn new(config_dir: &Path, select: Option<&str>) -> Self {
+    /// The window on the set `select`, else the first one; `new` starts a
+    /// new set. With no sets and no `new`, it says how to make one: no set
+    /// is ever made unless asked for.
+    pub fn new(config_dir: &Path, select: Option<&str>, new: bool) -> Self {
         let mut editor = Self {
             config_dir: config_dir.to_path_buf(),
             sets: przmterm_session::keyword_sets(config_dir),
             current: None,
+            creating: false,
             name: String::new(),
             set: KeywordSet::default(),
             saved: KeywordSet::default(),
+            users: Vec::new(),
             sample: SAMPLE.to_string(),
             filter: String::new(),
             compiled: None,
             confirm_delete: false,
-            touched: Vec::new(),
+            changes: Vec::new(),
             pending: None,
             closing: false,
             error: None,
@@ -74,20 +93,31 @@ impl KeywordEditor {
             .filter(|s| editor.sets.contains(s))
             .or_else(|| editor.sets.first().cloned());
         match first {
+            _ if new => editor.new_set(),
             Some(name) => editor.load(&name),
-            None => editor.new_set(),
+            None => {}
         }
         editor
     }
 
     fn dirty(&self) -> bool {
-        self.set != self.saved || self.current.as_deref() != Some(self.name.trim())
+        if self.creating {
+            // A new set matters once it has a rule.
+            return self
+                .set
+                .rules
+                .iter()
+                .any(|k| !k.text.trim().is_empty() || !k.regex.trim().is_empty());
+        }
+        self.current.is_some()
+            && (self.set != self.saved || self.current.as_deref() != Some(self.name.trim()))
     }
 
     fn load(&mut self, name: &str) {
         match przmterm_session::read_keyword_set(&self.config_dir, name) {
             Ok(set) => {
                 self.current = Some(name.to_string());
+                self.creating = false;
                 self.name = name.to_string();
                 self.saved = set.clone();
                 self.set = set;
@@ -95,7 +125,20 @@ impl KeywordEditor {
             }
             Err(e) => self.error = Some(e.to_string()),
         }
+        self.users = przmterm_session::keyword_set_users(&self.config_dir, name);
         self.confirm_delete = false;
+    }
+
+    /// Nothing chosen: the first set, or the "make one" page.
+    fn load_first(&mut self) {
+        match self.sets.first().cloned() {
+            Some(first) => self.load(&first),
+            None => {
+                self.current = None;
+                self.creating = false;
+                self.users.clear();
+            }
+        }
     }
 
     fn new_set(&mut self) {
@@ -106,17 +149,18 @@ impl KeywordEditor {
             n += 1;
         }
         self.current = None;
+        self.creating = true;
         self.name = name;
         self.set = KeywordSet {
             match_case: false,
             rules: vec![Keyword {
-                text: "down".into(),
-                color: Some("#ff4040".into()),
+                color: Some("#ffff00".into()),
                 ..Keyword::default()
             }],
             ..KeywordSet::default()
         };
         self.saved = KeywordSet::default();
+        self.users.clear();
         self.confirm_delete = false;
     }
 
@@ -144,19 +188,39 @@ impl KeywordEditor {
         }
         przmterm_session::write_keyword_set(&self.config_dir, &name, &set)
             .map_err(|e| e.to_string())?;
-        if let Some(old) = &self.current
-            && *old != name
+        if let Some(old) = self.current.clone()
+            && old != name
         {
-            let _ = przmterm_session::delete_keyword_set(&self.config_dir, old);
-            self.touched.push(old.clone());
+            // The sessions that chose it follow the new name.
+            przmterm_session::rename_keyword_references(&self.config_dir, &old, Some(&name))
+                .map_err(|e| e.to_string())?;
+            let _ = przmterm_session::delete_keyword_set(&self.config_dir, &old);
+            self.changes.push(KeywordChange::Renamed(old, name.clone()));
         }
-        self.touched.push(name.clone());
+        self.changes.push(KeywordChange::Saved(name.clone()));
         self.sets = przmterm_session::keyword_sets(&self.config_dir);
         self.current = Some(name.clone());
-        self.name = name;
+        self.creating = false;
+        self.name = name.clone();
         self.set = set.clone();
         self.saved = set;
+        self.users = przmterm_session::keyword_set_users(&self.config_dir, &name);
         Ok(())
+    }
+
+    fn delete(&mut self) {
+        let Some(name) = self.current.clone() else {
+            return;
+        };
+        match przmterm_session::delete_keyword_set(&self.config_dir, &name) {
+            Ok(()) => {
+                self.changes.push(KeywordChange::Deleted(name));
+                self.sets = przmterm_session::keyword_sets(&self.config_dir);
+                self.load_first();
+            }
+            Err(e) => self.error = Some(e.to_string()),
+        }
+        self.confirm_delete = false;
     }
 
     pub fn show(&mut self, ctx: &egui::Context) -> KeywordResult {
@@ -167,14 +231,18 @@ impl KeywordEditor {
             .default_pos(ctx.content_rect().center())
             .open(&mut open)
             .collapsible(false)
-            .default_width(820.0)
-            .default_height(560.0)
+            .default_width(760.0)
+            .min_width(640.0)
             .show(ctx, |ui| {
-                ui.horizontal_top(|ui| {
-                    self.list(ui);
-                    ui.separator();
-                    ui.vertical(|ui| self.set_ui(ui, &mut close));
-                });
+                self.header(ui);
+                ui.separator();
+                if self.current.is_none() && !self.creating {
+                    self.empty_ui(ui);
+                } else {
+                    self.set_ui(ui);
+                }
+                ui.separator();
+                self.footer(ui, &mut close);
             });
         if !open {
             close = true;
@@ -183,75 +251,128 @@ impl KeywordEditor {
             if self.dirty() {
                 self.pending = Some(Pending::Close);
             } else {
-                return KeywordResult::Closed(std::mem::take(&mut self.touched));
+                return KeywordResult::Closed(std::mem::take(&mut self.changes));
             }
         }
         if self.closing {
-            return KeywordResult::Closed(std::mem::take(&mut self.touched));
+            return KeywordResult::Closed(std::mem::take(&mut self.changes));
         }
         KeywordResult::Open
     }
 
-    fn list(&mut self, ui: &mut egui::Ui) {
-        ui.vertical(|ui| {
-            ui.set_width(170.0);
-            ui.strong("Sets");
-            egui::ScrollArea::vertical()
-                .id_salt("keyword-sets")
-                .max_height(420.0)
-                .show(ui, |ui| {
-                    let mut pick = None;
-                    for name in &self.sets {
-                        if ui
-                            .selectable_label(self.current.as_deref() == Some(name), name)
-                            .clicked()
-                        {
-                            pick = Some(name.clone());
-                        }
-                    }
-                    if self.current.is_none() {
-                        let _ = ui.selectable_label(true, RichText::new(&self.name).italics());
-                    }
-                    if let Some(name) = pick {
-                        self.request(Pending::Load(name));
-                    }
-                });
-            ui.add_space(6.0);
-            if ui.button("+ New set").clicked() {
-                self.request(Pending::New);
-            }
-            if self.current.is_some() {
-                if self.confirm_delete {
-                    ui.colored_label(ui.visuals().warn_fg_color, "Delete this set?");
-                    ui.horizontal(|ui| {
-                        if ui.button("Keep").clicked() {
-                            self.confirm_delete = false;
-                        }
-                        if ui.button("Delete").clicked()
-                            && let Some(name) = self.current.take()
-                        {
-                            match przmterm_session::delete_keyword_set(&self.config_dir, &name) {
-                                Ok(()) => {
-                                    self.touched.push(name);
-                                    self.sets = przmterm_session::keyword_sets(&self.config_dir);
-                                    match self.sets.first().cloned() {
-                                        Some(next) => self.load(&next),
-                                        None => self.new_set(),
-                                    }
-                                }
-                                Err(e) => {
-                                    self.error = Some(e.to_string());
-                                    self.current = Some(name);
-                                }
+    /// The set being edited (a list to pick another), New, Delete, and who
+    /// uses it.
+    fn header(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("Editing");
+            let shown = match (&self.current, self.creating) {
+                (Some(name), _) => RichText::new(name.as_str()),
+                (None, true) => {
+                    RichText::new(format!("{} (new, not saved)", self.name.trim())).italics()
+                }
+                (None, false) => RichText::new("no set").weak(),
+            };
+            crate::theme::sunken_combos(ui);
+            let mut pick = None;
+            ui.add_enabled_ui(!self.sets.is_empty(), |ui| {
+                egui::ComboBox::from_id_salt("keyword-set-pick")
+                    .width(220.0)
+                    .selected_text(shown)
+                    .show_ui(ui, |ui| {
+                        for name in &self.sets {
+                            if ui
+                                .selectable_label(self.current.as_deref() == Some(name), name)
+                                .clicked()
+                            {
+                                pick = Some(name.clone());
                             }
-                            self.confirm_delete = false;
                         }
                     });
-                } else if ui.button("Delete set…").clicked() {
-                    self.confirm_delete = true;
-                }
+            });
+            if let Some(name) = pick
+                && self.current.as_deref() != Some(&name)
+            {
+                self.request(Pending::Load(name));
+            }
+            if ui.button("＋ New set").clicked() {
+                self.request(Pending::New);
+            }
+            if self.current.is_some()
+                && ui
+                    .add_enabled(!self.confirm_delete, egui::Button::new("Delete…"))
+                    .clicked()
+            {
+                self.confirm_delete = true;
             }
         });
+        // Choosing a set to edit does not apply it: say who uses it.
+        let used = match (&self.current, self.users.len()) {
+            (None, _) => "A set colours words and patterns in the output of the sessions \
+                          that choose it."
+                .to_string(),
+            (Some(_), 0) => "No session uses this set yet: choose it in a session's \
+                             settings, under Terminal › Keywords."
+                .to_string(),
+            (Some(_), _) => format!("Used by {}.", self.users_text()),
+        };
+        ui.weak(used);
+        if self.confirm_delete
+            && let Some(name) = self.current.clone()
+        {
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                let who = if self.users.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {} will have no keywords.", self.users_text())
+                };
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    format!("Delete the set {name}?{who}"),
+                );
+                ui.horizontal(|ui| {
+                    if ui.button("Keep").clicked() {
+                        self.confirm_delete = false;
+                    }
+                    if ui.button("Delete").clicked() {
+                        self.delete();
+                    }
+                });
+            });
+        }
+    }
+
+    /// "the global settings and 3 sessions or folders".
+    fn users_text(&self) -> String {
+        let global = self.config_dir.join(przmterm_session::DEFAULTS_FILE);
+        let others = self.users.iter().filter(|p| **p != global).count();
+        let others = match others {
+            0 => String::new(),
+            1 => "1 session or folder".to_string(),
+            n => format!("{n} sessions or folders"),
+        };
+        match (self.users.contains(&global), others.is_empty()) {
+            (true, true) => "the global settings".to_string(),
+            (true, false) => format!("the global settings and {others}"),
+            (false, _) => others,
+        }
+    }
+
+    /// No set to edit yet.
+    fn empty_ui(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(24.0);
+        ui.vertical_centered(|ui| {
+            ui.label(RichText::new("No keyword sets yet").size(16.0));
+            ui.add_space(4.0);
+            ui.weak(
+                "Keyword sets are optional. Make one to colour words like “down” or \
+                 “error” in the output, then choose it in a session's settings.",
+            );
+            ui.add_space(10.0);
+            if crate::theme::primary_button(ui, "＋ New set").clicked() {
+                self.request(Pending::New);
+            }
+        });
+        ui.add_space(24.0);
     }
 
     /// Does `action` now, or asks first if there are unsaved changes.
@@ -275,10 +396,7 @@ impl KeywordEditor {
     fn discard(&mut self) {
         match self.current.clone() {
             Some(name) => self.load(&name),
-            None => match self.sets.first().cloned() {
-                Some(first) => self.load(&first),
-                None => self.new_set(),
-            },
+            None => self.load_first(),
         }
         self.error = None;
     }
@@ -288,112 +406,45 @@ impl KeywordEditor {
         let Some(action) = self.pending.clone() else {
             return;
         };
-        egui::Frame::group(ui.style()).show(ui, |ui| {
-            ui.colored_label(
-                ui.visuals().warn_fg_color,
-                format!(
-                    "The changes to {} are not saved. They will be lost if you go on.",
-                    self.name.trim()
-                ),
-            );
-            // Back out on the left, go on on the right.
-            ui.horizontal(|ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Save and go on").clicked() {
-                        match self.save() {
-                            Ok(()) => {
-                                self.pending = None;
-                                self.perform(action.clone());
-                            }
-                            Err(e) => {
-                                self.error = Some(e);
-                                self.pending = None;
-                            }
+        ui.colored_label(
+            ui.visuals().warn_fg_color,
+            format!(
+                "The changes to {} are not saved. They will be lost if you go on.",
+                self.name.trim()
+            ),
+        );
+        // Back out on the left, go on on the right.
+        ui.horizontal(|ui| {
+            if ui.button("Back").clicked() {
+                self.pending = None;
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if crate::theme::primary_button(ui, "Save and go on").clicked() {
+                    match self.save() {
+                        Ok(()) => {
+                            self.pending = None;
+                            self.perform(action.clone());
+                        }
+                        Err(e) => {
+                            self.error = Some(e);
+                            self.pending = None;
                         }
                     }
-                    if ui.button("Discard changes").clicked() {
-                        self.pending = None;
-                        self.discard();
-                        self.perform(action.clone());
-                    }
-                    if ui.button("Back").clicked() {
-                        self.pending = None;
-                    }
-                });
+                }
+                if ui.button("Discard changes").clicked() {
+                    self.pending = None;
+                    self.discard();
+                    self.perform(action.clone());
+                }
             });
         });
     }
 
-    fn set_ui(&mut self, ui: &mut egui::Ui, close: &mut bool) {
-        ui.horizontal(|ui| {
-            ui.label("Name");
-            crate::editor::name_field(ui, &mut self.name, "Set name", 280.0);
-            crate::theme::checkbox(ui, &mut self.set.match_case, "Match case");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.filter)
-                    .hint_text("🔍 Find a rule")
-                    .desired_width(140.0),
-            );
-        });
-        ui.weak("Where matches overlap, the longest wins. Words match whole: “up” colours “link-up”, not “backup”.");
-        ui.add_space(4.0);
-
-        let mut remove = None;
-        let mut swap = None;
-        let count = self.set.rules.len();
-        egui::ScrollArea::vertical()
-            .id_salt("keyword-rules")
-            .max_height(300.0)
-            .auto_shrink([false, true])
-            .show(ui, |ui| {
-                egui::Grid::new("keyword-grid")
-                    .num_columns(6)
-                    .spacing([8.0, 4.0])
-                    .striped(true)
-                    .show(ui, |ui| {
-                        ui.weak("");
-                        ui.weak("Type");
-                        ui.weak("Word or expression");
-                        ui.weak("Colour");
-                        ui.weak("Background");
-                        ui.weak("");
-                        ui.end_row();
-                        let filter = self.filter.trim().to_lowercase();
-                        for (i, rule) in self.set.rules.iter_mut().enumerate() {
-                            if !filter.is_empty()
-                                && !rule.text.to_lowercase().contains(&filter)
-                                && !rule.regex.to_lowercase().contains(&filter)
-                            {
-                                continue;
-                            }
-                            // Moving rules while filtered would be confusing.
-                            let movable = filter.is_empty();
-                            rule_row(ui, i, count, movable, rule, &mut remove, &mut swap);
-                            ui.end_row();
-                        }
-                    });
-            });
-        if let Some(i) = remove {
-            self.set.rules.remove(i);
-        }
-        if let Some((a, b)) = swap {
-            self.set.rules.swap(a, b);
-        }
-        if ui.button("+ Add rule").clicked() {
-            self.set.rules.push(Keyword {
-                color: Some("#ffff00".into()),
-                ..Keyword::default()
-            });
-        }
-
-        ui.add_space(6.0);
-        ui.strong("Preview");
-        self.preview(ui);
-
+    /// Save, Cancel and Close (or the unsaved-changes question).
+    fn footer(&mut self, ui: &mut egui::Ui, close: &mut bool) {
         if let Some(err) = &self.error {
             ui.colored_label(ui.visuals().error_fg_color, err);
         }
-        ui.add_space(6.0);
         if self.pending.is_some() {
             self.pending_ui(ui);
             return;
@@ -404,11 +455,15 @@ impl KeywordEditor {
                 ui.colored_label(ui.visuals().warn_fg_color, "Unsaved changes");
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add_enabled(dirty, egui::Button::new("Save")).clicked() {
+                let editing = self.current.is_some() || self.creating;
+                let save = ui.add_enabled_ui(editing && dirty, |ui| {
+                    crate::theme::primary_button(ui, "Save")
+                });
+                if save.inner.clicked() {
                     self.error = self.save().err();
                 }
                 if ui
-                    .add_enabled(dirty, egui::Button::new("Cancel"))
+                    .add_enabled(editing && dirty, egui::Button::new("Cancel"))
                     .on_hover_text("Throw away the changes since the last save")
                     .clicked()
                 {
@@ -419,6 +474,99 @@ impl KeywordEditor {
                 }
             });
         });
+    }
+
+    fn set_ui(&mut self, ui: &mut egui::Ui) {
+        egui::Grid::new("keyword-set-head")
+            .num_columns(2)
+            .spacing([10.0, 6.0])
+            .show(ui, |ui| {
+                ui.label("Name");
+                ui.horizontal(|ui| {
+                    crate::editor::name_field(ui, &mut self.name, "Set name", 240.0);
+                    crate::theme::checkbox(ui, &mut self.set.match_case, "Match case");
+                });
+                ui.end_row();
+            });
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.strong("Rules");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.filter)
+                        .hint_text("🔍 Find a rule")
+                        .desired_width(160.0),
+                );
+            });
+        });
+        ui.weak(
+            "Where matches overlap, the longest wins. Words match whole: “up” colours \
+             “link-up”, not “backup”.",
+        );
+        ui.add_space(4.0);
+
+        let mut remove = None;
+        let mut swap = None;
+        let count = self.set.rules.len();
+        egui::Frame::new()
+            .fill(crate::theme::p().sunken)
+            .stroke(egui::Stroke::new(1.0, crate::theme::p().border))
+            .corner_radius(4)
+            .inner_margin(egui::Margin::same(6))
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("keyword-rules")
+                    .max_height(260.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        egui::Grid::new("keyword-grid")
+                            .num_columns(6)
+                            .spacing([8.0, 4.0])
+                            .striped(true)
+                            .show(ui, |ui| {
+                                ui.weak("");
+                                ui.weak("Type");
+                                ui.weak("Word or expression");
+                                ui.weak("Colour");
+                                ui.weak("Background");
+                                ui.weak("");
+                                ui.end_row();
+                                let filter = self.filter.trim().to_lowercase();
+                                for (i, rule) in self.set.rules.iter_mut().enumerate() {
+                                    if !filter.is_empty()
+                                        && !rule.text.to_lowercase().contains(&filter)
+                                        && !rule.regex.to_lowercase().contains(&filter)
+                                    {
+                                        continue;
+                                    }
+                                    // Moving rules while filtered would be confusing.
+                                    let movable = filter.is_empty();
+                                    rule_row(ui, i, count, movable, rule, &mut remove, &mut swap);
+                                    ui.end_row();
+                                }
+                            });
+                        if self.set.rules.is_empty() {
+                            ui.weak("No rules yet.");
+                        }
+                    });
+            });
+        if let Some(i) = remove {
+            self.set.rules.remove(i);
+        }
+        if let Some((a, b)) = swap {
+            self.set.rules.swap(a, b);
+        }
+        ui.add_space(4.0);
+        if ui.button("＋ Add rule").clicked() {
+            self.set.rules.push(Keyword {
+                color: Some("#ffff00".into()),
+                ..Keyword::default()
+            });
+        }
+
+        ui.add_space(8.0);
+        ui.strong("Preview");
+        self.preview(ui);
     }
 
     fn preview(&mut self, ui: &mut egui::Ui) {
@@ -543,10 +691,10 @@ fn rule_row(
     } else {
         &mut rule.text
     };
-    ui.add(
-        egui::TextEdit::singleline(field)
-            .font(egui::TextStyle::Monospace)
-            .desired_width(260.0),
+    // Sized, not just desired: a grid cell would keep it narrow.
+    ui.add_sized(
+        [240.0, ui.spacing().interact_size.y],
+        egui::TextEdit::singleline(field).font(egui::TextStyle::Monospace),
     );
     color_pick(ui, &mut rule.color, [255, 255, 0], "Text colour");
     ui.horizontal(|ui| {
@@ -587,12 +735,14 @@ mod tests {
     #[test]
     fn creates_renames_and_checks_sets() {
         let dir = tempfile::tempdir().unwrap();
-        let mut e = KeywordEditor::new(dir.path(), None);
+        let mut e = KeywordEditor::new(dir.path(), None, false);
         assert!(
-            e.current.is_none(),
-            "starts with a new set when there are none"
+            e.current.is_none() && !e.creating,
+            "no set is made when there are none"
         );
+        e.new_set();
         e.name = "Cisco".into();
+        e.set.rules[0].text = "down".into();
         e.set.rules.push(Keyword::default()); // a blank row is dropped
         e.save().unwrap();
         assert_eq!(przmterm_session::keyword_sets(dir.path()), ["Cisco"]);
@@ -608,11 +758,23 @@ mod tests {
         assert!(e.save().unwrap_err().contains("regular expression"));
         e.set.rules.pop();
 
-        // Renaming moves the file; the old name is reported as changed.
+        // Renaming moves the file and the sessions that chose it.
+        let session = dir.path().join("sessions/r1.toml");
+        std::fs::create_dir_all(session.parent().unwrap()).unwrap();
+        std::fs::write(&session, "host = \"10.0.0.1\"\nkeywords = \"Cisco\"\n").unwrap();
         e.name = "Network".into();
         e.save().unwrap();
         assert_eq!(przmterm_session::keyword_sets(dir.path()), ["Network"]);
-        assert_eq!(e.touched, ["Cisco", "Cisco", "Network"]);
+        assert!(
+            std::fs::read_to_string(&session)
+                .unwrap()
+                .contains("\"Network\"")
+        );
+        assert_eq!(e.users, std::slice::from_ref(&session));
+        assert!(
+            e.changes
+                .contains(&KeywordChange::Renamed("Cisco".into(), "Network".into()))
+        );
 
         // Unsaved changes hold back switching sets until answered.
         e.set.match_case = true;
@@ -626,5 +788,21 @@ mod tests {
         e.new_set();
         e.name = "Network".into();
         assert!(e.save().unwrap_err().contains("already exists"));
+        e.discard();
+
+        // Deleting the last set leaves nothing (no new set in its place),
+        // and the session no longer names it.
+        e.delete();
+        assert!(e.current.is_none() && !e.creating);
+        assert!(przmterm_session::keyword_sets(dir.path()).is_empty());
+        assert!(
+            !std::fs::read_to_string(&session)
+                .unwrap()
+                .contains("keywords")
+        );
+        assert!(
+            e.changes
+                .contains(&KeywordChange::Deleted("Network".into()))
+        );
     }
 }

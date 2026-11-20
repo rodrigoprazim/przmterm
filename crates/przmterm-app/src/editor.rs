@@ -9,9 +9,9 @@ use std::path::{Path, PathBuf};
 use eframe::egui;
 use przmterm_core::Protocol;
 use przmterm_session::{
-    COMMON_BAUD_RATES, DEFAULT_DATA_BITS, DEFAULT_STOP_BITS, FlowControl, Folder, Forward,
-    ForwardKind, LogSettings, McpAccess, McpSettings, Parity, Session, SessionSettings,
-    TerminalSettings, Trigger,
+    Backspace, COMMON_BAUD_RATES, DEFAULT_DATA_BITS, DEFAULT_STOP_BITS, FlowControl, Folder,
+    Forward, ForwardKind, LogSettings, McpAccess, McpSettings, Parity, PasteButton, Session,
+    SessionSettings, TerminalSettings, Trigger,
 };
 use przmterm_transport::serial::{PortInfo, available_ports};
 
@@ -152,6 +152,8 @@ pub struct Editor {
     cursor_color: Option<String>,
     background: Option<String>,
     foreground: Option<String>,
+    /// Backspace and the mouse options (the other fields stay unset).
+    keys_mouse: TerminalSettings,
     /// The installed monospace fonts, given by the app once read.
     pub font_families: Option<crate::fonts::FontList>,
     log: Option<bool>,
@@ -170,8 +172,10 @@ pub struct Editor {
     anti_idle: String,
     anti_idle_interval: String,
     scp_shell: String,
-    /// The keyword editor was asked for, for this set (if any).
-    keyword_request: Option<Option<String>>,
+    /// The keyword editor was asked for.
+    keyword_request: Option<KeywordRequest>,
+    /// "New set…" was used: the set made is chosen here.
+    choose_new_set: bool,
     /// Tunnels set here; `None` inherits the list from above.
     forwards: Option<Vec<Forward>>,
     /// Triggers set here; `None` inherits the list from above.
@@ -331,6 +335,12 @@ impl Context<'_> {
             "terminal.cursor_color" => "default".into(),
             "terminal.background" => "default".into(),
             "terminal.foreground" => "default".into(),
+            "terminal.backspace" => "Delete (^?)".into(),
+            "terminal.copy_on_select" => "no".into(),
+            "terminal.paste_button" => "middle".into(),
+            "terminal.hide_pointer" => "no".into(),
+            "terminal.open_urls" => "yes".into(),
+            "terminal.triple_click_newline" => "no".into(),
             "log.enabled" => "no".into(),
             "log.path" => przmterm_session::DEFAULT_LOG_TEMPLATE.into(),
             "log.dir" => self.logs_dir.clone(),
@@ -519,6 +529,15 @@ impl Editor {
             cursor_color: s.terminal.cursor_color.clone(),
             background: s.terminal.background.clone(),
             foreground: s.terminal.foreground.clone(),
+            keys_mouse: TerminalSettings {
+                backspace: s.terminal.backspace,
+                copy_on_select: s.terminal.copy_on_select,
+                paste_button: s.terminal.paste_button,
+                hide_pointer: s.terminal.hide_pointer,
+                open_urls: s.terminal.open_urls,
+                triple_click_newline: s.terminal.triple_click_newline,
+                ..TerminalSettings::default()
+            },
             font_families: None,
             log: s.log.enabled,
             log_path: text(&s.log.path),
@@ -536,6 +555,7 @@ impl Editor {
             anti_idle_interval: text(&s.anti_idle_interval),
             scp_shell: text(&s.scp_shell),
             keyword_request: None,
+            choose_new_set: false,
             forwards: s.forwards.clone(),
             triggers: s.triggers.clone(),
             show_log_help: false,
@@ -563,9 +583,34 @@ impl Editor {
         std::mem::take(&mut self.unlock_request)
     }
 
-    /// The set to open the keyword editor on, once, when asked for.
-    pub fn take_keyword_request(&mut self) -> Option<Option<String>> {
+    /// The keyword editor was asked for (once).
+    pub fn take_keyword_request(&mut self) -> Option<KeywordRequest> {
         self.keyword_request.take()
+    }
+
+    /// The keyword editor closed: follow the sets renamed or deleted, and
+    /// choose the one made with "New set…".
+    pub fn keywords_changed(&mut self, changes: &[crate::keywords::KeywordChange]) {
+        use crate::keywords::KeywordChange;
+        for change in changes {
+            match change {
+                KeywordChange::Renamed(old, new) if self.keywords.as_ref() == Some(old) => {
+                    self.keywords = Some(new.clone());
+                }
+                KeywordChange::Deleted(name) if self.keywords.as_ref() == Some(name) => {
+                    self.keywords = None;
+                }
+                _ => {}
+            }
+        }
+        if std::mem::take(&mut self.choose_new_set)
+            && let Some(KeywordChange::Saved(name)) = changes
+                .iter()
+                .rev()
+                .find(|c| matches!(c, KeywordChange::Saved(_)))
+        {
+            self.keywords = Some(name.clone());
+        }
     }
 
     fn is_session(&self) -> bool {
@@ -660,6 +705,12 @@ impl Editor {
                 cursor_color: self.cursor_color.clone(),
                 background: self.background.clone(),
                 foreground: self.foreground.clone(),
+                backspace: self.keys_mouse.backspace,
+                copy_on_select: self.keys_mouse.copy_on_select,
+                paste_button: self.keys_mouse.paste_button,
+                hide_pointer: self.keys_mouse.hide_pointer,
+                open_urls: self.keys_mouse.open_urls,
+                triple_click_newline: self.keys_mouse.triple_click_newline,
             },
             log: LogSettings {
                 enabled: self.log,
@@ -1120,6 +1171,14 @@ impl Editor {
             Page::Serial => grid(ui, "editor-serial", |ui| self.serial_fields(ui, cx)),
             Page::Terminal => {
                 grid(ui, "editor-terminal", |ui| self.terminal_fields(ui, cx));
+                section(
+                    ui,
+                    "Keywords",
+                    "Optional: colour words and patterns in the output with a keyword set.",
+                );
+                grid(ui, "editor-keywords", |ui| self.keyword_fields(ui, cx));
+                section(ui, "Mouse", "");
+                grid(ui, "editor-mouse", |ui| self.mouse_fields(ui, cx));
                 section(ui, "Font", "");
                 grid(ui, "editor-font", |ui| self.font_fields(ui, cx));
                 section(ui, "Colors", "");
@@ -1652,43 +1711,6 @@ impl Editor {
 
     /// Keywords, triggers, logon script, reconnecting.
     fn automation_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
-        ui.label("Keywords")
-            .on_hover_text("Highlight words and patterns in the output with a keyword set");
-        ui.horizontal(|ui| {
-            let shown_name = self.keywords.as_ref().map(|k| {
-                if k.is_empty() {
-                    "none".to_string()
-                } else {
-                    k.clone()
-                }
-            });
-            crate::theme::sunken_combos(ui);
-            egui::ComboBox::from_id_salt("keywords")
-                .width(crate::theme::combo_width(ui))
-                .selected_text(shown(shown_name, cx.hint("keywords")))
-                .show_ui(ui, |ui| {
-                    // "" turns off a set inherited from above.
-                    ui.selectable_value(&mut self.keywords, Some(String::new()), "none");
-                    for name in &cx.keyword_sets {
-                        ui.selectable_value(&mut self.keywords, Some(name.clone()), name);
-                    }
-                });
-            reset(ui, &mut self.keywords, &cx.hint("keywords"));
-            if ui
-                .button("Edit sets…")
-                .on_hover_text("Create and change keyword sets")
-                .clicked()
-            {
-                let current = self
-                    .keywords
-                    .clone()
-                    .or_else(|| cx.inherited.keywords.clone())
-                    .filter(|k| !k.is_empty());
-                self.keyword_request = Some(current);
-            }
-        });
-        ui.end_row();
-
         ui.label("Logon script").on_hover_text(
             "A Rhai script run each time the session connects, \
              e.g. to answer the login prompts",
@@ -1803,6 +1825,157 @@ impl Editor {
             "Scrollback lines",
             &mut self.scrollback,
             &cx.hint("terminal.scrollback"),
+        );
+        ui.label("Backspace sends").on_hover_text(
+            "Huawei VRP, Nokia and other equipment want ^H: with ^? they \
+             delete the character under the cursor instead",
+        );
+        let inherited = cx.inherited.terminal.backspace.unwrap_or_default();
+        choice_pick(
+            ui,
+            &mut self.keys_mouse.backspace,
+            inherited,
+            &Backspace::ALL.map(|b| (b, b.label())),
+            &cx.hint("terminal.backspace"),
+        );
+        ui.end_row();
+    }
+
+    /// The keyword set: none or one of them, and making or changing sets.
+    fn keyword_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
+        ui.label("Keyword set")
+            .on_hover_text("Highlight words and patterns in the output with a keyword set");
+        ui.horizontal(|ui| {
+            let shown_name = self.keywords.as_ref().map(|k| {
+                if k.is_empty() {
+                    "none".to_string()
+                } else {
+                    k.clone()
+                }
+            });
+            crate::theme::sunken_combos(ui);
+            egui::ComboBox::from_id_salt("keywords")
+                .width(crate::theme::combo_width(ui))
+                .selected_text(shown(shown_name, cx.hint("keywords")))
+                .show_ui(ui, |ui| {
+                    // "" turns off a set inherited from above.
+                    ui.selectable_value(&mut self.keywords, Some(String::new()), "none");
+                    for name in &cx.keyword_sets {
+                        ui.selectable_value(&mut self.keywords, Some(name.clone()), name);
+                    }
+                });
+            reset(ui, &mut self.keywords, &cx.hint("keywords"));
+        });
+        ui.end_row();
+        ui.label("");
+        ui.horizontal(|ui| {
+            let chosen = self
+                .keywords
+                .clone()
+                .or_else(|| cx.inherited.keywords.clone())
+                .filter(|k| !k.is_empty() && cx.keyword_sets.contains(k));
+            if ui
+                .button("＋ New set…")
+                .on_hover_text("Make a keyword set; this session uses it once saved")
+                .clicked()
+            {
+                self.choose_new_set = true;
+                self.keyword_request = Some(KeywordRequest {
+                    select: None,
+                    new: true,
+                });
+            }
+            let edit = match &chosen {
+                Some(name) => format!("Edit {name}…"),
+                None => "Edit sets…".to_string(),
+            };
+            if ui
+                .add_enabled(!cx.keyword_sets.is_empty(), egui::Button::new(edit))
+                .on_hover_text("Change, rename or delete keyword sets")
+                .clicked()
+            {
+                self.keyword_request = Some(KeywordRequest {
+                    select: chosen,
+                    new: false,
+                });
+            }
+        });
+        ui.end_row();
+    }
+
+    /// What the mouse does in the terminal.
+    fn mouse_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
+        let inherited = &cx.inherited.terminal;
+        let defaults = przmterm_session::MouseOptions::default();
+        let check = |ui: &mut egui::Ui,
+                     value: &mut Option<bool>,
+                     inherited: Option<bool>,
+                     default: bool,
+                     label: &str,
+                     key: &str| {
+            ui.label("");
+            ui.horizontal(|ui| {
+                let mut on = value.or(inherited).unwrap_or(default);
+                if crate::theme::checkbox(ui, &mut on, label).changed() {
+                    *value = Some(on);
+                }
+                reset(ui, value, &cx.hint(key));
+            });
+            ui.end_row();
+        };
+        check(
+            ui,
+            &mut self.keys_mouse.copy_on_select,
+            inherited.copy_on_select,
+            defaults.copy_on_select,
+            "Copy on select",
+            "terminal.copy_on_select",
+        );
+        ui.label("Paste on").on_hover_text(
+            "The mouse button that pastes. With the right one, Ctrl+right-click \
+             (⌘ on a Mac) opens the menu",
+        );
+        let effective = inherited.paste_button.unwrap_or(defaults.paste_button);
+        choice_pick(
+            ui,
+            &mut self.keys_mouse.paste_button,
+            effective,
+            &[
+                (PasteButton::Middle, "middle button"),
+                (PasteButton::Right, "right button"),
+                (PasteButton::Off, "off"),
+            ],
+            &cx.hint("terminal.paste_button"),
+        );
+        ui.end_row();
+        check(
+            ui,
+            &mut self.keys_mouse.hide_pointer,
+            inherited.hide_pointer,
+            defaults.hide_pointer,
+            "Hide the mouse pointer while typing",
+            "terminal.hide_pointer",
+        );
+        let open = if cfg!(target_os = "macos") {
+            "Open web addresses with ⌘+click"
+        } else {
+            "Open web addresses with Ctrl+click"
+        };
+        check(
+            ui,
+            &mut self.keys_mouse.open_urls,
+            inherited.open_urls,
+            defaults.open_urls,
+            open,
+            "terminal.open_urls",
+        );
+        check(
+            ui,
+            &mut self.keys_mouse.triple_click_newline,
+            inherited.triple_click_newline,
+            defaults.triple_click_newline,
+            "Triple-click selects the line break too",
+            "terminal.triple_click_newline",
         );
     }
 
@@ -2399,6 +2572,15 @@ fn shown(value: Option<String>, inherited: String) -> egui::WidgetText {
 fn default_cursor() -> [u8; 3] {
     let c = crate::view::CURSOR;
     [c.r(), c.g(), c.b()]
+}
+
+/// The keyword window, asked for from the Keywords row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeywordRequest {
+    /// The set to show first.
+    pub select: Option<String>,
+    /// Start a new set.
+    pub new: bool,
 }
 
 /// A small ↺ button that clears a value set here, back to the inherited one.

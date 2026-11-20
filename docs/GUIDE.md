@@ -274,7 +274,23 @@ size it had. To keep a size, set it in *Font, Colors and Cursor…*.
 Drag to select, double-click selects a word, triple-click a line. Right-click
 opens Copy / Paste, Find and Highlight (the text selected, when there is
 one) and Select all. Text with line breaks is shown before it is pasted, to
-check or edit it.
+check or edit it. The middle button pastes.
+
+The *Mouse* options on the *Terminal* page of the session settings (or the
+global ones, for every session) change that:
+
+- *Copy on select*: what is selected is copied at once.
+- *Paste on*: the middle button, the right one (the menu then opens with
+  Ctrl+right-click, ⌘ on a Mac), or none.
+- *Hide the mouse pointer while typing*, until it moves.
+- *Open web addresses with Ctrl+click* (⌘+click): on by default; the pointer
+  turns into a hand over an address while Ctrl (⌘) is held.
+- *Triple-click selects the line break too*.
+
+*Backspace sends* on the same page picks `^?` (DEL, what Linux expects) or
+`^H` (BS). Huawei VRP, Nokia and other equipment want `^H`: with `^?` they
+delete the character under the cursor, so Backspace seems to work
+backwards. Set it on their sessions or on a folder of them.
 
 *Font, Colors and Cursor…* in a tab's menu picks the font (the built-in one or
 any installed monospace font), its size, the terminal's background and text
@@ -287,7 +303,7 @@ interface between dark and light, or follows the system's mode. The terminal
 keeps its own colours whichever is chosen.
 
 On macOS the PrzmTerm menu in the menu bar has *About PrzmTerm*, *Settings…*
-and the other app windows (shortcuts, vault, keyword sets, settings folder),
+and the other app windows (shortcuts, vault, settings folder),
 and *Help* has the script guide and the project's page. Elsewhere they are in
 the **+** menu above the sessions.
 
@@ -426,10 +442,15 @@ Triggers are saved as plain text, so leave passwords to the keychain.
 ## Keyword highlighting
 
 A keyword set colours words and patterns in the output: `up` green, `down`
-red, IP addresses, MAC addresses… Choose one under **Keywords** in the
-session, folder or global settings (`keywords = "CORES"`). **+** ›
-*Keyword sets…* (or *Edit sets…* next to *Keywords*) opens the editor, with a
-live preview. Sets are files in `<config>/keywords/<name>.toml`:
+red, IP addresses, MAC addresses… It is optional: none is made unless you
+make one. Choose one under *Terminal* › *Keywords* in the session, folder or
+global settings (`keywords = "CORES"`). *New set…* there makes one (the
+session uses it once it is saved), *Edit …* opens the editor on the set
+chosen, with a live preview; the list at its top picks another set to edit
+(which does not choose it for the session) and says which sessions use it.
+Deleting a set takes it out of the sessions and folders that chose it;
+renaming one renames it there. Sets are files in
+`<config>/keywords/<name>.toml`:
 
 ```toml
 [[rule]]
@@ -447,7 +468,8 @@ bold = true
 ```
 
 SecureCRT keyword lists (`Config/Keywords/*.ini`) come in with
-*Import from SecureCRT…*. Only text the remote side left uncoloured is
+*Import from SecureCRT…*, and open sessions that use them highlight with
+them at once. Only text the remote side left uncoloured is
 recoloured, so `ls --color` or `vim` keep their own colours.
 
 ### Highlights of one session

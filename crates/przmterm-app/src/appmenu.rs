@@ -21,7 +21,6 @@ pub enum AppCommand {
     Appearance,
     Shortcuts,
     Vault,
-    Keywords,
     SettingsFolder,
     ScriptGuide,
     Website,
@@ -31,14 +30,13 @@ pub enum AppCommand {
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 impl AppCommand {
-    const ALL: [AppCommand; 11] = [
+    const ALL: [AppCommand; 10] = [
         Self::About,
         Self::CheckUpdates,
         Self::Settings,
         Self::Appearance,
         Self::Shortcuts,
         Self::Vault,
-        Self::Keywords,
         Self::SettingsFolder,
         Self::ScriptGuide,
         Self::Website,
@@ -53,7 +51,6 @@ impl AppCommand {
             Self::Appearance => "appearance",
             Self::Shortcuts => "shortcuts",
             Self::Vault => "vault",
-            Self::Keywords => "keywords",
             Self::SettingsFolder => "settings-folder",
             Self::ScriptGuide => "script-guide",
             Self::Website => "website",
@@ -120,7 +117,6 @@ pub fn install(ctx: &egui::Context) -> Option<MenuBar> {
             &item(AppCommand::Appearance, "Appearance…", None),
             &item(AppCommand::Shortcuts, "Keyboard Shortcuts…", None),
             &item(AppCommand::Vault, "Password Vault…", None),
-            &item(AppCommand::Keywords, "Keyword Sets…", None),
             &item(AppCommand::SettingsFolder, "Settings Folder…", None),
             &PredefinedMenuItem::separator(),
             &PredefinedMenuItem::services(None),

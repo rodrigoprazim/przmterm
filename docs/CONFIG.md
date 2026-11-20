@@ -181,7 +181,7 @@ Used when `protocol = "serial"`.
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `keywords` | text | none | Keyword set used to highlight the output: `<config>/keywords/<name>.toml`. |
+| `keywords` | text | none | Keyword set used to highlight the output: `<config>/keywords/<name>.toml`. Optional; deleting a set takes it out of the files that chose it, renaming one renames it there. |
 | `logon_script` | text | none | Script run each time the session connects. A bare name is looked for in `<config>/scripts`; a full path (or `~/…`) is used as it is. |
 | `anti_idle` | one character | none | Sent (without Enter) after `anti_idle_interval` seconds without typing, so the far end keeps an idle session open. |
 | `anti_idle_interval` | seconds | 60 | `0` turns anti-idle off. |
@@ -217,6 +217,12 @@ Used when `protocol = "serial"`.
 | `cursor_color` | `"#rrggbb"` | `"#6ec8ff"` | Cursor colour. `""` is the default one. |
 | `background` | `"#rrggbb"` | `"#181a1f"` | The terminal's background. `""` is the default one. |
 | `foreground` | `"#rrggbb"` | `"#d8dee9"` | The colour of plain text. `""` is the default one. |
+| `backspace` | `"delete"` or `"backspace"` | `"delete"` | What Backspace sends: `^?` (DEL, 0x7F) or `^H` (BS, 0x08). Huawei VRP and Nokia want `"backspace"`; with `"delete"` they erase the character under the cursor. |
+| `copy_on_select` | `true` or `false` | `false` | Copy what is selected with the mouse at once. |
+| `paste_button` | `"middle"`, `"right"` or `"off"` | `"middle"` | The mouse button that pastes. With `"right"`, Ctrl+right-click (⌘ on a Mac) opens the menu. |
+| `hide_pointer` | `true` or `false` | `false` | Hide the mouse pointer while typing, until it moves. |
+| `open_urls` | `true` or `false` | `true` | Ctrl+click (⌘+click on a Mac) on a web address opens it. |
+| `triple_click_newline` | `true` or `false` | `false` | A triple-click selects the line with its line break. |
 
 ### `[log]`
 

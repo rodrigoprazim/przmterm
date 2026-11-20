@@ -7,6 +7,32 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- *Backspace sends* in the session settings (*Terminal*): `^?` (DEL, the
+  default) or `^H` (BS), for Huawei VRP, Nokia and other equipment that
+  erase the character under the cursor on DEL.
+- *Mouse* options in the session settings (*Terminal*): copy on select,
+  paste on the middle or right button (or neither), hide the pointer while
+  typing, open web addresses with Ctrl+click (⌘+click), and triple-click
+  with the line break.
+
+### Changed
+
+- Keyword sets are chosen and managed in the session settings (*Terminal* ›
+  *Keywords*: *New set…*, *Edit …*); the *Keyword sets…* menu entry is gone.
+  The keyword window picks the set to edit from a list, says which sessions
+  use it, and has a clearer layout.
+- Open sessions that use an imported keyword set highlight with it at once.
+
+### Fixed
+
+- Deleting a keyword set no longer leaves sessions naming it (which printed
+  "No such file or directory" at each connection), and renaming one renames
+  it in the sessions that use it. A missing set is ignored quietly.
+- The keyword window no longer makes a new set on its own when there are
+  none or the last one is deleted.
+
 ## [1.0.0-rc.8] - 2026-11-19
 
 ### Added

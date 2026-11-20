@@ -1127,6 +1127,24 @@ impl PrzmApp {
     /// Reads the sessions again; open sessions take what changed in their
     /// settings. Returns the open sessions with a changed connection
     /// setting, which they take when they reconnect.
+    /// Open sessions using one of the keyword sets `names` read it again.
+    fn reload_keyword_sets(&mut self, names: &[String]) {
+        if names.is_empty() {
+            return;
+        }
+        let env = self.env();
+        for pane in self.tabs.iter_mut().flat_map(|t| &mut t.panes) {
+            if pane
+                .origin
+                .as_ref()
+                .and_then(|s| s.keywords.as_ref())
+                .is_some_and(|k| names.contains(k))
+            {
+                pane.reload_keywords(&env);
+            }
+        }
+    }
+
     fn reload_sessions(&mut self) -> Vec<String> {
         if let Some(dir) = &self.config_dir {
             self.sessions = SessionTree::load(dir);
@@ -2887,11 +2905,6 @@ impl PrzmApp {
                 self.keymap_editor = Some(keymap::KeymapEditor::new(&self.shortcuts));
             }
             AppCommand::Vault => self.vault.open_window(),
-            AppCommand::Keywords => {
-                if let Some(dir) = &self.config_dir {
-                    self.keyword_editor = Some(keywords::KeywordEditor::new(dir, None));
-                }
-            }
             AppCommand::SettingsFolder => {
                 self.folder_dialog = Some(
                     self.config_dir
@@ -3982,6 +3995,13 @@ impl PrzmApp {
         });
         self.import_result = Some(result.unwrap_or_else(|e| vec![format!("Import failed: {e}")]));
         self.reload_sessions();
+        // Open sessions using an imported set highlight with it at once.
+        let imported: Vec<String> = report
+            .keyword_sets
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect();
+        self.reload_keyword_sets(&imported);
         // Imported button groups.
         let visible = self.buttons.visible;
         self.buttons = buttonbar::ButtonBarUi::load(Some(&dir));
@@ -4675,21 +4695,29 @@ impl PrzmApp {
         }
         self.highlights_ui(ctx);
         if let Some(editor) = &mut self.keyword_editor
-            && let keywords::KeywordResult::Closed(changed) = editor.show(ctx)
+            && let keywords::KeywordResult::Closed(changes) = editor.show(ctx)
         {
             self.keyword_editor = None;
-            // Open panes using a changed set pick it up at once.
-            let env = self.env();
-            for pane in self.tabs.iter_mut().flat_map(|t| &mut t.panes) {
-                if pane
-                    .origin
-                    .as_ref()
-                    .and_then(|s| s.keywords.as_ref())
-                    .is_some_and(|k| changed.contains(k))
-                {
-                    pane.reload_keywords(&env);
-                }
+            if let Some(editor) = &mut self.editor {
+                editor.keywords_changed(&changes);
             }
+            // Renamed or deleted sets changed session files: read them again
+            // (open sessions follow). Saved ones are read again by the open
+            // sessions that use them.
+            if changes
+                .iter()
+                .any(|c| !matches!(c, keywords::KeywordChange::Saved(_)))
+            {
+                self.reload_sessions();
+            }
+            let saved: Vec<String> = changes
+                .iter()
+                .filter_map(|c| match c {
+                    keywords::KeywordChange::Saved(name) => Some(name.clone()),
+                    _ => None,
+                })
+                .collect();
+            self.reload_keyword_sets(&saved);
         }
         if let Some(editor) = &mut self.editor {
             editor.vault_names = self.vault.names();
@@ -4718,7 +4746,11 @@ impl PrzmApp {
             && let Some(select) = editor.take_keyword_request()
             && let Some(dir) = &self.config_dir
         {
-            self.keyword_editor = Some(keywords::KeywordEditor::new(dir, select.as_deref()));
+            self.keyword_editor = Some(keywords::KeywordEditor::new(
+                dir,
+                select.select.as_deref(),
+                select.new,
+            ));
         }
         if let Some(wizard) = &mut self.import_wizard {
             match wizard.show(ctx) {
@@ -6095,10 +6127,6 @@ impl eframe::App for PrzmApp {
                                 menu_command = Some(appmenu::AppCommand::SettingsFolder);
                             }
                             ui.separator();
-                            if ui.button("Keyword sets…").clicked() {
-                                menu_command = Some(appmenu::AppCommand::Keywords);
-                                ui.close();
-                            }
                             if ui
                                 .button("Password vault…")
                                 .on_hover_text(

@@ -9,7 +9,7 @@ use eframe::egui::{
     Sense, Stroke, Vec2,
     text::{LayoutJob, TextFormat},
 };
-use przmterm_session::CursorShape;
+use przmterm_session::{CursorShape, PasteButton};
 use przmterm_term::{Cell, Screen, Style, Terminal};
 
 use crate::input::{encode_key, encode_paste};
@@ -161,6 +161,60 @@ impl Selection {
     }
 }
 
+/// The web address (`http://`, `https://`, `www.`) at `at`, if any.
+fn url_under(screen: &Screen, at: Point) -> Option<String> {
+    let index = at.line.checked_sub(screen.history_base())? as usize;
+    let line = screen.line_at(index)?;
+    url_in(line, at.col)
+}
+
+/// The web address in `line` that covers column `col`.
+fn url_in(line: &[Cell], col: usize) -> Option<String> {
+    // The characters and the column each starts at.
+    let cells: Vec<(usize, char)> = line
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| !c.is_spacer())
+        .map(|(i, c)| (i, c.ch))
+        .collect();
+    let chars: Vec<char> = cells.iter().map(|(_, c)| *c).collect();
+    let starts_here = |i: usize| {
+        ["https://", "http://", "www."].iter().any(|p| {
+            p.chars().enumerate().all(|(k, pc)| {
+                chars
+                    .get(i + k)
+                    .is_some_and(|c| c.eq_ignore_ascii_case(&pc))
+            })
+        })
+    };
+    let mut from = 0;
+    while from < chars.len() {
+        let start = (from..chars.len()).find(|&i| starts_here(i))?;
+        let mut end = start;
+        while end < chars.len()
+            && !chars[end].is_whitespace()
+            && !"\"'<>`{}|\\^".contains(chars[end])
+        {
+            end += 1;
+        }
+        // Punctuation after an address ends the sentence, not the address.
+        while end > start && ".,;:!?)]".contains(chars[end - 1]) {
+            end -= 1;
+        }
+        let (first, last) = (cells[start].0, cells[end.max(start + 1) - 1].0);
+        if (first..=last).contains(&col) {
+            let url: String = chars[start..end].iter().collect();
+            return Some(if url.to_lowercase().starts_with("www.") {
+                format!("https://{url}")
+            } else {
+                url
+            });
+        }
+        from = end.max(start + 1);
+    }
+    None
+}
+
 /// Characters that end a word on double-click. Dots, dashes, slashes, colons
 /// and `@` stay inside so IP addresses, paths and URLs select whole.
 fn is_word_char(c: char) -> bool {
@@ -256,6 +310,12 @@ pub struct TerminalView {
     preedit: String,
     /// A multi-line paste waiting for the app to confirm it.
     pending_paste: Option<String>,
+    /// What Backspace sends.
+    pub backspace: przmterm_session::Backspace,
+    pub mouse: przmterm_session::MouseOptions,
+    /// Hidden while typing (see [`MouseOptions::hide_pointer`]), until the
+    /// pointer moves.
+    pointer_hidden: bool,
 }
 
 impl Default for TerminalView {
@@ -280,6 +340,9 @@ impl Default for TerminalView {
             scroll_accum: 0.0,
             preedit: String::new(),
             pending_paste: None,
+            backspace: przmterm_session::Backspace::default(),
+            mouse: przmterm_session::MouseOptions::default(),
+            pointer_hidden: false,
         }
     }
 }
@@ -303,6 +366,8 @@ impl TerminalView {
         view.cursor_color = session.cursor_color;
         view.background = session.background;
         view.foreground = session.foreground;
+        view.backspace = session.backspace;
+        view.mouse = session.mouse;
         view
     }
 
@@ -377,6 +442,17 @@ fn read_clipboard() -> Option<String> {
 }
 
 impl TerminalView {
+    /// The selected text; a whole-line selection (triple-click) ends with
+    /// its line break when the session asks for it.
+    fn selected_text(&self, screen: &Screen) -> Option<String> {
+        let sel = self.selection?;
+        let mut text = sel.text(screen)?;
+        if sel.mode == SelectMode::Line && self.mouse.triple_click_newline {
+            text.push('\n');
+        }
+        Some(text)
+    }
+
     /// Asks for keyboard focus on the next frame.
     pub fn focus(&mut self) {
         self.focus_requested = false;
@@ -409,6 +485,7 @@ impl TerminalView {
 
         let mut input = Vec::new();
         self.handle_mouse(ui, &response, inner, (cell_w, cell_h), term, &mut input);
+        self.pointer(ui, &response, inner, (cell_w, cell_h), term);
         self.marks.refresh(term, ui.ctx());
 
         let screen = term.screen();
@@ -605,6 +682,9 @@ impl TerminalView {
             term.screen_mut().reset_display();
             self.selection = None;
             self.blink_from = std::time::Instant::now();
+            if focused && self.mouse.hide_pointer {
+                self.pointer_hidden = true;
+            }
         }
         ViewOutput {
             input,
@@ -758,6 +838,34 @@ impl TerminalView {
                 }
             } else if response.clicked_by(PointerButton::Primary) {
                 self.selection = None;
+                // Ctrl+click (⌘ on a Mac) on a web address opens it.
+                if self.mouse.open_urls
+                    && ui.input(|i| i.modifiers.command)
+                    && let Some(url) = url_under(term.screen(), here)
+                {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+                }
+            }
+            let selected = response.drag_stopped_by(PointerButton::Primary)
+                || response.double_clicked()
+                || response.triple_clicked();
+            if selected
+                && self.mouse.copy_on_select
+                && let Some(text) = self.selected_text(term.screen())
+            {
+                ui.ctx().copy_text(text);
+            }
+            let paste = match self.mouse.paste_button {
+                PasteButton::Middle => response.clicked_by(PointerButton::Middle),
+                // The menu then needs Ctrl (⌘).
+                PasteButton::Right => {
+                    response.secondary_clicked() && !ui.input(|i| i.modifiers.command)
+                }
+                PasteButton::Off => false,
+            };
+            if paste && let Some(text) = read_clipboard() {
+                let bracketed = term.screen().bracketed_paste();
+                self.paste(text, bracketed, input);
             }
         }
 
@@ -803,6 +911,53 @@ impl TerminalView {
         }
     }
 
+    /// The mouse pointer: hidden while typing (until it moves), a hand
+    /// over a web address with Ctrl (⌘) held.
+    fn pointer(
+        &mut self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        inner: Rect,
+        (cell_w, cell_h): (f32, f32),
+        term: &Terminal,
+    ) {
+        if !response.hovered() {
+            return;
+        }
+        let (moved, command, pos) = ui.input(|i| {
+            (
+                i.pointer.delta() != Vec2::ZERO,
+                i.modifiers.command,
+                i.pointer.hover_pos(),
+            )
+        });
+        if moved {
+            self.pointer_hidden = false;
+        }
+        if self.pointer_hidden {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+            return;
+        }
+        if self.mouse.open_urls
+            && command
+            && let Some(pos) = pos
+            && inner.contains(pos)
+        {
+            let screen = term.screen();
+            let col = (((pos.x - inner.left()) / cell_w).floor().max(0.0) as usize)
+                .min(screen.cols() - 1);
+            let row =
+                (((pos.y - inner.top()) / cell_h).floor().max(0.0) as usize).min(screen.rows() - 1);
+            let here = Point {
+                line: screen.history_base() + screen.view_row_index(row) as u64,
+                col,
+            };
+            if url_under(screen, here).is_some() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+        }
+    }
+
     fn handle_keys(
         &mut self,
         ui: &egui::Ui,
@@ -836,7 +991,7 @@ impl TerminalView {
                 egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => self.preedit = text,
                 egui::Event::Paste(text) => self.paste(text, bracketed, input),
                 egui::Event::Copy => {
-                    if let Some(text) = self.selection.and_then(|s| s.text(term.screen())) {
+                    if let Some(text) = self.selected_text(term.screen()) {
                         ui.ctx().copy_text(text);
                         self.selection = None;
                     } else if !cfg!(target_os = "macos") {
@@ -858,7 +1013,7 @@ impl TerminalView {
                     let ctrl_shift = modifiers.ctrl && modifiers.shift && !modifiers.alt;
                     match key {
                         Key::C if ctrl_shift => {
-                            if let Some(text) = self.selection.and_then(|s| s.text(term.screen())) {
+                            if let Some(text) = self.selected_text(term.screen()) {
                                 ui.ctx().copy_text(text);
                             }
                         }
@@ -873,6 +1028,8 @@ impl TerminalView {
                             term.screen_mut().scroll_display(isize::MAX / 2)
                         }
                         Key::End if modifiers.shift => term.screen_mut().reset_display(),
+                        // ^? or ^H, as the session says.
+                        Key::Backspace if modifiers.is_none() => input.push(self.backspace.byte()),
                         _ => {
                             if let Some(bytes) = encode_key(key, modifiers, app_cursor) {
                                 input.extend(bytes);
@@ -901,7 +1058,7 @@ impl TerminalView {
         term: &mut Terminal,
         input: &mut Vec<u8>,
     ) -> MenuChoice {
-        let text = self.selection.and_then(|s| s.text(term.screen()));
+        let text = self.selected_text(term.screen());
         let bracketed = term.screen().bracketed_paste();
         let mut choice = MenuChoice::default();
         // Text on one line can be found or highlighted as it is.
@@ -909,6 +1066,13 @@ impl TerminalView {
             .as_deref()
             .map(str::trim)
             .filter(|t| !t.is_empty() && !t.contains('\n') && t.chars().count() <= 200);
+        // With paste on the right button, the menu takes Ctrl (⌘) too.
+        if self.mouse.paste_button == PasteButton::Right
+            && response.secondary_clicked()
+            && !response.ctx.input(|i| i.modifiers.command)
+        {
+            return choice;
+        }
         response.context_menu(|ui| {
             crate::theme::menu(ui);
             if ui
@@ -1172,6 +1336,28 @@ fn paint_row(
 mod tests {
     use super::*;
     use przmterm_term::Color;
+
+    #[test]
+    fn web_addresses_under_the_pointer() {
+        let mut t = Terminal::new(60, 2);
+        t.feed(b"see https://example.com/a?b=1, or www.vandyke.com. ok");
+        let line = t.screen().line(0).to_vec();
+        assert_eq!(url_in(&line, 0), None);
+        assert_eq!(
+            url_in(&line, 4).as_deref(),
+            Some("https://example.com/a?b=1")
+        );
+        assert_eq!(
+            url_in(&line, 28).as_deref(),
+            Some("https://example.com/a?b=1")
+        );
+        assert_eq!(url_in(&line, 29), None, "the comma is not part of it");
+        assert_eq!(
+            url_in(&line, 36).as_deref(),
+            Some("https://www.vandyke.com")
+        );
+        assert_eq!(url_in(&line, 52), None);
+    }
 
     #[test]
     fn grid_rows_become_quads() {
