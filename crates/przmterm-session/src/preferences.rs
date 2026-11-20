@@ -21,6 +21,37 @@ pub struct Preferences {
     /// A release the user chose to skip: not announced at startup.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skipped_version: Option<String>,
+    /// What the mouse does in the terminal.
+    pub mouse: MouseOptions,
+}
+
+/// What the mouse does in the terminal (`[mouse]`). Everything is off
+/// unless chosen.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MouseOptions {
+    /// Copy what is selected at once.
+    pub copy_on_select: bool,
+    /// A mouse button pastes: `paste_button`.
+    pub paste: bool,
+    /// The button that pastes, when `paste` is on.
+    pub paste_button: PasteButton,
+    /// Hide the pointer while typing, until it moves.
+    pub hide_pointer: bool,
+    /// Ctrl+click (⌘+click on a Mac) on a web address opens it.
+    pub open_urls: bool,
+    /// A triple-click selects the line with its line break.
+    pub triple_click_newline: bool,
+}
+
+/// The mouse button that pastes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PasteButton {
+    #[default]
+    Middle,
+    /// The right button: the terminal then has no right-click menu.
+    Right,
 }
 
 /// Dark, light, or as the system is.
@@ -51,6 +82,7 @@ impl Default for Preferences {
             check_for_updates: true,
             look: Look::Dark,
             skipped_version: None,
+            mouse: MouseOptions::default(),
         }
     }
 }
@@ -88,6 +120,12 @@ mod tests {
             check_for_updates: false,
             look: Look::Light,
             skipped_version: Some("1.0.0-rc.2".into()),
+            mouse: MouseOptions {
+                copy_on_select: true,
+                paste: true,
+                paste_button: PasteButton::Right,
+                ..MouseOptions::default()
+            },
         };
         assert_eq!(
             Preferences::load(tmp.path()).look,

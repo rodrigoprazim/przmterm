@@ -264,7 +264,8 @@ display's cookie from `xauth`; the server only ever sees a random stand-in.
 | Zoom the pane's font in / out | Ctrl+wheel, Ctrl+= / Ctrl+- | ⌘+wheel or pinch, ⌘= / ⌘- |
 | Reset the zoom | Ctrl+0, or ⟲ in the status bar | ⌘0, or ⟲ |
 | Find in the session | Ctrl+Shift+F, or the magnifier in the status bar | ⌘F |
-| Global settings | the gear above the sessions | ⌘, |
+| Global settings (of the sessions) | the gear above the sessions | same |
+| PrzmTerm's settings (look, mouse) | **+** › *Settings…* | ⌘, |
 
 Zooming changes the font of the pane under the pointer (the keys: the
 active pane), a point at a time, and is not saved. While a pane is zoomed,
@@ -276,18 +277,35 @@ opens Copy / Paste, Find and Highlight (the text selected, when there is
 one) and Select all. Text with line breaks is shown before it is pasted, to
 check or edit it.
 
+**+** › *Settings…* (*PrzmTerm* › *Settings…* on macOS) has the *Mouse*
+options, for the whole app, all off until chosen:
+
+- *Copy on select*: what is selected is copied at once.
+- *Paste on* the middle or the right button. With the right one the
+  terminal has no right-click menu.
+- *Hide the mouse pointer while typing*, until it moves.
+- *Open web addresses with Ctrl+click* (⌘+click): the pointer turns into a
+  hand over an address while Ctrl (⌘) is held.
+- *Triple-click selects the line break too*.
+
+*Backspace sends*, on the *Terminal* page of the session settings, is `^H`
+(BS), as in SecureCRT: shells erase with it, and Huawei VRP and Nokia
+equipment need it (they read `^?` as "delete the character under the
+cursor"). `^?` (DEL, what Linux terminals send) is for the rare program that
+erases only with it, such as `cat` or a script's `read`, which show `^H`.
+
 *Font, Colors and Cursor…* in a tab's menu picks the font (the built-in one or
 any installed monospace font), its size, the terminal's background and text
 colours, the cursor (block, underline or bar), its colour and whether it blinks;
 *Save* keeps them for the session. They are also in the session settings
 (*Terminal* page), so a folder or the defaults can set them for many sessions.
 
-**+** › *Appearance…* (*PrzmTerm* › *Appearance…* on macOS) switches the
-interface between dark and light, or follows the system's mode. The terminal
+*Settings…* also switches the interface between dark and light, or follows the system's mode. The terminal
 keeps its own colours whichever is chosen.
 
 On macOS the PrzmTerm menu in the menu bar has *About PrzmTerm*, *Settings…*
-and the other app windows (shortcuts, vault, keyword sets, settings folder),
+(PrzmTerm's own) and the other app windows (shortcuts, vault, settings
+folder), without icons,
 and *Help* has the script guide and the project's page. Elsewhere they are in
 the **+** menu above the sessions.
 
@@ -426,10 +444,16 @@ Triggers are saved as plain text, so leave passwords to the keychain.
 ## Keyword highlighting
 
 A keyword set colours words and patterns in the output: `up` green, `down`
-red, IP addresses, MAC addresses… Choose one under **Keywords** in the
-session, folder or global settings (`keywords = "CORES"`). **+** ›
-*Keyword sets…* (or *Edit sets…* next to *Keywords*) opens the editor, with a
-live preview. Sets are files in `<config>/keywords/<name>.toml`:
+red, IP addresses, MAC addresses… It is optional: none is made unless you
+make one. The *Keywords* page of the session, folder or global settings has
+both: *Keyword set* at the top is the one this session uses (`keywords =
+"CORES"`; a set that is gone shows as *not found*), and *Keyword sets* below
+edits the sets, with a live preview. *Editing* picks the set to edit (which
+does not choose it for the session) and says which sessions use it; *New
+set* makes one; changes are saved with the settings. *Delete…* asks first;
+deleting a set takes it out of the sessions and folders that chose it, and
+renaming one renames it there. Sets are files in
+`<config>/keywords/<name>.toml`:
 
 ```toml
 [[rule]]
@@ -447,7 +471,8 @@ bold = true
 ```
 
 SecureCRT keyword lists (`Config/Keywords/*.ini`) come in with
-*Import from SecureCRT…*. Only text the remote side left uncoloured is
+*Import from SecureCRT…*, and open sessions that use them highlight with
+them at once. Only text the remote side left uncoloured is
 recoloured, so `ls --color` or `vim` keep their own colours.
 
 ### Highlights of one session

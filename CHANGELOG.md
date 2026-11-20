@@ -7,6 +7,41 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- *Backspace sends* in the session settings (*Terminal*): `^H` (BS, now
+  the default, as in SecureCRT) or `^?` (DEL, what PrzmTerm sent before).
+  Huawei VRP and Nokia read DEL as "delete the character under the
+  cursor", so Backspace seemed to work backwards there.
+- *Mouse* options in *Settings…* (for the whole app, all off until chosen):
+  copy on select, paste on the middle or right button (the right one then
+  replaces the terminal's menu), hide the pointer while typing, open web
+  addresses with Ctrl+click (⌘+click), and triple-click with the line break.
+
+### Changed
+
+- *Appearance…* is now *Settings…* (PrzmTerm's own: the look and the mouse,
+  ⌘, on macOS). The macOS menu no longer has the sessions' global settings
+  as a second *Settings…* (they stay on the gear), and its items have no
+  icons (macOS 26 put icons on only some of them).
+- Keyword sets have their own *Keywords* page in the session, folder and
+  global settings: the set the session uses at the top (a set that is gone
+  shows as *not found*), the sets' editor below (no separate window, no
+  *Keyword sets…* menu entry). *Editing* picks the set to edit and says
+  which sessions use it; deleting asks in a popup; the rules take the
+  whole width; changes are saved with the settings.
+- Open sessions that use an imported keyword set highlight with it at once.
+- *Import from SecureCRT…* asks for a folder only when there are sessions
+  to import (keyword sets and buttons are for every session).
+
+### Fixed
+
+- Deleting a keyword set no longer leaves sessions naming it (which printed
+  "No such file or directory" at each connection), and renaming one renames
+  it in the sessions that use it. A missing set is ignored quietly.
+- The keyword window no longer makes a new set on its own when there are
+  none or the last one is deleted.
+
 ## [1.0.0-rc.8] - 2026-11-19
 
 ### Added

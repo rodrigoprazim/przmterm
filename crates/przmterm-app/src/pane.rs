@@ -787,6 +787,13 @@ impl Pane {
                 }
                 self.view.highlighter = Some(std::rc::Rc::new(h));
             }
+            // Keywords are optional: a set that is gone (deleted, or never
+            // copied to this computer) just highlights nothing.
+            Err(przmterm_session::SessionError::Io { source, .. })
+                if source.kind() == std::io::ErrorKind::NotFound =>
+            {
+                tracing::debug!("keyword set {name} not found");
+            }
             Err(e) => self
                 .term
                 .feed(format!("\x1b[33m[Keywords {name}: {e}]\x1b[0m\r\n").as_bytes()),
@@ -987,6 +994,7 @@ impl Pane {
         if TerminalView::for_session(&old).look() != look {
             self.view.set_look(&look);
         }
+        self.view.backspace = session.backspace;
         if old.scrollback != session.scrollback {
             self.term.set_scrollback_limit(session.scrollback);
         }

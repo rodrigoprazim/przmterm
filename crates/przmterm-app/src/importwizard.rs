@@ -107,11 +107,15 @@ impl ImportWizard {
             .resizable(false)
             .show(ctx, |ui| {
                 ui.set_width(520.0);
-                ui.horizontal(|ui| {
-                    ui.label("Into the folder");
-                    crate::editor::name_field(ui, &mut self.into, "top level", f32::INFINITY);
-                });
-                ui.add_space(6.0);
+                // Only sessions go into a folder: keyword sets and buttons
+                // are for every session.
+                if !self.report.sessions.is_empty() {
+                    ui.horizontal(|ui| {
+                        ui.label("Put the sessions into the folder");
+                        crate::editor::name_field(ui, &mut self.into, "top level", f32::INFINITY);
+                    });
+                    ui.add_space(6.0);
+                }
                 let max = ctx.content_rect().height() * 0.45;
                 egui::ScrollArea::vertical()
                     .max_height(max)

@@ -179,6 +179,49 @@ pub struct TerminalSettings {
     /// The colour of plain text as `#rrggbb`; `""` is the default one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub foreground: Option<String>,
+    /// What the Backspace key sends (Huawei and Nokia want ^H).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backspace: Option<Backspace>,
+}
+
+/// What the Backspace key sends.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Backspace {
+    /// DEL, `^?` (0x7F): what Linux terminals send; programs reading a
+    /// line without editing it (`cat`, `read`) erase only with this one.
+    Delete,
+    /// BS, `^H` (0x08), as SecureCRT sends: shells and network equipment
+    /// (Huawei VRP and Nokia read DEL as "delete the character under the
+    /// cursor") erase with it.
+    #[default]
+    Backspace,
+}
+
+impl Backspace {
+    pub const ALL: [Backspace; 2] = [Backspace::Delete, Backspace::Backspace];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Backspace::Delete => "delete",
+            Backspace::Backspace => "backspace",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Backspace::Delete => "Delete (^?)",
+            Backspace::Backspace => "Backspace (^H)",
+        }
+    }
+
+    /// The byte it sends.
+    pub fn byte(self) -> u8 {
+        match self {
+            Backspace::Delete => 0x7f,
+            Backspace::Backspace => 0x08,
+        }
+    }
 }
 
 /// The terminal's background when none is chosen.
@@ -399,7 +442,7 @@ pub struct SessionSettings {
 }
 
 /// Keys of the individual settings, used to compare and copy them.
-pub const FIELDS: [&str; 40] = [
+pub const FIELDS: [&str; 41] = [
     "protocol",
     "host",
     "port",
@@ -435,6 +478,7 @@ pub const FIELDS: [&str; 40] = [
     "terminal.cursor_color",
     "terminal.background",
     "terminal.foreground",
+    "terminal.backspace",
     "log.enabled",
     "log.path",
     "log.dir",
@@ -483,6 +527,7 @@ impl SessionSettings {
             }
             "terminal.background" => self.terminal.background = from.terminal.background.clone(),
             "terminal.foreground" => self.terminal.foreground = from.terminal.foreground.clone(),
+            "terminal.backspace" => self.terminal.backspace = from.terminal.backspace,
             "log.enabled" => self.log.enabled = from.log.enabled,
             "log.path" => self.log.path = from.log.path.clone(),
             "log.dir" => self.log.dir = from.log.dir.clone(),
@@ -549,6 +594,7 @@ impl SessionSettings {
             "terminal.cursor_color" => self.terminal.cursor_color.clone(),
             "terminal.background" => self.terminal.background.clone(),
             "terminal.foreground" => self.terminal.foreground.clone(),
+            "terminal.backspace" => self.terminal.backspace.map(|b| b.label().to_string()),
             "log.enabled" => self.log.enabled.map(yes_no),
             "log.path" => self.log.path.clone(),
             "log.dir" => self.log.dir.clone(),
@@ -634,6 +680,7 @@ impl SessionSettings {
                 cursor_color: pick(&self.terminal.cursor_color, &over.terminal.cursor_color),
                 background: pick(&self.terminal.background, &over.terminal.background),
                 foreground: pick(&self.terminal.foreground, &over.terminal.foreground),
+                backspace: pick(&self.terminal.backspace, &over.terminal.backspace),
             },
             log: LogSettings {
                 enabled: pick(&self.log.enabled, &over.log.enabled),
@@ -667,6 +714,7 @@ impl SessionSettings {
             "terminal.cursor_blink" => s.terminal.cursor_blink = Some(false),
             "terminal.background" => s.terminal.background = Some(color_text(DEFAULT_BACKGROUND)),
             "terminal.foreground" => s.terminal.foreground = Some(color_text(DEFAULT_FOREGROUND)),
+            "terminal.backspace" => s.terminal.backspace = Some(Backspace::Backspace),
             "log.enabled" => s.log.enabled = Some(false),
             "debug" => s.debug = Some(false),
             "keepalive" => s.keepalive = Some(DEFAULT_KEEPALIVE),
@@ -753,6 +801,7 @@ pub struct Session {
     pub background: Option<[u8; 3]>,
     /// The colour of plain text; `None`: the default one.
     pub foreground: Option<[u8; 3]>,
+    pub backspace: Backspace,
     pub log_enabled: bool,
     pub log_path: Option<String>,
     /// Folder for relative log file names, with `~` expanded.
@@ -902,6 +951,7 @@ impl Session {
                 .foreground
                 .as_deref()
                 .and_then(parse_color),
+            backspace: settings.terminal.backspace.unwrap_or_default(),
             log_enabled: settings.log.enabled.unwrap_or(false),
             log_path: settings.log.path.clone(),
             log_dir: settings.log.dir.as_deref().map(expand_tilde),
@@ -1435,10 +1485,80 @@ pub fn write_keyword_set(
     Ok(path)
 }
 
-/// Deletes `<config>/keywords/<name>.toml`.
+/// Deletes `<config>/keywords/<name>.toml`. Sessions, folders and the
+/// global settings that chose it no longer name it (they take what is
+/// above them, as if they had never chosen one).
 pub fn delete_keyword_set(config_dir: &Path, name: &str) -> Result<(), SessionError> {
     let path = config_dir.join(KEYWORDS_DIR).join(format!("{name}.toml"));
-    fs::remove_file(&path).map_err(|source| SessionError::Io { path, source })
+    fs::remove_file(&path).map_err(|source| SessionError::Io { path, source })?;
+    rename_keyword_references(config_dir, name, None).map(|_| ())
+}
+
+/// The settings files (session, folder, global) that choose the keyword
+/// set `name`.
+pub fn keyword_set_users(config_dir: &Path, name: &str) -> Vec<PathBuf> {
+    settings_files(config_dir)
+        .into_iter()
+        .filter(|path| {
+            fs::read_to_string(path)
+                .ok()
+                .and_then(|text| toml::from_str::<toml::Table>(&text).ok())
+                .and_then(|t| t.get("keywords")?.as_str().map(|k| k == name))
+                .unwrap_or(false)
+        })
+        .collect()
+}
+
+/// Points the files that choose the keyword set `old` at `new` (after a
+/// rename), or at none (`None`, after it was deleted). Returns how many
+/// files changed.
+pub fn rename_keyword_references(
+    config_dir: &Path,
+    old: &str,
+    new: Option<&str>,
+) -> Result<usize, SessionError> {
+    let files = keyword_set_users(config_dir, old);
+    for path in &files {
+        let io = |source| SessionError::Io {
+            path: path.clone(),
+            source,
+        };
+        let text = fs::read_to_string(path).map_err(io)?;
+        let Ok(mut table) = toml::from_str::<toml::Table>(&text) else {
+            continue;
+        };
+        match new {
+            Some(new) => table.insert("keywords".into(), toml::Value::String(new.into())),
+            None => table.remove("keywords"),
+        };
+        fs::write(path, toml::to_string(&table).unwrap_or_default()).map_err(io)?;
+    }
+    Ok(files.len())
+}
+
+/// The global settings and every session and folder file.
+fn settings_files(config_dir: &Path) -> Vec<PathBuf> {
+    fn walk(dir: &Path, found: &mut Vec<PathBuf>) {
+        let Ok(read) = fs::read_dir(dir) else {
+            return;
+        };
+        let mut paths: Vec<PathBuf> = read.flatten().map(|e| e.path()).collect();
+        paths.sort();
+        for path in paths {
+            if path.is_dir() {
+                walk(&path, found);
+            } else if path.extension().is_some_and(|e| e == "toml") {
+                found.push(path);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    let defaults = config_dir.join(DEFAULTS_FILE);
+    if defaults.is_file() {
+        found.push(defaults);
+    }
+    walk(&config_dir.join(SESSIONS_DIR), &mut found);
+    found
 }
 
 /// Deletes the folder at `dir` with everything in it.
@@ -1910,6 +2030,65 @@ mod tests {
         assert_eq!(parse_color("#fff"), None);
         assert_eq!(parse_color(""), None);
         assert_eq!(color_text([0x6e, 0xc8, 0xff]), "#6ec8ff");
+    }
+
+    #[test]
+    fn deleting_or_renaming_a_keyword_set_updates_who_chose_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let set = KeywordSet::default();
+        write_keyword_set(dir, "Cores", &set).unwrap();
+        write_keyword_set(dir, "Other", &set).unwrap();
+        write(dir, DEFAULTS_FILE, "keywords = \"Cores\"\n");
+        write(dir, "sessions/Lab/folder.toml", "keywords = \"Cores\"\n");
+        write(
+            dir,
+            "sessions/Lab/r1.toml",
+            "host = \"10.0.0.1\"\nkeywords = \"Cores\"\n",
+        );
+        write(
+            dir,
+            "sessions/r2.toml",
+            "host = \"10.0.0.2\"\nkeywords = \"Other\"\n",
+        );
+        assert_eq!(keyword_set_users(dir, "Cores").len(), 3);
+
+        assert_eq!(
+            rename_keyword_references(dir, "Cores", Some("Core")).unwrap(),
+            3
+        );
+        assert!(keyword_set_users(dir, "Cores").is_empty());
+        assert_eq!(keyword_set_users(dir, "Core").len(), 3);
+
+        write_keyword_set(dir, "Core", &set).unwrap();
+        delete_keyword_set(dir, "Core").unwrap();
+        assert!(keyword_set_users(dir, "Core").is_empty());
+        let r1 = std::fs::read_to_string(dir.join("sessions/Lab/r1.toml")).unwrap();
+        assert!(r1.contains("10.0.0.1") && !r1.contains("keywords"), "{r1}");
+        assert_eq!(keyword_set_users(dir, "Other").len(), 1, "others untouched");
+        let tree = SessionTree::load(dir);
+        let r1 = tree
+            .root
+            .all_sessions()
+            .into_iter()
+            .find(|s| s.name == "r1")
+            .cloned();
+        assert_eq!(r1.unwrap().keywords, None);
+    }
+
+    #[test]
+    fn backspace_inherits() {
+        let defaults =
+            SessionSettings::from_toml("[terminal]\nbackspace = \"backspace\"\n").unwrap();
+        let both = defaults.overlay(&SessionSettings::default());
+        assert_eq!(both.terminal.backspace, Some(Backspace::Backspace));
+        assert_eq!(Backspace::Backspace.byte(), 0x08);
+        assert!(both.to_toml().contains("backspace = \"backspace\""));
+        let mine = SessionSettings::from_toml("[terminal]\nbackspace = \"delete\"\n").unwrap();
+        assert_eq!(
+            defaults.overlay(&mine).terminal.backspace,
+            Some(Backspace::Delete)
+        );
     }
 
     fn write(dir: &Path, rel: &str, text: &str) {
