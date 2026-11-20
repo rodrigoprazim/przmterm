@@ -31,6 +31,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
   which sessions use it; deleting asks in a popup; the rules take the
   whole width; changes are saved with the settings.
 - Open sessions that use an imported keyword set highlight with it at once.
+- *Import from SecureCRT…* asks for a folder only when there are sessions
+  to import (keyword sets and buttons are for every session).
 
 ### Fixed
 

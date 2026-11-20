@@ -498,7 +498,7 @@ impl KeywordEditor {
                     ..egui::style::ScrollStyle::solid()
                 };
                 rule_header(ui);
-                ui.separator();
+                ui.add(egui::Separator::default().spacing(6.0));
                 // As tall as the rules, up to about eight of them.
                 let row = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
                 let height = (row * count.max(1) as f32).min(row * 8.0);
@@ -620,7 +620,7 @@ fn plain(font: &egui::FontId) -> egui::TextFormat {
 const MOVE_W: f32 = 48.0;
 const KIND_W: f32 = 76.0;
 const COLOR_W: f32 = 60.0;
-const BACK_W: f32 = 84.0;
+const BACK_W: f32 = 60.0;
 const BOLD_W: f32 = 52.0;
 const REMOVE_W: f32 = 24.0;
 
@@ -638,9 +638,19 @@ fn text_width(ui: &egui::Ui) -> f32 {
     (ui.available_width() - MOVE_W - KIND_W - COLOR_W - BACK_W - BOLD_W - REMOVE_W - gaps).max(80.0)
 }
 
-/// A cell `width` wide in a row.
+/// A cell `width` wide in a row as tall as a field.
 fn cell<R>(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let height = ui.spacing().interact_size.y;
+    cell_of(ui, width, height, add)
+}
+
+/// A cell `width` by `height`, its content centred up and down.
+fn cell_of<R>(
+    ui: &mut egui::Ui,
+    width: f32,
+    height: f32,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
     ui.allocate_ui_with_layout(
         egui::vec2(width, height),
         egui::Layout::left_to_right(egui::Align::Center),
@@ -656,14 +666,18 @@ fn cell<R>(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui::Ui) -> R) 
 fn rule_header(ui: &mut egui::Ui) {
     // The rows below leave room for their scroll bar.
     let text = text_width(ui) - ui.spacing().scroll.allocated_width();
+    // Only as tall as the words: a title row, not a row of fields.
+    let h = ui.text_style_height(&egui::TextStyle::Body);
     ui.horizontal(|ui| {
-        cell(ui, MOVE_W, |_| ());
-        cell(ui, KIND_W, |ui| ui.weak("Type"));
-        cell(ui, text, |ui| ui.weak("Word or expression"));
-        cell(ui, COLOR_W, |ui| ui.weak("Colour"));
-        cell(ui, BACK_W, |ui| ui.weak("Background"));
-        cell(ui, BOLD_W, |_| ());
-        cell(ui, REMOVE_W, |_| ());
+        cell_of(ui, MOVE_W, h, |_| ());
+        cell_of(ui, KIND_W, h, |ui| ui.weak("Type"));
+        cell_of(ui, text, h, |ui| ui.weak("Word or expression"));
+        cell_of(ui, COLOR_W, h, |ui| ui.weak("Colour"));
+        cell_of(ui, BACK_W, h, |ui| {
+            ui.weak("Back").on_hover_text("Background colour")
+        });
+        cell_of(ui, BOLD_W, h, |_| ());
+        cell_of(ui, REMOVE_W, h, |_| ());
     });
 }
 
