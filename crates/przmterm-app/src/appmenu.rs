@@ -114,7 +114,7 @@ pub fn install(ctx: &egui::Context) -> Option<MenuBar> {
             &item(AppCommand::CheckUpdates, "Check for Updates…", None),
             &PredefinedMenuItem::separator(),
             &item(AppCommand::Settings, "Settings…", Some(Code::Comma)),
-            &item(AppCommand::Appearance, "Appearance…", None),
+            &item(AppCommand::Appearance, "Preferences…", None),
             &item(AppCommand::Shortcuts, "Keyboard Shortcuts…", None),
             &item(AppCommand::Vault, "Password Vault…", None),
             &item(AppCommand::SettingsFolder, "Settings Folder…", None),

@@ -276,8 +276,8 @@ opens Copy / Paste, Find and Highlight (the text selected, when there is
 one) and Select all. Text with line breaks is shown before it is pasted, to
 check or edit it. The middle button pastes.
 
-The *Mouse* options on the *Terminal* page of the session settings (or the
-global ones, for every session) change that:
+**+** › *Preferences…* (*PrzmTerm* › *Preferences…* on macOS) has the
+*Mouse* options, for the whole app:
 
 - *Copy on select*: what is selected is copied at once.
 - *Paste on*: the middle button, the right one (the menu then opens with
@@ -298,7 +298,7 @@ colours, the cursor (block, underline or bar), its colour and whether it blinks;
 *Save* keeps them for the session. They are also in the session settings
 (*Terminal* page), so a folder or the defaults can set them for many sessions.
 
-**+** › *Appearance…* (*PrzmTerm* › *Appearance…* on macOS) switches the
+**+** › *Preferences…* (*PrzmTerm* › *Preferences…* on macOS) switches the
 interface between dark and light, or follows the system's mode. The terminal
 keeps its own colours whichever is chosen.
 

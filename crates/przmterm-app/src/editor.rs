@@ -10,8 +10,8 @@ use eframe::egui;
 use przmterm_core::Protocol;
 use przmterm_session::{
     Backspace, COMMON_BAUD_RATES, DEFAULT_DATA_BITS, DEFAULT_STOP_BITS, FlowControl, Folder,
-    Forward, ForwardKind, LogSettings, McpAccess, McpSettings, Parity, PasteButton, Session,
-    SessionSettings, TerminalSettings, Trigger,
+    Forward, ForwardKind, LogSettings, McpAccess, McpSettings, Parity, Session, SessionSettings,
+    TerminalSettings, Trigger,
 };
 use przmterm_transport::serial::{PortInfo, available_ports};
 
@@ -152,8 +152,8 @@ pub struct Editor {
     cursor_color: Option<String>,
     background: Option<String>,
     foreground: Option<String>,
-    /// Backspace and the mouse options (the other fields stay unset).
-    keys_mouse: TerminalSettings,
+    /// What Backspace sends.
+    backspace: Option<Backspace>,
     /// The installed monospace fonts, given by the app once read.
     pub font_families: Option<crate::fonts::FontList>,
     log: Option<bool>,
@@ -336,11 +336,6 @@ impl Context<'_> {
             "terminal.background" => "default".into(),
             "terminal.foreground" => "default".into(),
             "terminal.backspace" => "Delete (^?)".into(),
-            "terminal.copy_on_select" => "no".into(),
-            "terminal.paste_button" => "middle".into(),
-            "terminal.hide_pointer" => "no".into(),
-            "terminal.open_urls" => "yes".into(),
-            "terminal.triple_click_newline" => "no".into(),
             "log.enabled" => "no".into(),
             "log.path" => przmterm_session::DEFAULT_LOG_TEMPLATE.into(),
             "log.dir" => self.logs_dir.clone(),
@@ -529,15 +524,7 @@ impl Editor {
             cursor_color: s.terminal.cursor_color.clone(),
             background: s.terminal.background.clone(),
             foreground: s.terminal.foreground.clone(),
-            keys_mouse: TerminalSettings {
-                backspace: s.terminal.backspace,
-                copy_on_select: s.terminal.copy_on_select,
-                paste_button: s.terminal.paste_button,
-                hide_pointer: s.terminal.hide_pointer,
-                open_urls: s.terminal.open_urls,
-                triple_click_newline: s.terminal.triple_click_newline,
-                ..TerminalSettings::default()
-            },
+            backspace: s.terminal.backspace,
             font_families: None,
             log: s.log.enabled,
             log_path: text(&s.log.path),
@@ -705,12 +692,7 @@ impl Editor {
                 cursor_color: self.cursor_color.clone(),
                 background: self.background.clone(),
                 foreground: self.foreground.clone(),
-                backspace: self.keys_mouse.backspace,
-                copy_on_select: self.keys_mouse.copy_on_select,
-                paste_button: self.keys_mouse.paste_button,
-                hide_pointer: self.keys_mouse.hide_pointer,
-                open_urls: self.keys_mouse.open_urls,
-                triple_click_newline: self.keys_mouse.triple_click_newline,
+                backspace: self.backspace,
             },
             log: LogSettings {
                 enabled: self.log,
@@ -1177,8 +1159,6 @@ impl Editor {
                     "Optional: colour words and patterns in the output with a keyword set.",
                 );
                 grid(ui, "editor-keywords", |ui| self.keyword_fields(ui, cx));
-                section(ui, "Mouse", "");
-                grid(ui, "editor-mouse", |ui| self.mouse_fields(ui, cx));
                 section(ui, "Font", "");
                 grid(ui, "editor-font", |ui| self.font_fields(ui, cx));
                 section(ui, "Colors", "");
@@ -1833,7 +1813,7 @@ impl Editor {
         let inherited = cx.inherited.terminal.backspace.unwrap_or_default();
         choice_pick(
             ui,
-            &mut self.keys_mouse.backspace,
+            &mut self.backspace,
             inherited,
             &Backspace::ALL.map(|b| (b, b.label())),
             &cx.hint("terminal.backspace"),
@@ -1901,82 +1881,6 @@ impl Editor {
             }
         });
         ui.end_row();
-    }
-
-    /// What the mouse does in the terminal.
-    fn mouse_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
-        let inherited = &cx.inherited.terminal;
-        let defaults = przmterm_session::MouseOptions::default();
-        let check = |ui: &mut egui::Ui,
-                     value: &mut Option<bool>,
-                     inherited: Option<bool>,
-                     default: bool,
-                     label: &str,
-                     key: &str| {
-            ui.label("");
-            ui.horizontal(|ui| {
-                let mut on = value.or(inherited).unwrap_or(default);
-                if crate::theme::checkbox(ui, &mut on, label).changed() {
-                    *value = Some(on);
-                }
-                reset(ui, value, &cx.hint(key));
-            });
-            ui.end_row();
-        };
-        check(
-            ui,
-            &mut self.keys_mouse.copy_on_select,
-            inherited.copy_on_select,
-            defaults.copy_on_select,
-            "Copy on select",
-            "terminal.copy_on_select",
-        );
-        ui.label("Paste on").on_hover_text(
-            "The mouse button that pastes. With the right one, Ctrl+right-click \
-             (⌘ on a Mac) opens the menu",
-        );
-        let effective = inherited.paste_button.unwrap_or(defaults.paste_button);
-        choice_pick(
-            ui,
-            &mut self.keys_mouse.paste_button,
-            effective,
-            &[
-                (PasteButton::Middle, "middle button"),
-                (PasteButton::Right, "right button"),
-                (PasteButton::Off, "off"),
-            ],
-            &cx.hint("terminal.paste_button"),
-        );
-        ui.end_row();
-        check(
-            ui,
-            &mut self.keys_mouse.hide_pointer,
-            inherited.hide_pointer,
-            defaults.hide_pointer,
-            "Hide the mouse pointer while typing",
-            "terminal.hide_pointer",
-        );
-        let open = if cfg!(target_os = "macos") {
-            "Open web addresses with ⌘+click"
-        } else {
-            "Open web addresses with Ctrl+click"
-        };
-        check(
-            ui,
-            &mut self.keys_mouse.open_urls,
-            inherited.open_urls,
-            defaults.open_urls,
-            open,
-            "terminal.open_urls",
-        );
-        check(
-            ui,
-            &mut self.keys_mouse.triple_click_newline,
-            inherited.triple_click_newline,
-            defaults.triple_click_newline,
-            "Triple-click selects the line break too",
-            "terminal.triple_click_newline",
-        );
     }
 
     /// The terminal text's font.

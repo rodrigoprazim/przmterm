@@ -2925,22 +2925,24 @@ impl PrzmApp {
         }
     }
 
-    /// The Appearance window: the interface's look.
+    /// The Preferences window: the interface's look and the mouse.
     fn appearance_ui(&mut self, ctx: &egui::Context) {
-        use przmterm_session::preferences::Look;
+        use przmterm_session::preferences::{Look, MouseOptions, PasteButton};
         if !self.appearance_window {
             return;
         }
         let mut open = true;
         let mut look = self.prefs.look;
-        egui::Window::new(crate::theme::window_title(ctx, "Appearance"))
+        let mut mouse = self.prefs.mouse;
+        egui::Window::new(crate::theme::window_title(ctx, "Preferences"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
             .auto_sized()
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
-                ui.set_max_width(340.0);
+                ui.set_max_width(380.0);
+                theme::section_title(ui, "Appearance");
                 ui.horizontal(|ui| {
                     ui.label("Interface");
                     ui.add_space(8.0);
@@ -2956,8 +2958,56 @@ impl PrzmApp {
                      background and text colors are in Settings → Terminal (for every \
                      session) and in Font, Colors and Cursor (for one tab).",
                 );
+                ui.add_space(10.0);
+                theme::section_title(ui, "Mouse");
+                theme::checkbox(ui, &mut mouse.copy_on_select, "Copy on select");
+                ui.horizontal(|ui| {
+                    ui.label("Paste on");
+                    let options = [
+                        (PasteButton::Middle, "middle button"),
+                        (PasteButton::Right, "right button"),
+                        (PasteButton::Off, "off"),
+                    ];
+                    let labels = options.map(|o| o.1);
+                    let chosen = options.iter().position(|o| o.0 == mouse.paste_button);
+                    if let Some(i) = theme::segmented(ui, chosen, &labels) {
+                        mouse.paste_button = options[i].0;
+                    }
+                });
+                if mouse.paste_button == PasteButton::Right {
+                    ui.weak(if cfg!(target_os = "macos") {
+                        "The menu then opens with ⌘+right-click."
+                    } else {
+                        "The menu then opens with Ctrl+right-click."
+                    });
+                }
+                theme::checkbox(
+                    ui,
+                    &mut mouse.hide_pointer,
+                    "Hide the mouse pointer while typing",
+                );
+                theme::checkbox(
+                    ui,
+                    &mut mouse.open_urls,
+                    if cfg!(target_os = "macos") {
+                        "Open web addresses with ⌘+click"
+                    } else {
+                        "Open web addresses with Ctrl+click"
+                    },
+                );
+                theme::checkbox(
+                    ui,
+                    &mut mouse.triple_click_newline,
+                    "Triple-click selects the line break too",
+                );
+                if mouse != MouseOptions::default()
+                    && ui.small_button("Back to the defaults").clicked()
+                {
+                    mouse = MouseOptions::default();
+                }
             });
-        if look != self.prefs.look {
+        if look != self.prefs.look || mouse != self.prefs.mouse {
+            self.prefs.mouse = mouse;
             self.prefs.look = look;
             if let Some(dir) = &self.config_dir
                 && let Err(e) = self.prefs.save(dir)
@@ -3596,6 +3646,7 @@ impl PrzmApp {
         // Each pane draws in the font it asks for (loaded when first asked).
         for pane in &mut self.tabs[self.active_tab].panes {
             pane.view.family = self.fonts.family(&ctx, pane.view.font_name.as_deref());
+            pane.view.mouse = self.prefs.mouse;
         }
         let mut typed: Option<Vec<u8>> = None;
         let mut pasted: Option<(usize, String)> = None;
@@ -6180,7 +6231,11 @@ impl eframe::App for PrzmApp {
                                 self.pick_securecrt(true);
                             }
                             ui.separator();
-                            if ui.button("Appearance…").clicked() {
+                            if ui
+                                .button("Preferences…")
+                                .on_hover_text("The app's own: its look and the mouse")
+                                .clicked()
+                            {
                                 menu_command = Some(appmenu::AppCommand::Appearance);
                                 ui.close();
                             }

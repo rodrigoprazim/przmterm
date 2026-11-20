@@ -215,9 +215,9 @@ and, when a device is at hand, a serial console (Xmodem or Ymodem).
   on save; `delete -f` for folders in the PrzmTerm shell
 - [x] `przm add`, `delete`, `export` and `import`, and shell completion
   for `przm`
-- [x] Backspace `^H` option and mouse options (copy on select, paste
-  button, hide pointer, Ctrl+click URLs, triple-click newline); keyword sets
-  managed from the session settings
+- [x] Backspace `^H` option per session; mouse preferences (copy on
+  select, paste button, hide pointer, Ctrl+click URLs, triple-click
+  newline); keyword sets managed from the session settings
 - [x] User guide and scripting reference: [docs/GUIDE.md](docs/GUIDE.md)
   and [docs/SCRIPTING.md](docs/SCRIPTING.md)
 - [x] Buttons and shortcuts that type a password can require the prompt

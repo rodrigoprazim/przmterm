@@ -995,7 +995,6 @@ impl Pane {
             self.view.set_look(&look);
         }
         self.view.backspace = session.backspace;
-        self.view.mouse = session.mouse;
         if old.scrollback != session.scrollback {
             self.term.set_scrollback_limit(session.scrollback);
         }

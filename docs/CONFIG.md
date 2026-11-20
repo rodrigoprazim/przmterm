@@ -218,11 +218,6 @@ Used when `protocol = "serial"`.
 | `background` | `"#rrggbb"` | `"#181a1f"` | The terminal's background. `""` is the default one. |
 | `foreground` | `"#rrggbb"` | `"#d8dee9"` | The colour of plain text. `""` is the default one. |
 | `backspace` | `"delete"` or `"backspace"` | `"delete"` | What Backspace sends: `^?` (DEL, 0x7F) or `^H` (BS, 0x08). Huawei VRP and Nokia want `"backspace"`; with `"delete"` they erase the character under the cursor. |
-| `copy_on_select` | `true` or `false` | `false` | Copy what is selected with the mouse at once. |
-| `paste_button` | `"middle"`, `"right"` or `"off"` | `"middle"` | The mouse button that pastes. With `"right"`, Ctrl+right-click (⌘ on a Mac) opens the menu. |
-| `hide_pointer` | `true` or `false` | `false` | Hide the mouse pointer while typing, until it moves. |
-| `open_urls` | `true` or `false` | `true` | Ctrl+click (⌘+click on a Mac) on a web address opens it. |
-| `triple_click_newline` | `true` or `false` | `false` | A triple-click selects the line with its line break. |
 
 ### `[log]`
 
@@ -435,13 +430,30 @@ The app's own settings, not those of sessions.
 check_for_updates = true
 look = "dark"
 skipped_version = "1.0.0-rc.2"
+
+[mouse]
+copy_on_select = true
+paste_button = "middle"
+hide_pointer = false
+open_urls = true
+triple_click_newline = false
 ```
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `check_for_updates` | `true` or `false` | `true` | Look for a newer release on GitHub when PrzmTerm starts. |
-| `look` | `"dark"`, `"light"` or `"system"` | `"dark"` | The interface's look (*Appearance…*). `system` follows the computer's mode. |
+| `look` | `"dark"`, `"light"` or `"system"` | `"dark"` | The interface's look (*Preferences…*). `system` follows the computer's mode. |
 | `skipped_version` | text | none | A release chosen with *Skip This Version*: PrzmTerm does not announce it when it starts. *Check for Updates…* still shows it. |
+
+`[mouse]`, what the mouse does in the terminal (*Preferences…*):
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `copy_on_select` | `true` or `false` | `false` | Copy what is selected at once. |
+| `paste_button` | `"middle"`, `"right"` or `"off"` | `"middle"` | The button that pastes. With `"right"`, Ctrl+right-click (⌘ on a Mac) opens the menu. |
+| `hide_pointer` | `true` or `false` | `false` | Hide the pointer while typing, until it moves. |
+| `open_urls` | `true` or `false` | `true` | Ctrl+click (⌘+click on a Mac) on a web address opens it. |
+| `triple_click_newline` | `true` or `false` | `false` | A triple-click selects the line with its line break. |
 
 A broken file is read as the defaults: preferences never stop PrzmTerm from
 starting.

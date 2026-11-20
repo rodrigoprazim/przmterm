@@ -21,6 +21,47 @@ pub struct Preferences {
     /// A release the user chose to skip: not announced at startup.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skipped_version: Option<String>,
+    /// What the mouse does in the terminal.
+    pub mouse: MouseOptions,
+}
+
+/// What the mouse does in the terminal (`[mouse]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MouseOptions {
+    /// Copy what is selected at once.
+    pub copy_on_select: bool,
+    /// The button that pastes.
+    pub paste_button: PasteButton,
+    /// Hide the pointer while typing, until it moves.
+    pub hide_pointer: bool,
+    /// Ctrl+click (⌘+click on a Mac) on a web address opens it.
+    pub open_urls: bool,
+    /// A triple-click selects the line with its line break.
+    pub triple_click_newline: bool,
+}
+
+impl Default for MouseOptions {
+    fn default() -> Self {
+        Self {
+            copy_on_select: false,
+            paste_button: PasteButton::Middle,
+            hide_pointer: false,
+            open_urls: true,
+            triple_click_newline: false,
+        }
+    }
+}
+
+/// The mouse button that pastes, if any.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PasteButton {
+    Off,
+    #[default]
+    Middle,
+    /// The right button: the menu then opens with Ctrl (⌘) + right-click.
+    Right,
 }
 
 /// Dark, light, or as the system is.
@@ -51,6 +92,7 @@ impl Default for Preferences {
             check_for_updates: true,
             look: Look::Dark,
             skipped_version: None,
+            mouse: MouseOptions::default(),
         }
     }
 }
@@ -88,6 +130,11 @@ mod tests {
             check_for_updates: false,
             look: Look::Light,
             skipped_version: Some("1.0.0-rc.2".into()),
+            mouse: MouseOptions {
+                copy_on_select: true,
+                paste_button: PasteButton::Right,
+                ..MouseOptions::default()
+            },
         };
         assert_eq!(
             Preferences::load(tmp.path()).look,

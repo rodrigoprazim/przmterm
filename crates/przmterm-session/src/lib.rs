@@ -182,21 +182,6 @@ pub struct TerminalSettings {
     /// What the Backspace key sends (Huawei and Nokia want ^H).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backspace: Option<Backspace>,
-    /// Copy what is selected with the mouse at once.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub copy_on_select: Option<bool>,
-    /// The mouse button that pastes.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub paste_button: Option<PasteButton>,
-    /// Hide the mouse pointer while typing (until it moves).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hide_pointer: Option<bool>,
-    /// Ctrl+click (⌘+click on a Mac) on a web address opens it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub open_urls: Option<bool>,
-    /// A triple-click selects the line with its line break.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub triple_click_newline: Option<bool>,
 }
 
 /// What the Backspace key sends.
@@ -233,49 +218,6 @@ impl Backspace {
         match self {
             Backspace::Delete => 0x7f,
             Backspace::Backspace => 0x08,
-        }
-    }
-}
-
-/// The mouse button that pastes, if any.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum PasteButton {
-    Off,
-    #[default]
-    Middle,
-    /// The right button: the menu opens with Ctrl (⌘) + right-click.
-    Right,
-}
-
-impl PasteButton {
-    pub fn name(self) -> &'static str {
-        match self {
-            PasteButton::Off => "off",
-            PasteButton::Middle => "middle",
-            PasteButton::Right => "right",
-        }
-    }
-}
-
-/// What the mouse does in the terminal, after inheritance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MouseOptions {
-    pub copy_on_select: bool,
-    pub paste_button: PasteButton,
-    pub hide_pointer: bool,
-    pub open_urls: bool,
-    pub triple_click_newline: bool,
-}
-
-impl Default for MouseOptions {
-    fn default() -> Self {
-        Self {
-            copy_on_select: false,
-            paste_button: PasteButton::Middle,
-            hide_pointer: false,
-            open_urls: true,
-            triple_click_newline: false,
         }
     }
 }
@@ -498,7 +440,7 @@ pub struct SessionSettings {
 }
 
 /// Keys of the individual settings, used to compare and copy them.
-pub const FIELDS: [&str; 46] = [
+pub const FIELDS: [&str; 41] = [
     "protocol",
     "host",
     "port",
@@ -535,11 +477,6 @@ pub const FIELDS: [&str; 46] = [
     "terminal.background",
     "terminal.foreground",
     "terminal.backspace",
-    "terminal.copy_on_select",
-    "terminal.paste_button",
-    "terminal.hide_pointer",
-    "terminal.open_urls",
-    "terminal.triple_click_newline",
     "log.enabled",
     "log.path",
     "log.dir",
@@ -589,15 +526,6 @@ impl SessionSettings {
             "terminal.background" => self.terminal.background = from.terminal.background.clone(),
             "terminal.foreground" => self.terminal.foreground = from.terminal.foreground.clone(),
             "terminal.backspace" => self.terminal.backspace = from.terminal.backspace,
-            "terminal.copy_on_select" => {
-                self.terminal.copy_on_select = from.terminal.copy_on_select;
-            }
-            "terminal.paste_button" => self.terminal.paste_button = from.terminal.paste_button,
-            "terminal.hide_pointer" => self.terminal.hide_pointer = from.terminal.hide_pointer,
-            "terminal.open_urls" => self.terminal.open_urls = from.terminal.open_urls,
-            "terminal.triple_click_newline" => {
-                self.terminal.triple_click_newline = from.terminal.triple_click_newline;
-            }
             "log.enabled" => self.log.enabled = from.log.enabled,
             "log.path" => self.log.path = from.log.path.clone(),
             "log.dir" => self.log.dir = from.log.dir.clone(),
@@ -665,11 +593,6 @@ impl SessionSettings {
             "terminal.background" => self.terminal.background.clone(),
             "terminal.foreground" => self.terminal.foreground.clone(),
             "terminal.backspace" => self.terminal.backspace.map(|b| b.label().to_string()),
-            "terminal.copy_on_select" => self.terminal.copy_on_select.map(yes_no),
-            "terminal.paste_button" => self.terminal.paste_button.map(|b| b.name().to_string()),
-            "terminal.hide_pointer" => self.terminal.hide_pointer.map(yes_no),
-            "terminal.open_urls" => self.terminal.open_urls.map(yes_no),
-            "terminal.triple_click_newline" => self.terminal.triple_click_newline.map(yes_no),
             "log.enabled" => self.log.enabled.map(yes_no),
             "log.path" => self.log.path.clone(),
             "log.dir" => self.log.dir.clone(),
@@ -756,14 +679,6 @@ impl SessionSettings {
                 background: pick(&self.terminal.background, &over.terminal.background),
                 foreground: pick(&self.terminal.foreground, &over.terminal.foreground),
                 backspace: pick(&self.terminal.backspace, &over.terminal.backspace),
-                copy_on_select: pick(&self.terminal.copy_on_select, &over.terminal.copy_on_select),
-                paste_button: pick(&self.terminal.paste_button, &over.terminal.paste_button),
-                hide_pointer: pick(&self.terminal.hide_pointer, &over.terminal.hide_pointer),
-                open_urls: pick(&self.terminal.open_urls, &over.terminal.open_urls),
-                triple_click_newline: pick(
-                    &self.terminal.triple_click_newline,
-                    &over.terminal.triple_click_newline,
-                ),
             },
             log: LogSettings {
                 enabled: pick(&self.log.enabled, &over.log.enabled),
@@ -798,20 +713,6 @@ impl SessionSettings {
             "terminal.background" => s.terminal.background = Some(color_text(DEFAULT_BACKGROUND)),
             "terminal.foreground" => s.terminal.foreground = Some(color_text(DEFAULT_FOREGROUND)),
             "terminal.backspace" => s.terminal.backspace = Some(Backspace::Delete),
-            "terminal.copy_on_select" => {
-                s.terminal.copy_on_select = Some(MouseOptions::default().copy_on_select);
-            }
-            "terminal.paste_button" => {
-                s.terminal.paste_button = Some(MouseOptions::default().paste_button);
-            }
-            "terminal.hide_pointer" => {
-                s.terminal.hide_pointer = Some(MouseOptions::default().hide_pointer);
-            }
-            "terminal.open_urls" => s.terminal.open_urls = Some(MouseOptions::default().open_urls),
-            "terminal.triple_click_newline" => {
-                s.terminal.triple_click_newline =
-                    Some(MouseOptions::default().triple_click_newline);
-            }
             "log.enabled" => s.log.enabled = Some(false),
             "debug" => s.debug = Some(false),
             "keepalive" => s.keepalive = Some(DEFAULT_KEEPALIVE),
@@ -899,7 +800,6 @@ pub struct Session {
     /// The colour of plain text; `None`: the default one.
     pub foreground: Option<[u8; 3]>,
     pub backspace: Backspace,
-    pub mouse: MouseOptions,
     pub log_enabled: bool,
     pub log_path: Option<String>,
     /// Folder for relative log file names, with `~` expanded.
@@ -1050,17 +950,6 @@ impl Session {
                 .as_deref()
                 .and_then(parse_color),
             backspace: settings.terminal.backspace.unwrap_or_default(),
-            mouse: {
-                let t = &settings.terminal;
-                let d = MouseOptions::default();
-                MouseOptions {
-                    copy_on_select: t.copy_on_select.unwrap_or(d.copy_on_select),
-                    paste_button: t.paste_button.unwrap_or(d.paste_button),
-                    hide_pointer: t.hide_pointer.unwrap_or(d.hide_pointer),
-                    open_urls: t.open_urls.unwrap_or(d.open_urls),
-                    triple_click_newline: t.triple_click_newline.unwrap_or(d.triple_click_newline),
-                }
-            },
             log_enabled: settings.log.enabled.unwrap_or(false),
             log_path: settings.log.path.clone(),
             log_dir: settings.log.dir.as_deref().map(expand_tilde),
@@ -2186,18 +2075,18 @@ mod tests {
     }
 
     #[test]
-    fn backspace_and_mouse_inherit() {
-        let defaults = SessionSettings::from_toml(
-            "[terminal]\nbackspace = \"backspace\"\npaste_button = \"right\"\ncopy_on_select = true\n",
-        )
-        .unwrap();
-        let mine = SessionSettings::from_toml("[terminal]\npaste_button = \"off\"\n").unwrap();
-        let both = defaults.overlay(&mine);
+    fn backspace_inherits() {
+        let defaults =
+            SessionSettings::from_toml("[terminal]\nbackspace = \"backspace\"\n").unwrap();
+        let both = defaults.overlay(&SessionSettings::default());
         assert_eq!(both.terminal.backspace, Some(Backspace::Backspace));
-        assert_eq!(both.terminal.paste_button, Some(PasteButton::Off));
-        assert_eq!(both.terminal.copy_on_select, Some(true));
         assert_eq!(Backspace::Backspace.byte(), 0x08);
         assert!(both.to_toml().contains("backspace = \"backspace\""));
+        let mine = SessionSettings::from_toml("[terminal]\nbackspace = \"delete\"\n").unwrap();
+        assert_eq!(
+            defaults.overlay(&mine).terminal.backspace,
+            Some(Backspace::Delete)
+        );
     }
 
     fn write(dir: &Path, rel: &str, text: &str) {

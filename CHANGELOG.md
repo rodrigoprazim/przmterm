@@ -12,13 +12,14 @@ All notable changes to PrzmTerm are recorded here. The format follows
 - *Backspace sends* in the session settings (*Terminal*): `^?` (DEL, the
   default) or `^H` (BS), for Huawei VRP, Nokia and other equipment that
   erase the character under the cursor on DEL.
-- *Mouse* options in the session settings (*Terminal*): copy on select,
+- *Mouse* options in *Preferences…* (for the whole app): copy on select,
   paste on the middle or right button (or neither), hide the pointer while
   typing, open web addresses with Ctrl+click (⌘+click), and triple-click
   with the line break.
 
 ### Changed
 
+- *Appearance…* is now *Preferences…*: the interface's look and the mouse.
 - Keyword sets are chosen and managed in the session settings (*Terminal* ›
   *Keywords*: *New set…*, *Edit …*); the *Keyword sets…* menu entry is gone.
   The keyword window picks the set to edit from a list, says which sessions

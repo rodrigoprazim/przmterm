@@ -9,7 +9,8 @@ use eframe::egui::{
     Sense, Stroke, Vec2,
     text::{LayoutJob, TextFormat},
 };
-use przmterm_session::{CursorShape, PasteButton};
+use przmterm_session::CursorShape;
+use przmterm_session::preferences::{MouseOptions, PasteButton};
 use przmterm_term::{Cell, Screen, Style, Terminal};
 
 use crate::input::{encode_key, encode_paste};
@@ -312,7 +313,8 @@ pub struct TerminalView {
     pending_paste: Option<String>,
     /// What Backspace sends.
     pub backspace: przmterm_session::Backspace,
-    pub mouse: przmterm_session::MouseOptions,
+    /// The mouse options of the app preferences, set by the app each frame.
+    pub mouse: MouseOptions,
     /// Hidden while typing (see [`MouseOptions::hide_pointer`]), until the
     /// pointer moves.
     pointer_hidden: bool,
@@ -341,7 +343,7 @@ impl Default for TerminalView {
             preedit: String::new(),
             pending_paste: None,
             backspace: przmterm_session::Backspace::default(),
-            mouse: przmterm_session::MouseOptions::default(),
+            mouse: MouseOptions::default(),
             pointer_hidden: false,
         }
     }
@@ -367,7 +369,6 @@ impl TerminalView {
         view.background = session.background;
         view.foreground = session.foreground;
         view.backspace = session.backspace;
-        view.mouse = session.mouse;
         view
     }
 
