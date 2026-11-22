@@ -3006,9 +3006,6 @@ impl PrzmApp {
                     });
                     ui.label("button");
                 });
-                if mouse.paste && mouse.paste_button == PasteButton::Right {
-                    ui.weak("The terminal then has no right-click menu.");
-                }
                 theme::checkbox(
                     ui,
                     &mut mouse.hide_pointer,

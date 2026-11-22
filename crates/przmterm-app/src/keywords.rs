@@ -250,16 +250,6 @@ impl KeywordEditor {
         }
         if self.pending.is_some() {
             self.pending_ui(ui);
-        } else if self.dirty() {
-            ui.horizontal(|ui| {
-                ui.colored_label(
-                    ui.visuals().warn_fg_color,
-                    "Unsaved changes: saved with the settings.",
-                );
-                if ui.small_button("Discard").clicked() {
-                    self.discard();
-                }
-            });
         }
     }
 
@@ -499,9 +489,9 @@ impl KeywordEditor {
                 };
                 rule_header(ui);
                 ui.add(egui::Separator::default().spacing(6.0));
-                // As tall as the rules, up to about eight of them.
+                // As tall as the rules, up to six of them.
                 let row = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
-                let height = (row * count.max(1) as f32).min(row * 8.0);
+                let height = (row * count.max(1) as f32).min(row * 6.0);
                 egui::ScrollArea::vertical()
                     .id_salt("keyword-rules")
                     .min_scrolled_height(height)
@@ -535,13 +525,27 @@ impl KeywordEditor {
             self.set.rules.swap(a, b);
         }
         ui.add_space(4.0);
-        let text = ui.visuals().text_color();
-        if icons::icon_text_button(ui, Icon::Plus, text, "Add rule", None, None).clicked() {
-            self.set.rules.push(Keyword {
-                color: Some("#ffff00".into()),
-                ..Keyword::default()
-            });
-        }
+        // Add rule, and beside it whether there is something to save.
+        let dirty = self.dirty() && self.pending.is_none();
+        ui.horizontal(|ui| {
+            let text = ui.visuals().text_color();
+            if icons::icon_text_button(ui, Icon::Plus, text, "Add rule", None, None).clicked() {
+                self.set.rules.push(Keyword {
+                    color: Some("#ffff00".into()),
+                    ..Keyword::default()
+                });
+            }
+            if dirty {
+                ui.add_space(8.0);
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    "Unsaved changes: saved with the settings.",
+                );
+                if ui.small_button("Discard").clicked() {
+                    self.discard();
+                }
+            }
+        });
 
         ui.add_space(8.0);
         ui.strong("Preview");
