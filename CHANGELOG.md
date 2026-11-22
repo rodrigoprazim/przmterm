@@ -20,6 +20,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Changed
 
+- *About PrzmTerm* reads "A fast, lightweight terminal for SSH, Telnet and
+  serial, built in Rust."
 - The yes/no choices in the session, folder and global settings (debug
   login, legacy algorithms, X11 forwarding, reconnect, log to file) are
   checkboxes.
