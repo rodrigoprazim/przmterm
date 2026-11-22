@@ -41,6 +41,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Fixed
 
+- `url` 2.5.9 (RUSTSEC-2026-0592: a stack overflow on nested `blob:`
+  URLs, through the file dialog and the browser opener).
 - Deleting a keyword set no longer leaves sessions naming it (which printed
   "No such file or directory" at each connection), and renaming one renames
   it in the sessions that use it. A missing set is ignored quietly.
