@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use eframe::egui;
 use przmterm_core::Protocol;
 use przmterm_session::{
-    COMMON_BAUD_RATES, DEFAULT_DATA_BITS, DEFAULT_STOP_BITS, FlowControl, Folder, Forward,
-    ForwardKind, LogSettings, McpAccess, McpSettings, Parity, Session, SessionSettings,
+    Backspace, COMMON_BAUD_RATES, DEFAULT_DATA_BITS, DEFAULT_STOP_BITS, FlowControl, Folder,
+    Forward, ForwardKind, LogSettings, McpAccess, McpSettings, Parity, Session, SessionSettings,
     TerminalSettings, Trigger,
 };
 use przmterm_transport::serial::{PortInfo, available_ports};
@@ -82,6 +82,7 @@ enum Page {
     Ssh,
     Serial,
     Terminal,
+    Keywords,
     Automation,
     Logging,
     Mcp,
@@ -95,6 +96,7 @@ impl Page {
             Page::Ssh => "SSH",
             Page::Serial => "Serial port",
             Page::Terminal => "Terminal",
+            Page::Keywords => "Keywords",
             Page::Automation => "Automation",
             Page::Logging => "Logging",
             Page::Mcp => "AI access",
@@ -152,6 +154,8 @@ pub struct Editor {
     cursor_color: Option<String>,
     background: Option<String>,
     foreground: Option<String>,
+    /// What Backspace sends.
+    backspace: Option<Backspace>,
     /// The installed monospace fonts, given by the app once read.
     pub font_families: Option<crate::fonts::FontList>,
     log: Option<bool>,
@@ -170,8 +174,10 @@ pub struct Editor {
     anti_idle: String,
     anti_idle_interval: String,
     scp_shell: String,
-    /// The keyword editor was asked for, for this set (if any).
-    keyword_request: Option<Option<String>>,
+    /// The keyword sets' editor on the Keywords page (made when first shown).
+    keyword_ed: Option<crate::keywords::KeywordEditor>,
+    /// Sets saved, renamed or deleted, for the app (open sessions follow).
+    keyword_changes: Vec<crate::keywords::KeywordChange>,
     /// Tunnels set here; `None` inherits the list from above.
     forwards: Option<Vec<Forward>>,
     /// Triggers set here; `None` inherits the list from above.
@@ -331,6 +337,7 @@ impl Context<'_> {
             "terminal.cursor_color" => "default".into(),
             "terminal.background" => "default".into(),
             "terminal.foreground" => "default".into(),
+            "terminal.backspace" => "Backspace (^H)".into(),
             "log.enabled" => "no".into(),
             "log.path" => przmterm_session::DEFAULT_LOG_TEMPLATE.into(),
             "log.dir" => self.logs_dir.clone(),
@@ -519,6 +526,7 @@ impl Editor {
             cursor_color: s.terminal.cursor_color.clone(),
             background: s.terminal.background.clone(),
             foreground: s.terminal.foreground.clone(),
+            backspace: s.terminal.backspace,
             font_families: None,
             log: s.log.enabled,
             log_path: text(&s.log.path),
@@ -535,7 +543,8 @@ impl Editor {
             anti_idle: s.anti_idle.clone().unwrap_or_default(),
             anti_idle_interval: text(&s.anti_idle_interval),
             scp_shell: text(&s.scp_shell),
-            keyword_request: None,
+            keyword_ed: None,
+            keyword_changes: Vec::new(),
             forwards: s.forwards.clone(),
             triggers: s.triggers.clone(),
             show_log_help: false,
@@ -563,9 +572,31 @@ impl Editor {
         std::mem::take(&mut self.unlock_request)
     }
 
-    /// The set to open the keyword editor on, once, when asked for.
-    pub fn take_keyword_request(&mut self) -> Option<Option<String>> {
-        self.keyword_request.take()
+    /// The keyword sets saved, renamed or deleted since the last call.
+    pub fn take_keyword_changes(&mut self) -> Vec<crate::keywords::KeywordChange> {
+        std::mem::take(&mut self.keyword_changes)
+    }
+
+    /// Takes the keyword editor's changes: this form follows sets renamed
+    /// or deleted, and the app hears of them.
+    fn absorb_keyword_changes(&mut self) {
+        use crate::keywords::KeywordChange;
+        let Some(ed) = &mut self.keyword_ed else {
+            return;
+        };
+        let changes = ed.take_changes();
+        for change in &changes {
+            match change {
+                KeywordChange::Renamed(old, new) if self.keywords.as_ref() == Some(old) => {
+                    self.keywords = Some(new.clone());
+                }
+                KeywordChange::Deleted(name) if self.keywords.as_ref() == Some(name) => {
+                    self.keywords = None;
+                }
+                _ => {}
+            }
+        }
+        self.keyword_changes.extend(changes);
     }
 
     fn is_session(&self) -> bool {
@@ -660,6 +691,7 @@ impl Editor {
                 cursor_color: self.cursor_color.clone(),
                 background: self.background.clone(),
                 foreground: self.foreground.clone(),
+                backspace: self.backspace,
             },
             log: LogSettings {
                 enabled: self.log,
@@ -713,6 +745,15 @@ impl Editor {
 
     /// Saves, or for the global defaults with changes, asks first.
     fn save_or_confirm(&mut self, config_dir: &Path) -> Result<Option<String>, String> {
+        // A keyword set being edited is saved with the settings.
+        if let Some(ed) = &mut self.keyword_ed {
+            let saved = ed.save_if_dirty();
+            self.absorb_keyword_changes();
+            if let Err(e) = saved {
+                self.page = Page::Keywords;
+                return Err(e);
+            }
+        }
         if self.target == Target::Global {
             let new = self.settings()?;
             let keys = self.original.changed_fields(&new);
@@ -807,7 +848,9 @@ impl Editor {
             logs_dir,
             config_dir,
         };
-        let popup = egui::Popup::is_any_open(ctx);
+        // A popup, or the keyword set's delete question, has Enter and Esc.
+        let popup = egui::Popup::is_any_open(ctx)
+            || self.keyword_ed.as_ref().is_some_and(|k| k.modal_open());
         let (enter, escape) = ctx.input(|i| {
             (
                 i.key_pressed(egui::Key::Enter),
@@ -818,7 +861,11 @@ impl Editor {
         // Anchored at its top: a page that grows the window pushes its
         // bottom down, and nothing moves under the pointer.
         let screen = ctx.content_rect();
+        // The Keywords page is wider: a window of its own size, so the
+        // others go back to theirs.
+        let wide = self.page == Page::Keywords;
         egui::Window::new(crate::theme::window_title(ctx, self.title.clone()))
+            .id(egui::Id::unique(("session-editor", wide)))
             .pivot(egui::Align2::CENTER_TOP)
             .default_pos(egui::pos2(
                 screen.center().x,
@@ -924,11 +971,14 @@ impl Editor {
                     ui.add_space(14.0);
                     // The page, as tall as it needs (at least as tall as the
                     // menu); a scroll bar only when the screen is too short.
+                    // The keyword rules want more room than a form.
+                    // (As the window was chosen, before a click this frame.)
+                    let page_w = if wide { 720.0 } else { 520.0 };
                     ui.allocate_ui_with_layout(
-                        egui::vec2(520.0, max_height),
+                        egui::vec2(page_w, max_height),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
-                            ui.set_min_size(egui::vec2(520.0, 210.0));
+                            ui.set_min_size(egui::vec2(page_w, 210.0));
                             // The scroll bar takes its own room instead of
                             // covering the buttons at the right edge.
                             ui.style_mut().spacing.scroll = egui::style::ScrollStyle::solid();
@@ -1036,7 +1086,13 @@ impl Editor {
         if !session {
             pages.push(Page::Serial);
         }
-        pages.extend([Page::Terminal, Page::Automation, Page::Logging, Page::Mcp]);
+        pages.extend([
+            Page::Terminal,
+            Page::Keywords,
+            Page::Automation,
+            Page::Logging,
+            Page::Mcp,
+        ]);
         pages
     }
 
@@ -1126,6 +1182,23 @@ impl Editor {
                 grid(ui, "editor-colors", |ui| self.color_fields(ui, cx));
                 section(ui, "Cursor", "");
                 grid(ui, "editor-cursor", |ui| self.cursor_fields(ui, cx));
+            }
+            Page::Keywords => {
+                ui.weak("Optional: colour words and patterns in the output.");
+                ui.add_space(4.0);
+                grid(ui, "editor-keywords", |ui| self.keyword_fields(ui, cx));
+                section(ui, "Keyword sets", "");
+                let select = self
+                    .keywords
+                    .clone()
+                    .or_else(|| cx.inherited.keywords.clone())
+                    .filter(|k| !k.is_empty());
+                self.keyword_ed
+                    .get_or_insert_with(|| {
+                        crate::keywords::KeywordEditor::new(cx.config_dir, select.as_deref())
+                    })
+                    .ui(ui);
+                self.absorb_keyword_changes();
             }
             Page::Automation => {
                 grid(ui, "editor-automation", |ui| self.automation_fields(ui, cx));
@@ -1223,7 +1296,6 @@ impl Editor {
             ui,
             &mut self.debug,
             cx.inherited.debug.unwrap_or(false),
-            ["yes", "no"],
             None,
             &cx.hint("debug"),
         );
@@ -1242,7 +1314,6 @@ impl Editor {
             ui,
             &mut self.legacy_algorithms,
             cx.inherited.legacy_algorithms.unwrap_or(false),
-            ["yes", "no"],
             None,
             &cx.hint("legacy_algorithms"),
         );
@@ -1256,7 +1327,6 @@ impl Editor {
             ui,
             &mut self.x11_forwarding,
             cx.inherited.x11_forwarding.unwrap_or(false),
-            ["yes", "no"],
             None,
             &cx.hint("x11_forwarding"),
         );
@@ -1652,43 +1722,6 @@ impl Editor {
 
     /// Keywords, triggers, logon script, reconnecting.
     fn automation_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
-        ui.label("Keywords")
-            .on_hover_text("Highlight words and patterns in the output with a keyword set");
-        ui.horizontal(|ui| {
-            let shown_name = self.keywords.as_ref().map(|k| {
-                if k.is_empty() {
-                    "none".to_string()
-                } else {
-                    k.clone()
-                }
-            });
-            crate::theme::sunken_combos(ui);
-            egui::ComboBox::from_id_salt("keywords")
-                .width(crate::theme::combo_width(ui))
-                .selected_text(shown(shown_name, cx.hint("keywords")))
-                .show_ui(ui, |ui| {
-                    // "" turns off a set inherited from above.
-                    ui.selectable_value(&mut self.keywords, Some(String::new()), "none");
-                    for name in &cx.keyword_sets {
-                        ui.selectable_value(&mut self.keywords, Some(name.clone()), name);
-                    }
-                });
-            reset(ui, &mut self.keywords, &cx.hint("keywords"));
-            if ui
-                .button("Edit sets…")
-                .on_hover_text("Create and change keyword sets")
-                .clicked()
-            {
-                let current = self
-                    .keywords
-                    .clone()
-                    .or_else(|| cx.inherited.keywords.clone())
-                    .filter(|k| !k.is_empty());
-                self.keyword_request = Some(current);
-            }
-        });
-        ui.end_row();
-
         ui.label("Logon script").on_hover_text(
             "A Rhai script run each time the session connects, \
              e.g. to answer the login prompts",
@@ -1715,7 +1748,6 @@ impl Editor {
             ui,
             &mut self.auto_reconnect,
             cx.inherited.auto_reconnect.unwrap_or(false),
-            ["yes", "no"],
             None,
             &cx.hint("auto_reconnect"),
         );
@@ -1804,6 +1836,70 @@ impl Editor {
             &mut self.scrollback,
             &cx.hint("terminal.scrollback"),
         );
+        ui.label("Backspace sends").on_hover_text(
+            "^H, as SecureCRT sends, erases in shells and on Huawei and Nokia \
+             equipment. ^? (what Linux terminals send) is for the rare program \
+             that erases only with it",
+        );
+        // Two choices, both shown: no way back to "inherited" needed.
+        let effective = self
+            .backspace
+            .unwrap_or(cx.inherited.terminal.backspace.unwrap_or_default());
+        let options = [Backspace::Backspace, Backspace::Delete];
+        let labels = options.map(|b| b.label());
+        let chosen = options.iter().position(|b| *b == effective);
+        if let Some(i) = crate::theme::segmented(ui, chosen, &labels) {
+            self.backspace = Some(options[i]);
+        }
+        ui.end_row();
+    }
+
+    /// The keyword set this session (folder, every session) uses.
+    fn keyword_fields(&mut self, ui: &mut egui::Ui, cx: &Context) {
+        ui.label("Keyword set")
+            .on_hover_text("Highlight words and patterns in the output with a keyword set");
+        // A set named here that is gone (deleted before it was taken out of
+        // the sessions, or not copied to this computer).
+        let missing = self
+            .keywords
+            .clone()
+            .filter(|k| !k.is_empty() && !cx.keyword_sets.contains(k));
+        ui.horizontal(|ui| {
+            let shown_name: Option<egui::WidgetText> = match (&self.keywords, &missing) {
+                (_, Some(gone)) => Some(
+                    egui::RichText::new(format!("{gone} (not found)"))
+                        .color(ui.visuals().warn_fg_color)
+                        .into(),
+                ),
+                (Some(k), None) if k.is_empty() => Some("none".into()),
+                (Some(k), None) => Some(k.clone().into()),
+                (None, None) => None,
+            };
+            crate::theme::sunken_combos(ui);
+            egui::ComboBox::from_id_salt("keywords")
+                .width(crate::theme::combo_width(ui))
+                .selected_text(
+                    shown_name
+                        .unwrap_or_else(|| egui::RichText::new(cx.hint("keywords")).weak().into()),
+                )
+                .show_ui(ui, |ui| {
+                    // "" turns off a set inherited from above.
+                    ui.selectable_value(&mut self.keywords, Some(String::new()), "none");
+                    for name in &cx.keyword_sets {
+                        ui.selectable_value(&mut self.keywords, Some(name.clone()), name);
+                    }
+                });
+            reset(ui, &mut self.keywords, &cx.hint("keywords"));
+        });
+        ui.end_row();
+        if let Some(gone) = missing {
+            ui.label("");
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                format!("There is no set {gone} any more: choose another, or none."),
+            );
+            ui.end_row();
+        }
     }
 
     /// The terminal text's font.
@@ -1934,9 +2030,7 @@ impl Editor {
             let mut on = self
                 .log
                 .unwrap_or(cx.inherited.log.enabled.unwrap_or(false));
-            let chosen = Some(if on { 0 } else { 1 });
-            if let Some(i) = crate::theme::segmented(ui, chosen, &["yes", "no"]) {
-                on = i == 0;
+            if crate::theme::checkbox(ui, &mut on, "").changed() {
                 self.log = Some(on);
             }
         });
@@ -2429,21 +2523,19 @@ pub fn color_sample(ui: &mut egui::Ui, bg: [u8; 3], fg: [u8; 3]) {
         });
 }
 
-/// Yes/no buttons with the effective value selected. `note` says where an
-/// inherited value comes from.
+/// A checkbox with the effective value, plus ↺ when the value is set
+/// here. `note` says where an inherited value comes from.
 fn bool_pick(
     ui: &mut egui::Ui,
     value: &mut Option<bool>,
     inherited: bool,
-    labels: [&str; 2],
     note: Option<String>,
     hint: &str,
 ) {
     ui.horizontal(|ui| {
-        let effective = value.unwrap_or(inherited);
-        let chosen = Some(if effective { 0 } else { 1 });
-        if let Some(i) = crate::theme::segmented(ui, chosen, &labels) {
-            *value = Some(i == 0);
+        let mut on = value.unwrap_or(inherited);
+        if crate::theme::checkbox(ui, &mut on, "").changed() {
+            *value = Some(on);
         }
         match (value.is_some(), note) {
             (true, _) => reset(ui, value, hint),

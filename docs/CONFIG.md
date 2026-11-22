@@ -181,7 +181,7 @@ Used when `protocol = "serial"`.
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `keywords` | text | none | Keyword set used to highlight the output: `<config>/keywords/<name>.toml`. |
+| `keywords` | text | none | Keyword set used to highlight the output: `<config>/keywords/<name>.toml`. Optional; deleting a set takes it out of the files that chose it, renaming one renames it there. |
 | `logon_script` | text | none | Script run each time the session connects. A bare name is looked for in `<config>/scripts`; a full path (or `~/…`) is used as it is. |
 | `anti_idle` | one character | none | Sent (without Enter) after `anti_idle_interval` seconds without typing, so the far end keeps an idle session open. |
 | `anti_idle_interval` | seconds | 60 | `0` turns anti-idle off. |
@@ -217,6 +217,7 @@ Used when `protocol = "serial"`.
 | `cursor_color` | `"#rrggbb"` | `"#6ec8ff"` | Cursor colour. `""` is the default one. |
 | `background` | `"#rrggbb"` | `"#181a1f"` | The terminal's background. `""` is the default one. |
 | `foreground` | `"#rrggbb"` | `"#d8dee9"` | The colour of plain text. `""` is the default one. |
+| `backspace` | `"backspace"` or `"delete"` | `"backspace"` | What Backspace sends: `^H` (BS, 0x08, as SecureCRT) or `^?` (DEL, 0x7F, as Linux terminals). Huawei VRP and Nokia need `"backspace"`: they read DEL as "delete the character under the cursor". |
 
 ### `[log]`
 
@@ -429,13 +430,33 @@ The app's own settings, not those of sessions.
 check_for_updates = true
 look = "dark"
 skipped_version = "1.0.0-rc.2"
+
+[mouse]
+copy_on_select = true
+paste = true
+paste_button = "middle"
+hide_pointer = false
+open_urls = true
+triple_click_newline = false
 ```
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `check_for_updates` | `true` or `false` | `true` | Look for a newer release on GitHub when PrzmTerm starts. |
-| `look` | `"dark"`, `"light"` or `"system"` | `"dark"` | The interface's look (*Appearance…*). `system` follows the computer's mode. |
+| `look` | `"dark"`, `"light"` or `"system"` | `"dark"` | The interface's look (*Settings…*). `system` follows the computer's mode. |
 | `skipped_version` | text | none | A release chosen with *Skip This Version*: PrzmTerm does not announce it when it starts. *Check for Updates…* still shows it. |
+
+`[mouse]`, what the mouse does in the terminal (*Settings…*). All off
+unless chosen:
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `copy_on_select` | `true` or `false` | `false` | Copy what is selected at once. |
+| `paste` | `true` or `false` | `false` | A mouse button pastes. |
+| `paste_button` | `"middle"` or `"right"` | `"middle"` | The button that pastes. With `"right"`, the terminal has no right-click menu. |
+| `hide_pointer` | `true` or `false` | `false` | Hide the pointer while typing, until it moves. |
+| `open_urls` | `true` or `false` | `false` | Ctrl+click (⌘+click on a Mac) on a web address opens it. |
+| `triple_click_newline` | `true` or `false` | `false` | A triple-click selects the line with its line break. |
 
 A broken file is read as the defaults: preferences never stop PrzmTerm from
 starting.

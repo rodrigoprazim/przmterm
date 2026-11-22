@@ -17,11 +17,10 @@ pub const DEVELOPER: &str = "Rodrigo Prazim";
 pub enum AppCommand {
     About,
     CheckUpdates,
-    Settings,
+    /// The app's own settings (look, mouse).
     Appearance,
     Shortcuts,
     Vault,
-    Keywords,
     SettingsFolder,
     ScriptGuide,
     Website,
@@ -31,14 +30,12 @@ pub enum AppCommand {
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 impl AppCommand {
-    const ALL: [AppCommand; 11] = [
+    const ALL: [AppCommand; 9] = [
         Self::About,
         Self::CheckUpdates,
-        Self::Settings,
         Self::Appearance,
         Self::Shortcuts,
         Self::Vault,
-        Self::Keywords,
         Self::SettingsFolder,
         Self::ScriptGuide,
         Self::Website,
@@ -49,11 +46,9 @@ impl AppCommand {
         match self {
             Self::About => "about",
             Self::CheckUpdates => "check-updates",
-            Self::Settings => "settings",
             Self::Appearance => "appearance",
             Self::Shortcuts => "shortcuts",
             Self::Vault => "vault",
-            Self::Keywords => "keywords",
             Self::SettingsFolder => "settings-folder",
             Self::ScriptGuide => "script-guide",
             Self::Website => "website",
@@ -116,11 +111,9 @@ pub fn install(ctx: &egui::Context) -> Option<MenuBar> {
             &item(AppCommand::About, "About PrzmTerm", None),
             &item(AppCommand::CheckUpdates, "Check for Updates…", None),
             &PredefinedMenuItem::separator(),
-            &item(AppCommand::Settings, "Settings…", Some(Code::Comma)),
-            &item(AppCommand::Appearance, "Appearance…", None),
+            &item(AppCommand::Appearance, "Settings…", Some(Code::Comma)),
             &item(AppCommand::Shortcuts, "Keyboard Shortcuts…", None),
             &item(AppCommand::Vault, "Password Vault…", None),
-            &item(AppCommand::Keywords, "Keyword Sets…", None),
             &item(AppCommand::SettingsFolder, "Settings Folder…", None),
             &PredefinedMenuItem::separator(),
             &PredefinedMenuItem::services(None),
@@ -166,7 +159,7 @@ pub fn about(ui: &mut egui::Ui, icon: Option<&egui::TextureHandle>) {
         ui.heading("PrzmTerm");
         ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
         ui.add_space(6.0);
-        ui.label("A terminal for network and systems engineers.");
+        ui.label("A fast, lightweight terminal for SSH, Telnet and serial, built in Rust.");
         ui.add_space(6.0);
         ui.label(format!("Developed by {DEVELOPER}"));
         ui.hyperlink_to("github.com/rodrigoprazim", DEVELOPER_PAGE);
