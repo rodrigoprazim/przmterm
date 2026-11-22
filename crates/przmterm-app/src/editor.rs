@@ -1296,7 +1296,6 @@ impl Editor {
             ui,
             &mut self.debug,
             cx.inherited.debug.unwrap_or(false),
-            ["yes", "no"],
             None,
             &cx.hint("debug"),
         );
@@ -1315,7 +1314,6 @@ impl Editor {
             ui,
             &mut self.legacy_algorithms,
             cx.inherited.legacy_algorithms.unwrap_or(false),
-            ["yes", "no"],
             None,
             &cx.hint("legacy_algorithms"),
         );
@@ -1329,7 +1327,6 @@ impl Editor {
             ui,
             &mut self.x11_forwarding,
             cx.inherited.x11_forwarding.unwrap_or(false),
-            ["yes", "no"],
             None,
             &cx.hint("x11_forwarding"),
         );
@@ -1751,7 +1748,6 @@ impl Editor {
             ui,
             &mut self.auto_reconnect,
             cx.inherited.auto_reconnect.unwrap_or(false),
-            ["yes", "no"],
             None,
             &cx.hint("auto_reconnect"),
         );
@@ -2034,9 +2030,7 @@ impl Editor {
             let mut on = self
                 .log
                 .unwrap_or(cx.inherited.log.enabled.unwrap_or(false));
-            let chosen = Some(if on { 0 } else { 1 });
-            if let Some(i) = crate::theme::segmented(ui, chosen, &["yes", "no"]) {
-                on = i == 0;
+            if crate::theme::checkbox(ui, &mut on, "").changed() {
                 self.log = Some(on);
             }
         });
@@ -2529,21 +2523,19 @@ pub fn color_sample(ui: &mut egui::Ui, bg: [u8; 3], fg: [u8; 3]) {
         });
 }
 
-/// Yes/no buttons with the effective value selected. `note` says where an
-/// inherited value comes from.
+/// A checkbox with the effective value, plus ↺ when the value is set
+/// here. `note` says where an inherited value comes from.
 fn bool_pick(
     ui: &mut egui::Ui,
     value: &mut Option<bool>,
     inherited: bool,
-    labels: [&str; 2],
     note: Option<String>,
     hint: &str,
 ) {
     ui.horizontal(|ui| {
-        let effective = value.unwrap_or(inherited);
-        let chosen = Some(if effective { 0 } else { 1 });
-        if let Some(i) = crate::theme::segmented(ui, chosen, &labels) {
-            *value = Some(i == 0);
+        let mut on = value.unwrap_or(inherited);
+        if crate::theme::checkbox(ui, &mut on, "").changed() {
+            *value = Some(on);
         }
         match (value.is_some(), note) {
             (true, _) => reset(ui, value, hint),

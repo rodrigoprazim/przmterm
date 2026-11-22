@@ -20,6 +20,9 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ### Changed
 
+- The yes/no choices in the session, folder and global settings (debug
+  login, legacy algorithms, X11 forwarding, reconnect, log to file) are
+  checkboxes.
 - *Appearance…* is now *Settings…* (PrzmTerm's own: the look and the mouse,
   ⌘, on macOS). The macOS menu no longer has the sessions' global settings
   as a second *Settings…* (they stay on the gear), and its items have no
