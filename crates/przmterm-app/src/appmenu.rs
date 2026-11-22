@@ -159,7 +159,7 @@ pub fn about(ui: &mut egui::Ui, icon: Option<&egui::TextureHandle>) {
         ui.heading("PrzmTerm");
         ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
         ui.add_space(6.0);
-        ui.label("Fast, lightweight and cross-platform. Built in Rust.");
+        ui.label("A fast, lightweight terminal for SSH, Telnet and serial, built in Rust.");
         ui.add_space(6.0);
         ui.label(format!("Developed by {DEVELOPER}"));
         ui.hyperlink_to("github.com/rodrigoprazim", DEVELOPER_PAGE);
