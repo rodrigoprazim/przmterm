@@ -112,6 +112,7 @@ fn main() -> eframe::Result {
             if app.prefs.debug_log {
                 diagnostics::set_detailed(true);
             }
+            grid::set_compatible(app.prefs.compatible_drawing);
             theme::apply(&cc.egui_ctx, app.prefs.look);
             // ⌘+, ⌘− and ⌘0 zoom the terminal's font (shortcuts), not the
             // whole window.
@@ -2990,6 +2991,7 @@ impl PrzmApp {
         let mut open = true;
         let mut look = self.prefs.look;
         let mut mouse = self.prefs.mouse;
+        let mut compatible = self.prefs.compatible_drawing;
         let shown = egui::Window::new(crate::theme::window_title(ctx, "Settings"))
             .open(&mut open)
             .collapsible(false)
@@ -3055,10 +3057,26 @@ impl PrzmApp {
                     &mut mouse.triple_click_newline,
                     "Triple-click selects the line break too",
                 );
+                ui.add_space(10.0);
+                theme::section_title(ui, "Graphics");
+                theme::checkbox(ui, &mut compatible, "Compatible drawing");
+                ui.add_space(2.0);
+                ui.weak(
+                    "The terminal is drawn by the interface's own painter instead of \
+                     PrzmTerm's graphics-card renderer: slower, for graphics drivers that \
+                     show the terminal's colors or cursor wrong. Takes effect at once.",
+                );
             });
         crate::theme::close_corner(ctx, shown.as_ref(), &mut open);
-        if look != self.prefs.look || mouse != self.prefs.mouse {
-            tracing::info!("settings: look {look:?}, mouse {mouse:?}");
+        if look != self.prefs.look
+            || mouse != self.prefs.mouse
+            || compatible != self.prefs.compatible_drawing
+        {
+            tracing::info!(
+                "settings: look {look:?}, mouse {mouse:?}, compatible drawing {compatible}"
+            );
+            grid::set_compatible(compatible);
+            self.prefs.compatible_drawing = compatible;
             self.prefs.mouse = mouse;
             self.prefs.look = look;
             if let Some(dir) = &self.config_dir

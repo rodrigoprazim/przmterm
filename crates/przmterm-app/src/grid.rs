@@ -19,6 +19,8 @@ use eframe::egui_wgpu::{self, wgpu};
 use crate::atlas::{Atlas, Slot};
 
 static ON: AtomicBool = AtomicBool::new(false);
+/// *Compatible drawing* chosen: egui paints the grid even with wgpu here.
+static COMPATIBLE: AtomicBool = AtomicBool::new(false);
 static ATLAS: LazyLock<Mutex<Atlas>> = LazyLock::new(Mutex::default);
 
 /// The glyph atlas every pane shares.
@@ -28,7 +30,18 @@ pub fn atlas() -> MutexGuard<'static, Atlas> {
 
 /// Whether panes draw their grid with wgpu.
 pub fn enabled() -> bool {
-    ON.load(Ordering::Relaxed)
+    ON.load(Ordering::Relaxed) && !COMPATIBLE.load(Ordering::Relaxed)
+}
+
+/// *Compatible drawing*: the grid painted by egui, from the next frame.
+pub fn set_compatible(on: bool) {
+    if COMPATIBLE.swap(on, Ordering::Relaxed) != on {
+        tracing::info!("compatible drawing {}", if on { "on" } else { "off" });
+    }
+}
+
+pub fn compatible() -> bool {
+    COMPATIBLE.load(Ordering::Relaxed)
 }
 
 /// What is drawn: a quad with a solid colour, or a glyph from the atlas.
@@ -150,7 +163,7 @@ struct Quad {
     @location(0) pos: vec2<f32>,
     @location(1) size: vec2<f32>,
     @location(2) uv: vec2<f32>,
-    @location(3) color: u32,
+    @location(3) color: vec4<f32>,
     @location(4) flags: u32,
 };
 
@@ -176,7 +189,7 @@ fn vs_main(@builtin(vertex_index) corner: u32, quad: Quad) -> Out {
         1.0,
     );
     out.uv = (quad.uv + at * quad.size) / vec2<f32>(textureDimensions(atlas));
-    out.color = unpack4x8unorm(quad.color);
+    out.color = quad.color;
     out.flags = quad.flags;
     return out;
 }
@@ -258,7 +271,9 @@ impl Renderer {
                     array_stride: std::mem::size_of::<Quad>() as u64,
                     step_mode: wgpu::VertexStepMode::Instance,
                     attributes: &wgpu::vertex_attr_array![
-                        0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Uint32, 4 => Uint32
+                        // The colour as bytes the GPU turns into 0–1 itself,
+                        // as egui's own vertices are.
+                        0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Unorm8x4, 4 => Uint32
                     ],
                 })],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),

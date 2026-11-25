@@ -816,9 +816,12 @@ until it is turned off; turn it on, do what goes wrong, then send the log.
 `RUST_LOG` (for example `RUST_LOG=debug`) sets the level by hand.
 
 If the terminal's colours or cursor look wrong on one computer, the graphics
-card is the first suspect. Start PrzmTerm with `PRZMTERM_RENDERER=egui` to
-draw the terminal without the card's help, or with `WGPU_BACKEND=vulkan`
-(Windows: Direct3D 12 by default) to try another way of using it. On
+card is the first suspect. **Settings…** › *Graphics* › *Compatible
+drawing* draws the terminal with the interface's own painter instead of
+PrzmTerm's graphics-card renderer, at once and from then on: if it looks
+right that way, say so with the *Diagnostics* details. Starting PrzmTerm
+with `PRZMTERM_RENDERER=egui` does the same for one run; `WGPU_BACKEND=vulkan`
+(Windows: Direct3D 12 by default) tries another way of using the card. On
 Windows, from a Command Prompt:
 
 ```

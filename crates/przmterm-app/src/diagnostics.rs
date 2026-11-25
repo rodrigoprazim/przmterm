@@ -206,6 +206,8 @@ pub fn report(ctx: &egui::Context, config_dir: Option<&std::path::Path>, detaile
     }
     let grid = if crate::grid::enabled() {
         "graphics card (wgpu)"
+    } else if crate::grid::compatible() {
+        "egui (Compatible drawing)"
     } else if std::env::var("PRZMTERM_RENDERER").is_ok_and(|v| v.eq_ignore_ascii_case("egui")) {
         "egui (PRZMTERM_RENDERER=egui)"
     } else {
