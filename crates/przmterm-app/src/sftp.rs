@@ -400,6 +400,7 @@ impl SftpBrowser {
         .resizable(true)
         .collapsible(true)
         .show(ctx, |ui| self.body(ui));
+        crate::theme::close_corner(ctx, response.as_ref(), &mut open);
         // Files dropped on the window are uploaded to the current folder.
         if let Some(r) = response
             && self.ready

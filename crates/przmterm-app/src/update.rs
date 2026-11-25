@@ -1,6 +1,8 @@
 //! Checking for a newer release: asks GitHub for the project's releases, in
 //! the background, and says when there is one newer than this build, with
-//! its notes. When the user asks, [`Download`] fetches the release for this
+//! its notes. GitHub's API answers only 60 questions an hour from one
+//! address, which a company network shares: past that, the releases' feed
+//! and files on github.com, which have no such limit, answer instead. When the user asks, [`Download`] fetches the release for this
 //! system, checks it against the checksums signed with the release key
 //! ([`crate::openpgp`]) and installs it in place of this copy, or, when it
 //! cannot, leaves it in Downloads and opens it.
@@ -17,6 +19,10 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 const RELEASES: &str = "https://api.github.com/repos/rodrigoprazim/przmterm/releases?per_page=20";
+/// The releases' Atom feed: no rate limit, no drafts.
+const FEED: &str = "https://github.com/rodrigoprazim/przmterm/releases.atom";
+const REPO_PAGE: &str = "https://github.com/rodrigoprazim/przmterm";
+const RAW: &str = "https://raw.githubusercontent.com/rodrigoprazim/przmterm";
 
 /// A release newer than this build.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,18 +180,183 @@ fn agent(timeout: Option<Duration>) -> ureq::Agent {
 }
 
 fn ask_github() -> Outcome {
-    let releases = agent(Some(Duration::from_secs(15)))
-        .get(RELEASES)
-        .header("Accept", "application/vnd.github+json")
-        .call()
-        .and_then(|mut response| response.body_mut().read_json::<Vec<Release>>());
-    match releases {
-        Ok(releases) => match newest(env!("CARGO_PKG_VERSION"), &releases) {
+    let current = env!("CARGO_PKG_VERSION");
+    match ask_api() {
+        Ok(releases) => match newest(current, &releases) {
             Some(found) => Outcome::Newer(found),
             None => Outcome::UpToDate,
         },
-        Err(e) => Outcome::Failed(e.to_string()),
+        Err(api) => {
+            tracing::warn!("update check: GitHub's API: {api}; trying the releases' feed");
+            match ask_feed(current) {
+                Ok(Some(found)) => Outcome::Newer(found),
+                Ok(None) => Outcome::UpToDate,
+                Err(feed) => {
+                    tracing::warn!("update check: the releases' feed: {feed}");
+                    Outcome::Failed(api)
+                }
+            }
+        }
     }
+}
+
+/// The releases, from GitHub's API. When it refuses, why: its message
+/// and, past the hourly limit, when it answers again.
+fn ask_api() -> Result<Vec<Release>, String> {
+    let mut response = agent(Some(Duration::from_secs(15)))
+        .get(RELEASES)
+        .header("Accept", "application/vnd.github+json")
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+        .map_err(|e| e.to_string())?;
+    let status = response.status();
+    let header = |name: &str| {
+        response
+            .headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    };
+    let remaining = header("x-ratelimit-remaining");
+    let reset = header("x-ratelimit-reset");
+    tracing::debug!(
+        "update check: GitHub's API answered {status} ({} questions left this hour)",
+        remaining.as_deref().unwrap_or("?")
+    );
+    if status.is_success() {
+        return response
+            .body_mut()
+            .read_json::<Vec<Release>>()
+            .map_err(|e| e.to_string());
+    }
+    #[derive(Deserialize)]
+    struct Refusal {
+        message: String,
+    }
+    let message = response
+        .body_mut()
+        .with_config()
+        .limit(64 << 10)
+        .read_json::<Refusal>()
+        .map(|r| r.message)
+        .unwrap_or_default();
+    let mut why = format!("GitHub answered {status}");
+    if remaining.as_deref() == Some("0") {
+        why.push_str(": no more questions from this network this hour");
+        if let Some(at) = reset
+            .and_then(|r| r.parse::<i64>().ok())
+            .and_then(|r| chrono::DateTime::from_timestamp(r, 0))
+        {
+            let at = at.with_timezone(&chrono::Local);
+            why.push_str(&format!(" (until {})", at.format("%H:%M")));
+        }
+    }
+    if !message.is_empty() {
+        why.push_str(&format!(" — {message}"));
+    }
+    Err(why)
+}
+
+fn fetch_text(url: &str) -> Result<String, String> {
+    agent(Some(Duration::from_secs(15)))
+        .get(url)
+        .call()
+        .and_then(|mut r| r.body_mut().with_config().limit(4 << 20).read_to_string())
+        .map_err(|e| format!("{url}: {e}"))
+}
+
+/// The newest release above `current` from the releases' feed, its files
+/// from its checksums and its notes from the changelog it was made from.
+fn ask_feed(current: &str) -> Result<Option<Found>, String> {
+    let feed = fetch_text(FEED)?;
+    let tags = feed_tags(&feed);
+    if tags.is_empty() {
+        return Err("no releases in the feed".into());
+    }
+    let listed: Vec<Release> = tags
+        .iter()
+        .map(|tag| feed_release(tag, &[], None))
+        .collect();
+    let Some(found) = newest(current, &listed) else {
+        return Ok(None);
+    };
+    let tag = tags
+        .iter()
+        .find(|t| t.trim_start_matches('v') == found.version)
+        .ok_or("the release's tag is gone")?;
+    let download = format!("{REPO_PAGE}/releases/download/{tag}");
+    let files = sums_files(&fetch_text(&format!("{download}/SHA256SUMS.txt"))?);
+    let notes = fetch_text(&format!("{RAW}/{tag}/CHANGELOG.md"))
+        .ok()
+        .and_then(|changelog| changelog_section(&changelog, &found.version));
+    let release = feed_release(tag, &files, notes);
+    Ok(newest(current, std::slice::from_ref(&release)))
+}
+
+/// A release as the feed and its files tell it.
+fn feed_release(tag: &str, files: &[String], notes: Option<String>) -> Release {
+    let version = tag.trim_start_matches('v');
+    let download = format!("{REPO_PAGE}/releases/download/{tag}");
+    Release {
+        tag_name: tag.to_string(),
+        html_url: format!("{REPO_PAGE}/releases/tag/{tag}"),
+        draft: false,
+        prerelease: Version::parse(version).is_ok_and(|v| !v.pre.is_empty()),
+        body: notes,
+        assets: files
+            .iter()
+            .chain(
+                [
+                    "SHA256SUMS.txt".to_string(),
+                    "SHA256SUMS.txt.asc".to_string(),
+                ]
+                .iter(),
+            )
+            .map(|name| Asset {
+                name: name.clone(),
+                url: format!("{download}/{name}"),
+                size: 0,
+            })
+            .collect(),
+    }
+}
+
+/// The tags of the releases in an Atom feed of GitHub's.
+fn feed_tags(feed: &str) -> Vec<String> {
+    let mut tags: Vec<String> = Vec::new();
+    for part in feed.split("/releases/tag/").skip(1) {
+        let tag: String = part
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '+'))
+            .collect();
+        if !tag.is_empty() && !tags.contains(&tag) {
+            tags.push(tag);
+        }
+    }
+    tags
+}
+
+/// The file names in `SHA256SUMS.txt` (`sha256sum` lines).
+fn sums_files(sums: &str) -> Vec<String> {
+    sums.lines()
+        .filter_map(|line| line.split_whitespace().nth(1))
+        .map(|name| name.trim_start_matches('*').to_string())
+        .collect()
+}
+
+/// The changelog's section of `version`, as the release's notes are made.
+fn changelog_section(changelog: &str, version: &str) -> Option<String> {
+    let head = format!("## [{version}]");
+    let start = changelog.lines().position(|l| l.starts_with(&head))?;
+    let section: Vec<&str> = changelog
+        .lines()
+        .skip(start + 1)
+        .take_while(|l| !l.starts_with("## ["))
+        .collect();
+    let text = section.join("\n").trim().to_string();
+    (!text.is_empty()).then_some(text)
 }
 
 /// A check running in the background, or done.
@@ -785,6 +956,45 @@ mod tests {
         let mut draft = release("v9.0.0", false);
         draft.draft = true;
         assert_eq!(newest("1.0.0", &[draft]), None);
+    }
+
+    #[test]
+    fn reads_the_releases_feed_and_its_files() {
+        let feed = r#"<feed><entry><link rel="alternate" type="text/html"
+            href="https://github.com/o/r/releases/tag/v1.0.0-rc.10"/></entry>
+            <entry><link href="https://github.com/o/r/releases/tag/v1.0.0-rc.9"/>
+            <content>see &lt;a href=&quot;https://github.com/o/r/releases/tag/v1.0.0-rc.9&quot;&gt;</content></entry></feed>"#;
+        assert_eq!(feed_tags(feed), ["v1.0.0-rc.10", "v1.0.0-rc.9"]);
+        let listed: Vec<Release> = feed_tags(feed)
+            .iter()
+            .map(|t| feed_release(t, &[], None))
+            .collect();
+        assert!(listed[0].prerelease);
+        assert_eq!(
+            newest("1.0.0-rc.9", &listed).map(|f| f.version).as_deref(),
+            Some("1.0.0-rc.10")
+        );
+
+        let sums = "ab12  przmterm-1.0.0-rc.10-windows-x86_64-setup.exe\n\
+                    cd34 *przmterm-1.0.0-rc.10-linux-x86_64.tar.gz\n";
+        let files = sums_files(sums);
+        assert_eq!(files[1], "przmterm-1.0.0-rc.10-linux-x86_64.tar.gz");
+        let release = feed_release("v1.0.0-rc.10", &files, Some("notes".into()));
+        let found = newest("1.0.0-rc.9", &[release]).unwrap();
+        assert_eq!(
+            found.sums.unwrap().0,
+            "https://github.com/rodrigoprazim/przmterm/releases/download/v1.0.0-rc.10/SHA256SUMS.txt"
+        );
+        assert_eq!(found.notes, "notes");
+
+        let changelog = "# Changelog\n\n## [Unreleased]\n\n- soon\n\n\
+                         ## [1.0.0-rc.10] - 2026-11-30\n\n### Fixed\n\n- a fix\n\n\
+                         ## [1.0.0-rc.9] - 2026-11-22\n\n- older\n";
+        assert_eq!(
+            changelog_section(changelog, "1.0.0-rc.10").as_deref(),
+            Some("### Fixed\n\n- a fix")
+        );
+        assert_eq!(changelog_section(changelog, "2.0.0"), None);
     }
 
     #[test]

@@ -287,7 +287,7 @@ impl VaultUi {
             // As narrow as its field, not egui's default width.
             window.auto_sized()
         };
-        window.show(ctx, |ui| {
+        let shown = window.show(ctx, |ui| {
             if self.vault.is_some() {
                 self.entries_ui(ui, config_dir);
             } else if exists {
@@ -310,6 +310,7 @@ impl VaultUi {
                 self.create_ui(ui, config_dir, enter);
             }
         });
+        crate::theme::close_corner(ctx, shown.as_ref(), &mut open);
         if !open || (escape && !busy && self.prompt.is_none()) {
             self.window = false;
             self.edit = None;

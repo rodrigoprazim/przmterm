@@ -290,6 +290,63 @@ pub fn window_title(ctx: &egui::Context, text: impl Into<String>) -> egui::Atoms
         .into_atoms()
 }
 
+/// egui's close button answers only on its small cross, a row high: a
+/// click just above or below it does nothing. This makes the whole corner
+/// of the title bar around it close the window too, and lights it up under
+/// the pointer. Called after the window is shown, with what it returned.
+pub fn close_corner<R>(
+    ctx: &egui::Context,
+    shown: Option<&egui::InnerResponse<R>>,
+    open: &mut bool,
+) {
+    let Some(shown) = shown else {
+        return;
+    };
+    let window = shown.response.rect;
+    let style = ctx.global_style();
+    let margin = style.spacing.window_margin;
+    let stroke = style.visuals.window_stroke.width;
+    let row = ctx.fonts_mut(|f| f.row_height(&FontId::new(13.5, semibold())));
+    let bar = stroke + f32::from(margin.top) + row + f32::from(margin.bottom);
+    let cross = egui::pos2(
+        window.right() - stroke - f32::from(margin.right) - row / 2.0,
+        window.top() + stroke + f32::from(margin.top) + row / 2.0,
+    );
+    let half = style.spacing.icon_width / 2.0;
+    let corner = egui::Rect::from_min_max(
+        egui::pos2(cross.x - half - 2.0, window.top() + stroke),
+        egui::pos2(window.right() - stroke, window.top() + bar),
+    );
+    if window.width() < bar * 3.0 {
+        return;
+    }
+    let id = shown.response.id.with("przm-close-corner");
+    // Its own id: the Ui's, given its (empty) size when dropped, would
+    // shrink the corner to nothing.
+    let ui = egui::Ui::new(
+        ctx.clone(),
+        id.with("ui"),
+        egui::UiBuilder::new()
+            .layer_id(shown.response.layer_id)
+            .max_rect(corner),
+    );
+    let response = ui
+        .interact(corner, id, egui::Sense::click())
+        .on_hover_cursor(egui::CursorIcon::Default);
+    if response.hovered() {
+        let painter = ctx.layer_painter(shown.response.layer_id);
+        let visuals = style.visuals.widgets.hovered;
+        let square = egui::Rect::from_center_size(cross, egui::vec2(22.0, 22.0));
+        painter.rect_filled(square, CornerRadius::same(4), p().pressed);
+        let x = egui::Rect::from_center_size(cross, egui::vec2(half * 2.0, half * 2.0)).shrink(2.0);
+        painter.line_segment([x.left_top(), x.right_bottom()], visuals.fg_stroke);
+        painter.line_segment([x.right_top(), x.left_bottom()], visuals.fg_stroke);
+    }
+    if response.clicked() {
+        *open = false;
+    }
+}
+
 /// Menus: rows close together and wide enough for their longest entries.
 /// Called first thing in every menu and submenu.
 pub fn menu(ui: &mut egui::Ui) {

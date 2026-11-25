@@ -99,7 +99,7 @@ impl ImportWizard {
         let mut open = true;
         let already = self.exists.iter().filter(|&&e| e).count()
             + self.keyword_exists.iter().filter(|&&e| e).count();
-        egui::Window::new(crate::theme::window_title(ctx, "Import from SecureCRT"))
+        let shown = egui::Window::new(crate::theme::window_title(ctx, "Import from SecureCRT"))
             .open(&mut open)
             .pivot(egui::Align2::CENTER_CENTER)
             .default_pos(ctx.content_rect().center())
@@ -196,6 +196,7 @@ impl ImportWizard {
                     });
                 });
             });
+        crate::theme::close_corner(ctx, shown.as_ref(), &mut open);
         if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             result = WizardResult::Cancel;
         }

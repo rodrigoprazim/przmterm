@@ -22,6 +22,18 @@ All notable changes to PrzmTerm are recorded here. The format follows
   sets loaded, window scale and terminal sizes. No passwords and nothing
   typed or shown in the terminal go into it.
 
+### Fixed
+
+- A window's close button answers in the whole corner of its title bar,
+  not only on the cross itself.
+- *Check for Updates…* works when GitHub's API turns the check down
+  (it answers 60 requests an hour per address, shared by a whole company
+  network): the release is then found from the releases' feed and files
+  on github.com. Why the API refused, and until when, goes to the log.
+- Windows: the title bar follows Windows' light or dark mode. It kept the
+  old colours when the look changed, with buttons in the new ones (a dark
+  bar with a close button that could not be seen).
+
 ## [1.0.0-rc.9] - 2026-11-22
 
 ### Added

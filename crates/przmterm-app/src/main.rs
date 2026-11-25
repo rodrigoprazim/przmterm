@@ -111,6 +111,12 @@ fn main() -> eframe::Result {
             if app.prefs.debug_log {
                 diagnostics::set_detailed(true);
             }
+            // Windows keeps a title bar's old colours while the window is
+            // active when the look changes, and its buttons come out in the
+            // new ones (a dark bar with dark buttons): the title bar follows
+            // Windows' own light or dark mode instead, as most apps' do.
+            #[cfg(windows)]
+            cc.egui_ctx.options_mut(|o| o.sync_window_theme = false);
             theme::apply(&cc.egui_ctx, app.prefs.look);
             // ⌘+, ⌘− and ⌘0 zoom the terminal's font (shortcuts), not the
             // whole window.
@@ -2986,7 +2992,7 @@ impl PrzmApp {
         let mut open = true;
         let mut look = self.prefs.look;
         let mut mouse = self.prefs.mouse;
-        egui::Window::new(crate::theme::window_title(ctx, "Settings"))
+        let shown = egui::Window::new(crate::theme::window_title(ctx, "Settings"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -3052,6 +3058,7 @@ impl PrzmApp {
                     "Triple-click selects the line break too",
                 );
             });
+        crate::theme::close_corner(ctx, shown.as_ref(), &mut open);
         if look != self.prefs.look || mouse != self.prefs.mouse {
             tracing::info!("settings: look {look:?}, mouse {mouse:?}");
             self.prefs.mouse = mouse;
@@ -3076,7 +3083,7 @@ impl PrzmApp {
         let mut open = true;
         let mut detailed = self.prefs.debug_log;
         let report = diagnostics::report(ctx, self.config_dir.as_deref(), detailed);
-        egui::Window::new(crate::theme::window_title(ctx, "Diagnostics"))
+        let shown = egui::Window::new(crate::theme::window_title(ctx, "Diagnostics"))
             .pivot(egui::Align2::CENTER_CENTER)
             .default_pos(ctx.content_rect().center())
             .open(&mut open)
@@ -3135,6 +3142,7 @@ impl PrzmApp {
                     }
                 });
             });
+        crate::theme::close_corner(ctx, shown.as_ref(), &mut open);
         if detailed != self.prefs.debug_log {
             self.prefs.debug_log = detailed;
             diagnostics::set_detailed(detailed);
@@ -3175,7 +3183,7 @@ impl PrzmApp {
         }
         let mut wanted = None;
         let place = update::place();
-        egui::Window::new(crate::theme::window_title(ctx, "Software Update"))
+        let shown = egui::Window::new(crate::theme::window_title(ctx, "Software Update"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -3383,6 +3391,7 @@ impl PrzmApp {
                 ui.add_space(8.0);
                 crate::theme::checkbox(ui, &mut check_at_start, "Check when PrzmTerm starts");
             });
+        crate::theme::close_corner(ctx, shown.as_ref(), &mut open);
         let save = |prefs: &przmterm_session::preferences::Preferences,
                     dir: &Option<std::path::PathBuf>| {
             dir.as_ref()
@@ -3444,13 +3453,14 @@ impl PrzmApp {
             ctx.load_texture("przmterm-icon", image, egui::TextureOptions::LINEAR)
         });
         let mut open = true;
-        egui::Window::new(crate::theme::window_title(ctx, "About PrzmTerm"))
+        let shown = egui::Window::new(crate::theme::window_title(ctx, "About PrzmTerm"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
             .auto_sized()
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| appmenu::about(ui, Some(icon)));
+        crate::theme::close_corner(ctx, shown.as_ref(), &mut open);
         if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.about = None;
         }
