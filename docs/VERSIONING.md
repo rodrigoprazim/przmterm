@@ -50,7 +50,12 @@ Every user-visible change adds a line under `## [Unreleased]` in
 ## Updates in the app
 
 *Check for Updates…* lists the GitHub releases and shows the newest one's
-notes (the release body, taken from CHANGELOG.md). *Install and Restart*
+notes (the release body, taken from CHANGELOG.md). When GitHub's API
+refuses (it answers 60 requests an hour per address, which a company
+network shares), the app reads the releases' Atom feed instead, the file
+names from the release's `SHA256SUMS.txt` and the notes from CHANGELOG.md
+at the release's tag: so releases keep `SHA256SUMS.txt` listing every file
+and their tags' CHANGELOG.md a `## [version]` section. *Install and Restart*
 downloads `SHA256SUMS.txt` and `SHA256SUMS.txt.asc`, checks the signature
 with the release key built into the app (`docs/release-key.asc`), then
 downloads the file for the system (`-macos-universal.dmg`,

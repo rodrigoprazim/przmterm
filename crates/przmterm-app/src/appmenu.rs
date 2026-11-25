@@ -19,6 +19,8 @@ pub enum AppCommand {
     CheckUpdates,
     /// The app's own settings (look, mouse).
     Appearance,
+    /// The system, graphics and log, to send when something goes wrong.
+    Diagnostics,
     Shortcuts,
     Vault,
     SettingsFolder,
@@ -30,10 +32,11 @@ pub enum AppCommand {
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 impl AppCommand {
-    const ALL: [AppCommand; 9] = [
+    const ALL: [AppCommand; 10] = [
         Self::About,
         Self::CheckUpdates,
         Self::Appearance,
+        Self::Diagnostics,
         Self::Shortcuts,
         Self::Vault,
         Self::SettingsFolder,
@@ -47,6 +50,7 @@ impl AppCommand {
             Self::About => "about",
             Self::CheckUpdates => "check-updates",
             Self::Appearance => "appearance",
+            Self::Diagnostics => "diagnostics",
             Self::Shortcuts => "shortcuts",
             Self::Vault => "vault",
             Self::SettingsFolder => "settings-folder",
@@ -110,6 +114,7 @@ pub fn install(ctx: &egui::Context) -> Option<MenuBar> {
         &[
             &item(AppCommand::About, "About PrzmTerm", None),
             &item(AppCommand::CheckUpdates, "Check for Updates…", None),
+            &item(AppCommand::Diagnostics, "Diagnostics…", None),
             &PredefinedMenuItem::separator(),
             &item(AppCommand::Appearance, "Settings…", Some(Code::Comma)),
             &item(AppCommand::Shortcuts, "Keyboard Shortcuts…", None),

@@ -55,7 +55,7 @@ impl HighlightsDialog {
         let errors: Vec<Option<String>> = (0..rules.len())
             .map(|i| highlights.error(i).map(str::to_string))
             .collect();
-        egui::Window::new(crate::theme::window_title(ctx, "Highlights"))
+        let shown = egui::Window::new(crate::theme::window_title(ctx, "Highlights"))
             .open(&mut open)
             .pivot(egui::Align2::CENTER_CENTER)
             .default_pos(ctx.content_rect().center())
@@ -172,6 +172,7 @@ impl HighlightsDialog {
                     }
                 }
             });
+        crate::theme::close_corner(ctx, shown.as_ref(), &mut open);
         if let Some(i) = remove {
             rules.remove(i);
         }

@@ -205,6 +205,27 @@ pub(crate) struct Events {
 
 impl Events {
     pub(crate) fn send(&self, e: SftpEvent) {
+        // What happens in the file browser, for the log (not each step of
+        // a transfer).
+        match &e {
+            SftpEvent::Ready { home } => tracing::info!("file browser ready at {home}"),
+            SftpEvent::Listing { dir, entries } => {
+                tracing::debug!("listed {dir}: {} entries", entries.len());
+            }
+            SftpEvent::Progress { .. } => {}
+            SftpEvent::TransferDone { id, result: Ok(()) } => {
+                tracing::info!("transfer {id} done");
+            }
+            SftpEvent::TransferDone { id, result: Err(e) } => {
+                tracing::warn!("transfer {id} failed: {e}");
+            }
+            SftpEvent::Changed { dir } => tracing::debug!("changed: {dir}"),
+            SftpEvent::Failed { what, error } => tracing::warn!("{what}: {error}"),
+            SftpEvent::Closed(why) => tracing::info!("file browser closed: {why}"),
+            SftpEvent::PasswordNeeded(why) => {
+                tracing::info!("SCP shell asks for a password: {why}")
+            }
+        }
         let _ = self.tx.send(e);
         (self.waker)();
     }
@@ -273,6 +294,20 @@ async fn run(
             break;
         }
         let (sftp, ev2, cancelled) = (sftp.clone(), ev.clone(), cancelled.clone());
+        match &job {
+            Job::Download { id, remote, local } => {
+                tracing::info!("download {id}: {remote} to {}", local.display());
+            }
+            Job::Upload {
+                id,
+                local,
+                remote_dir,
+            } => tracing::info!("upload {id}: {} to {remote_dir}", local.display()),
+            Job::Mkdir(path) => tracing::info!("new folder {path}"),
+            Job::Remove { path, .. } => tracing::info!("delete {path}"),
+            Job::Rename { from, to } => tracing::info!("rename {from} to {to}"),
+            Job::List(_) | Job::Password(_) | Job::WithoutShell => {}
+        }
         match job {
             // Transfers run beside the rest, so browsing goes on meanwhile.
             Job::Download { id, remote, local } => {

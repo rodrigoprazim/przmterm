@@ -625,7 +625,7 @@ impl KeymapEditor {
         let mut open = true;
         let mut close = false;
         let escape = ctx.input(|i| i.key_pressed(Key::Escape));
-        egui::Window::new(crate::theme::window_title(ctx, "Keyboard shortcuts"))
+        let shown = egui::Window::new(crate::theme::window_title(ctx, "Keyboard shortcuts"))
             .open(&mut open)
             .pivot(egui::Align2::CENTER_CENTER)
             .default_pos(ctx.content_rect().center())
@@ -744,6 +744,7 @@ impl KeymapEditor {
                 });
                 ui.weak("Copy and paste (⌘C/⌘V, Ctrl+Shift+C/V) cannot be changed.");
             });
+        crate::theme::close_corner(ctx, shown.as_ref(), &mut open);
         self.edit_dialog(ctx, config_dir, buttons, vault);
         if self.changed {
             self.changed = false;

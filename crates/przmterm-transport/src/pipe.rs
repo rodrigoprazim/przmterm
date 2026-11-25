@@ -71,8 +71,10 @@ impl Output {
         self
     }
 
-    /// A step of the connection, shown only with debugging on (like `ssh -v`).
+    /// A step of the connection, shown only with debugging on (like `ssh -v`),
+    /// and written to the detailed log.
     pub(crate) fn debug(&self, text: &str) {
+        tracing::debug!("{text}");
         if self.debug {
             self.text(&format!("\x1b[36mdebug: {text}\x1b[0m\r\n"));
         }
@@ -98,11 +100,15 @@ impl Output {
         self.text(&normalised);
     }
 
+    /// A line for the user (dimmed), also in the log.
     pub(crate) fn notice(&self, text: &str) {
+        tracing::info!("{text}");
         self.text(&format!("\x1b[2m{text}\x1b[0m\r\n"));
     }
 
+    /// An error for the user (red), also in the log.
     pub(crate) fn error(&self, text: &str) {
+        tracing::warn!("{text}");
         self.text(&format!("\x1b[31m{text}\x1b[0m\r\n"));
     }
 }

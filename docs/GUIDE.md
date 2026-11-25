@@ -21,6 +21,7 @@ How to use PrzmTerm, task by task. Two references go with it: the
 - [AI assistants (MCP)](#ai-assistants-mcp)
 - [Backup, sharing and sync](#backup-sharing-and-sync)
 - [Moving from SecureCRT](#moving-from-securecrt)
+- [When something goes wrong](#when-something-goes-wrong)
 
 ## First steps
 
@@ -790,3 +791,37 @@ Credentials buttons type the password of the [vault](#passwords-keychain-and-vau
 entry of the same name, so add that entry; like buttons whose label says
 they type a password, they send only at a password prompt (*Only when*).
 Buttons for menu functions, scripts or programs are listed as skipped.
+
+## When something goes wrong
+
+**+** › *Diagnostics…* (*PrzmTerm* › *Diagnostics…* on macOS) shows the
+version, the system, the graphics card and driver in use, how the terminal
+is drawn and where the log file is. *Copy details* copies it all, to paste
+in an issue or a message.
+
+PrzmTerm writes a log every time it runs: what it opened and closed,
+imports, keyword sets not found, the graphics chosen, graphics errors and
+crashes. It has no passwords. Each start keeps the run before as
+`przmterm.previous.log` (*Open last run's log*), so a problem that went
+away after a restart can still be looked at. The logs are in:
+
+| System | Folder |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%\PrzmTerm\logs` |
+| macOS | `~/Library/Logs/PrzmTerm` |
+| Linux | `~/.local/state/przmterm/logs` |
+
+*Detailed log* adds PrzmTerm's steps in detail (and the graphics library's)
+until it is turned off; turn it on, do what goes wrong, then send the log.
+`RUST_LOG` (for example `RUST_LOG=debug`) sets the level by hand.
+
+If the terminal's colours or cursor look wrong on one computer, the graphics
+card is the first suspect. Start PrzmTerm with `PRZMTERM_RENDERER=egui` to
+draw the terminal without the card's help, or with `WGPU_BACKEND=vulkan`
+(Windows: Direct3D 12 by default) to try another way of using it. On
+Windows, from a Command Prompt:
+
+```
+set PRZMTERM_RENDERER=egui
+"%LOCALAPPDATA%\Programs\PrzmTerm\przmterm.exe"
+```

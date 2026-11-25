@@ -864,7 +864,7 @@ impl Editor {
         // The Keywords page is wider: a window of its own size, so the
         // others go back to theirs.
         let wide = self.page == Page::Keywords;
-        egui::Window::new(crate::theme::window_title(ctx, self.title.clone()))
+        let shown = egui::Window::new(crate::theme::window_title(ctx, self.title.clone()))
             .id(egui::Id::unique(("session-editor", wide)))
             .pivot(egui::Align2::CENTER_TOP)
             .default_pos(egui::pos2(
@@ -1033,6 +1033,7 @@ impl Editor {
                     });
                 });
             });
+        crate::theme::close_corner(ctx, shown.as_ref(), &mut open);
         if !open {
             result = EditorResult::Cancel;
         }

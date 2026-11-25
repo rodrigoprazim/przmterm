@@ -904,7 +904,11 @@ impl Screen {
                     }
                 }
                 (true, 2004) => self.bracketed_paste = on,
-                _ => {}
+                (private, mode) => unsupported(&format!(
+                    "mode {}{mode} {}",
+                    if private { "?" } else { "" },
+                    if on { "set" } else { "reset" }
+                )),
             }
         }
     }
@@ -1072,7 +1076,10 @@ impl Perform for Screen {
                 // Primary device attributes: VT100 with advanced video option.
                 self.output.extend_from_slice(b"\x1b[?1;2c");
             }
-            _ => {}
+            _ => unsupported(&format!(
+                "CSI {}{action}",
+                String::from_utf8_lossy(intermediates)
+            )),
         }
     }
 
@@ -1105,7 +1112,7 @@ impl Perform for Screen {
             }
             b'M' => self.reverse_index(),
             b'c' => self.reset(),
-            _ => {}
+            _ => unsupported(&format!("ESC {}", byte as char)),
         }
     }
 
@@ -1173,6 +1180,19 @@ impl Terminal {
     /// Bytes the terminal must send back to the remote side (DSR, DA replies).
     pub fn take_output(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.screen.output)
+    }
+}
+
+/// A sequence this terminal does not act on, written to the detailed log
+/// once per kind (a program may send it on every redraw).
+fn unsupported(what: &str) {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let seen = SEEN.get_or_init(Mutex::default);
+    let mut seen = seen.lock().unwrap_or_else(|e| e.into_inner());
+    if seen.len() < 200 && seen.insert(what.to_string()) {
+        tracing::debug!("not supported: {what}");
     }
 }
 

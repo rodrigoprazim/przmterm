@@ -104,6 +104,9 @@ impl VaultUi {
     }
 
     pub fn lock(&mut self) {
+        if self.vault.is_some() {
+            tracing::info!("vault locked");
+        }
         self.vault = None;
         self.snapshot = None;
         self.edit = None;
@@ -157,10 +160,12 @@ impl VaultUi {
     fn unlock(&mut self, config_dir: &Path) -> bool {
         match Vault::open(&vault_path(config_dir), &self.master) {
             Ok(vault) => {
+                tracing::info!("vault unlocked ({} entries)", vault.entries.len());
                 self.opened(vault);
                 true
             }
             Err(e) => {
+                tracing::info!("vault not unlocked: {e}");
                 self.error = Some(match e {
                     VaultError::WrongPassword => "Wrong master password.".to_string(),
                     e => e.to_string(),
@@ -282,7 +287,7 @@ impl VaultUi {
             // As narrow as its field, not egui's default width.
             window.auto_sized()
         };
-        window.show(ctx, |ui| {
+        let shown = window.show(ctx, |ui| {
             if self.vault.is_some() {
                 self.entries_ui(ui, config_dir);
             } else if exists {
@@ -305,6 +310,7 @@ impl VaultUi {
                 self.create_ui(ui, config_dir, enter);
             }
         });
+        crate::theme::close_corner(ctx, shown.as_ref(), &mut open);
         if !open || (escape && !busy && self.prompt.is_none()) {
             self.window = false;
             self.edit = None;

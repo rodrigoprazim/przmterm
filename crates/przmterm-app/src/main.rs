@@ -8,6 +8,7 @@ mod appmenu;
 mod atlas;
 mod buttonbar;
 mod desktop;
+mod diagnostics;
 mod editor;
 mod findbar;
 mod fonts;
@@ -26,6 +27,7 @@ mod problems;
 mod scriptguide;
 mod sftp;
 mod theme;
+mod titlebar;
 mod transfer;
 mod update;
 mod vault;
@@ -74,12 +76,8 @@ fn plain_menus() {
 }
 
 fn main() -> eframe::Result {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "przmterm=info,warn".into()),
-        )
-        .init();
+    // The detailed level, if chosen, follows once the preferences are read.
+    diagnostics::init(false);
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -104,10 +102,16 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| {
             if let Some(state) = &cc.wgpu_render_state {
+                diagnostics::graphics_found(state);
                 grid::install(state);
+            } else {
+                tracing::warn!("no wgpu: the terminal is drawn by egui");
             }
             let fonts = fonts::TermFonts::new(&cc.egui_ctx);
             let mut app = PrzmApp::new(fonts);
+            if app.prefs.debug_log {
+                diagnostics::set_detailed(true);
+            }
             theme::apply(&cc.egui_ctx, app.prefs.look);
             // ⌘+, ⌘− and ⌘0 zoom the terminal's font (shortcuts), not the
             // whole window.
@@ -899,8 +903,14 @@ struct PrzmApp {
     update_window: bool,
     /// The Appearance window is open.
     appearance_window: bool,
+    /// The Diagnostics window is open.
+    diagnostics_window: bool,
+    /// The scale last written to the log.
+    logged_ppp: f32,
     /// The interface look last set, to follow `prefs.look`.
     look_shown: przmterm_session::preferences::Look,
+    /// Windows: the title bar in the interface's colours.
+    title_bar: titlebar::TitleBar,
     /// Questions from scripts, asked one at a time.
     script_prompts: std::collections::VecDeque<ScriptPrompt>,
     /// A backup or export being restored or imported, and the folder name
@@ -1060,7 +1070,10 @@ impl PrzmApp {
             download: None,
             update_window: false,
             appearance_window: false,
+            diagnostics_window: false,
+            logged_ppp: 0.0,
             look_shown: przmterm_session::preferences::Look::Dark,
+            title_bar: titlebar::TitleBar::default(),
             transfer_dialog: None,
             paste_confirm: None,
             fonts,
@@ -1143,6 +1156,9 @@ impl PrzmApp {
         if changes.is_empty() {
             return;
         }
+        for change in changes {
+            tracing::info!("keyword set {change:?}");
+        }
         if changes
             .iter()
             .any(|c| !matches!(c, keywords::KeywordChange::Saved(_)))
@@ -1164,6 +1180,7 @@ impl PrzmApp {
         if names.is_empty() {
             return;
         }
+        tracing::debug!("keyword sets changed: {}", names.join(", "));
         let env = self.env();
         for pane in self.tabs.iter_mut().flat_map(|t| &mut t.panes) {
             if pane
@@ -1180,6 +1197,15 @@ impl PrzmApp {
     fn reload_sessions(&mut self) -> Vec<String> {
         if let Some(dir) = &self.config_dir {
             self.sessions = SessionTree::load(dir);
+            tracing::debug!(
+                "sessions read from {}: {} sessions, {} problems",
+                dir.display(),
+                self.sessions.root.all_sessions().len(),
+                self.sessions.errors.len()
+            );
+            for problem in &self.sessions.errors {
+                tracing::warn!("settings: {problem}");
+            }
         }
         self.share_sessions();
         self.refresh_open_sessions()
@@ -1888,6 +1914,7 @@ impl PrzmApp {
                 self.active_tab = self.tabs.len() - 1;
             }
             Action::CloseTab(index) => {
+                tracing::debug!("tab {index} closed");
                 let mut tab = self.tabs.remove(index);
                 for pane in &mut tab.panes {
                     let _ = pane.transport.close();
@@ -2927,6 +2954,9 @@ impl PrzmApp {
             AppCommand::Appearance => {
                 self.appearance_window = true;
             }
+            AppCommand::Diagnostics => {
+                self.diagnostics_window = true;
+            }
             AppCommand::Shortcuts => {
                 self.keymap_editor = Some(keymap::KeymapEditor::new(&self.shortcuts));
             }
@@ -2960,7 +2990,7 @@ impl PrzmApp {
         let mut open = true;
         let mut look = self.prefs.look;
         let mut mouse = self.prefs.mouse;
-        egui::Window::new(crate::theme::window_title(ctx, "Settings"))
+        let shown = egui::Window::new(crate::theme::window_title(ctx, "Settings"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -3026,7 +3056,9 @@ impl PrzmApp {
                     "Triple-click selects the line break too",
                 );
             });
+        crate::theme::close_corner(ctx, shown.as_ref(), &mut open);
         if look != self.prefs.look || mouse != self.prefs.mouse {
+            tracing::info!("settings: look {look:?}, mouse {mouse:?}");
             self.prefs.mouse = mouse;
             self.prefs.look = look;
             if let Some(dir) = &self.config_dir
@@ -3037,6 +3069,89 @@ impl PrzmApp {
         }
         if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.appearance_window = false;
+        }
+    }
+
+    /// The Diagnostics window: the system, the graphics in use and the log
+    /// file, to copy and send when something looks wrong.
+    fn diagnostics_ui(&mut self, ctx: &egui::Context) {
+        if !self.diagnostics_window {
+            return;
+        }
+        let mut open = true;
+        let mut detailed = self.prefs.debug_log;
+        let report = diagnostics::report(ctx, self.config_dir.as_deref(), detailed);
+        let shown = egui::Window::new(crate::theme::window_title(ctx, "Diagnostics"))
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(ctx.content_rect().center())
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.set_max_width(520.0);
+                ui.weak(
+                    "Copy these details, and the log, when something goes wrong. \
+                     The log has no passwords.",
+                );
+                ui.add_space(6.0);
+                egui::Frame::new()
+                    .fill(theme::p().sunken)
+                    .stroke(egui::Stroke::new(1.0, theme::p().border))
+                    .corner_radius(4)
+                    .inner_margin(egui::Margin::same(8))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.label(egui::RichText::new(&report).monospace());
+                    });
+                ui.add_space(6.0);
+                theme::checkbox(ui, &mut detailed, "Detailed log")
+                    .on_hover_text("Write PrzmTerm's steps in detail, until turned off");
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Copy details").clicked() {
+                        ui.ctx().copy_text(report.clone());
+                    }
+                    let log = diagnostics::log_path().cloned();
+                    if ui
+                        .add_enabled(log.is_some(), egui::Button::new("Open log"))
+                        .clicked()
+                        && let Some(path) = &log
+                        && let Err(e) = desktop::open_text(path)
+                    {
+                        self.notice = Some(format!("Could not open the log: {e}"));
+                    }
+                    let previous = diagnostics::previous_log();
+                    if ui
+                        .add_enabled(previous.is_some(), egui::Button::new("Open last run's log"))
+                        .on_hover_text("The log of the time PrzmTerm ran before this one")
+                        .clicked()
+                        && let Some(path) = &previous
+                        && let Err(e) = desktop::open_text(path)
+                    {
+                        self.notice = Some(format!("Could not open the log: {e}"));
+                    }
+                    if ui
+                        .add_enabled(log.is_some(), egui::Button::new("Show in folder"))
+                        .clicked()
+                        && let Some(path) = &log
+                        && let Err(e) = desktop::reveal(path)
+                    {
+                        self.notice = Some(format!("Could not show the log: {e}"));
+                    }
+                });
+            });
+        crate::theme::close_corner(ctx, shown.as_ref(), &mut open);
+        if detailed != self.prefs.debug_log {
+            self.prefs.debug_log = detailed;
+            diagnostics::set_detailed(detailed);
+            if let Some(dir) = &self.config_dir
+                && let Err(e) = self.prefs.save(dir)
+            {
+                self.notice = Some(format!("Preferences not saved: {e}"));
+            }
+        }
+        if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.diagnostics_window = false;
         }
     }
 
@@ -3066,7 +3181,7 @@ impl PrzmApp {
         }
         let mut wanted = None;
         let place = update::place();
-        egui::Window::new(crate::theme::window_title(ctx, "Software Update"))
+        let shown = egui::Window::new(crate::theme::window_title(ctx, "Software Update"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -3274,6 +3389,7 @@ impl PrzmApp {
                 ui.add_space(8.0);
                 crate::theme::checkbox(ui, &mut check_at_start, "Check when PrzmTerm starts");
             });
+        crate::theme::close_corner(ctx, shown.as_ref(), &mut open);
         let save = |prefs: &przmterm_session::preferences::Preferences,
                     dir: &Option<std::path::PathBuf>| {
             dir.as_ref()
@@ -3335,13 +3451,14 @@ impl PrzmApp {
             ctx.load_texture("przmterm-icon", image, egui::TextureOptions::LINEAR)
         });
         let mut open = true;
-        egui::Window::new(crate::theme::window_title(ctx, "About PrzmTerm"))
+        let shown = egui::Window::new(crate::theme::window_title(ctx, "About PrzmTerm"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
             .auto_sized()
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| appmenu::about(ui, Some(icon)));
+        crate::theme::close_corner(ctx, shown.as_ref(), &mut open);
         if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.about = None;
         }
@@ -3807,6 +3924,8 @@ impl PrzmApp {
                     actions.push(Action::SendBreak);
                 }
                 if out.resized.is_some() {
+                    let size = pane.size();
+                    tracing::debug!("{}: {}x{}", pane.title(), size.cols, size.rows);
                     match pane.transport.resize(pane.size()) {
                         Ok(()) | Err(TransportError::Closed) => {}
                         Err(e) => tracing::warn!("resize failed: {e}"),
@@ -4063,7 +4182,11 @@ impl PrzmApp {
             lines.extend(report.notes.iter().cloned());
             lines
         });
-        self.import_result = Some(result.unwrap_or_else(|e| vec![format!("Import failed: {e}")]));
+        let lines = result.unwrap_or_else(|e| vec![format!("Import failed: {e}")]);
+        for line in &lines {
+            tracing::info!("import: {line}");
+        }
+        self.import_result = Some(lines);
         self.reload_sessions();
         // Open sessions using an imported set highlight with it at once.
         let imported: Vec<String> = report
@@ -4322,6 +4445,7 @@ impl PrzmApp {
         self.about_ui(ctx);
         self.update_ui(ctx);
         self.appearance_ui(ctx);
+        self.diagnostics_ui(ctx);
         if let Some(dialog) = &mut self.split_dialog {
             let tabs = &self.tabs;
             dialog
@@ -4842,6 +4966,7 @@ impl PrzmApp {
                 EditorResult::Open => {}
                 EditorResult::Cancel => self.editor = None,
                 EditorResult::Saved(name) => {
+                    tracing::info!("settings saved: {name}");
                     self.editor = None;
                     let reconnect = self.reload_sessions();
                     self.notice = Some(if reconnect.is_empty() {
@@ -5663,6 +5788,13 @@ impl eframe::App for PrzmApp {
     /// before each frame, and also while the window is minimized or hidden,
     /// when it draws nothing and calls no `ui`.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // The scale (a window moved to another screen, a zoom): it changes
+        // how everything is drawn.
+        let ppp = ctx.pixels_per_point();
+        if ppp != self.logged_ppp {
+            tracing::info!("scale {ppp:.2}");
+            self.logged_ppp = ppp;
+        }
         // Every pane keeps reading, visible or not.
         let mut got = false;
         for tab in &mut self.tabs {
@@ -5680,7 +5812,7 @@ impl eframe::App for PrzmApp {
         self.run_transfers(ctx);
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         // A glyph atlas that filled up last frame starts over.
         grid::atlas().begin_frame();
         let ctx = ui.ctx().clone();
@@ -5689,6 +5821,7 @@ impl eframe::App for PrzmApp {
             theme::set_look(&ctx, self.look_shown);
         }
         theme::sync(&ctx);
+        self.title_bar.follow(&ctx, frame);
         for command in appmenu::take() {
             self.app_command(&ctx, command);
         }
@@ -6236,6 +6369,10 @@ impl eframe::App for PrzmApp {
                             }
                             if ui.button("Check for Updates…").clicked() {
                                 menu_command = Some(appmenu::AppCommand::CheckUpdates);
+                                ui.close();
+                            }
+                            if ui.button("Diagnostics…").clicked() {
+                                menu_command = Some(appmenu::AppCommand::Diagnostics);
                                 ui.close();
                             }
                             if ui.button("About PrzmTerm…").clicked() {

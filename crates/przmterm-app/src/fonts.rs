@@ -103,6 +103,7 @@ impl TermFonts {
                     .insert(egui::FontFamily::Name(key.into()), chain);
                 ctx.set_fonts(self.defs.clone());
                 crate::grid::atlas().set_fonts(&self.defs);
+                tracing::debug!("font {name:?} loaded");
                 self.loaded.insert(name.to_string(), pass);
                 ctx.request_repaint();
             }

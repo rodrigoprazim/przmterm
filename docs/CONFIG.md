@@ -445,6 +445,7 @@ triple_click_newline = false
 | `check_for_updates` | `true` or `false` | `true` | Look for a newer release on GitHub when PrzmTerm starts. |
 | `look` | `"dark"`, `"light"` or `"system"` | `"dark"` | The interface's look (*Settings…*). `system` follows the computer's mode. |
 | `skipped_version` | text | none | A release chosen with *Skip This Version*: PrzmTerm does not announce it when it starts. *Check for Updates…* still shows it. |
+| `debug_log` | `true` or `false` | `false` | The log file has PrzmTerm's steps in detail (*Diagnostics…* › *Detailed log*). |
 
 `[mouse]`, what the mouse does in the terminal (*Settings…*). All off
 unless chosen:

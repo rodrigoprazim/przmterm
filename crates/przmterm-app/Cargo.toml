@@ -63,6 +63,9 @@ flate2 = { version = "1.1", default-features = false, features = ["rust_backend"
 tar = { version = "0.4", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
+# The title bar in the interface's colours (src/titlebar.rs): eframe's own
+# winit, whose Windows extension sets them.
+winit = { version = "0.30", default-features = false }
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 

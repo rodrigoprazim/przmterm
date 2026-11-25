@@ -192,7 +192,7 @@ impl ScriptGuide {
     /// Draws the window; returns false once it is closed.
     pub fn show(&mut self, ctx: &egui::Context, config_dir: &Path) -> bool {
         let mut open = true;
-        egui::Window::new(crate::theme::window_title(ctx, "Script guide"))
+        let shown = egui::Window::new(crate::theme::window_title(ctx, "Script guide"))
             .open(&mut open)
             .default_size([820.0, 560.0])
             .pivot(egui::Align2::CENTER_CENTER)
@@ -298,6 +298,7 @@ impl ScriptGuide {
                     });
                 });
             });
+        crate::theme::close_corner(ctx, shown.as_ref(), &mut open);
         open
     }
 }

@@ -87,7 +87,7 @@ impl Problems {
         }
         let mut fix = None;
         let mut open = true;
-        egui::Window::new(crate::theme::window_title(ctx, "Settings problems"))
+        let shown = egui::Window::new(crate::theme::window_title(ctx, "Settings problems"))
             .open(&mut open)
             .pivot(egui::Align2::CENTER_CENTER)
             .default_pos(ctx.content_rect().center())
@@ -115,6 +115,7 @@ impl Problems {
                     }
                 });
             });
+        crate::theme::close_corner(ctx, shown.as_ref(), &mut open);
         if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.open = false;
             self.confirm_delete = None;

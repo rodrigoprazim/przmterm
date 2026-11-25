@@ -7,6 +7,34 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **+** › *Diagnostics…*: the version, the system, the graphics card and
+  driver in use and how the terminal is drawn, to copy; the log file, which
+  PrzmTerm now writes on every system (Windows had none), keeping the run
+  before; and a *Detailed log* switch. Graphics errors are written to the
+  log instead of closing the app, and crashes leave their reason in it.
+  The log notes sessions opened and closed (and why), connection steps
+  and errors, file transfers, scripts, session logs, the vault locked and
+  unlocked, settings saved and the update check; the detailed log adds
+  each step of a connection (as *Debug login*), the file browser's
+  operations, escape sequences the terminal does not support, keyword
+  sets loaded, window scale and terminal sizes. No passwords and nothing
+  typed or shown in the terminal go into it.
+
+### Fixed
+
+- A window's close button answers in the whole corner of its title bar,
+  not only on the cross itself.
+- *Check for Updates…* works when GitHub's API turns the check down
+  (it answers 60 requests an hour per address, shared by a whole company
+  network): the release is then found from the releases' feed and files
+  on github.com. Why the API refused, and until when, goes to the log.
+- Windows: the title bar is drawn in the interface's own colours (Windows
+  11), as part of the window, and changes with the look at once. It kept
+  the old colours when the look changed, with buttons in the new ones (a
+  dark bar with a close button that could not be seen).
+
 ## [1.0.0-rc.9] - 2026-11-22
 
 ### Added
