@@ -283,7 +283,9 @@ cleanly (or a file of escape sequences was shown with `cat`): its screen
 stays, the mouse wheel sends arrow keys, only part of the screen scrolls.
 The text and the history stay, and nothing is sent to the other side, so it
 works on equipment without a shell too (`reset` or `printf '\ec'` do the
-same from a Unix shell). It can have a shortcut in *Keyboard shortcuts*.
+same from a Unix shell). It is also in the tab's right-click menu, for
+all of the tab's panes (and when the right button pastes, the terminal has
+no menu), and can have a shortcut in *Keyboard shortcuts*.
 
 **+** › *Settings…* (*PrzmTerm* › *Settings…* on macOS) has the *Mouse*
 options, for the whole app, all off until chosen:

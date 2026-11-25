@@ -755,8 +755,9 @@ enum Action {
     /// Opens the session editor, where the log file is set.
     LogSettings,
     SendBreak,
-    /// The active pane's terminal back to its defaults (*Reset terminal*).
-    ResetTerminal,
+    /// A tab's terminal back to its defaults (*Reset terminal*): one pane,
+    /// or all of the tab's (from the tab's menu).
+    ResetTerminal(usize, Option<usize>),
     Macro(buttonbar::Press),
     ToggleBroadcast,
     ToggleButtons,
@@ -2357,12 +2358,17 @@ impl PrzmApp {
                     }
                 }
             }
-            Action::ResetTerminal => {
-                let pane = self.tab_mut().pane_mut();
-                pane.term.reset();
-                pane.view.after_reset();
-                tracing::info!("{}: terminal reset", pane.title());
-                self.notice = Some("Terminal reset.".into());
+            Action::ResetTerminal(t, only) => {
+                if let Some(tab) = self.tabs.get_mut(t) {
+                    for (i, pane) in tab.panes.iter_mut().enumerate() {
+                        if only.is_none_or(|p| p == i) {
+                            pane.term.reset();
+                            pane.view.after_reset();
+                            tracing::info!("{}: terminal reset", pane.title());
+                        }
+                    }
+                    self.notice = Some("Terminal reset.".into());
+                }
             }
             Action::ToggleLog => {
                 let pane = self.tab_mut().pane_mut();
@@ -2627,7 +2633,7 @@ impl PrzmApp {
                 "reconnect" => Action::ReconnectTab(t),
                 "disconnect" => Action::DisconnectTab(t),
                 "send_break" => Action::SendBreak,
-                "reset_terminal" => Action::ResetTerminal,
+                "reset_terminal" => Action::ResetTerminal(t, Some(self.tabs[t].active)),
                 "toggle_sessions" => Action::ToggleSessions,
                 "zoom_in" => Action::Zoom(1.0),
                 "zoom_out" => Action::Zoom(-1.0),
@@ -3934,10 +3940,7 @@ impl PrzmApp {
                     actions.push(Action::SendBreak);
                 }
                 if out.reset_terminal {
-                    if !active {
-                        actions.push(Action::FocusPane(i));
-                    }
-                    actions.push(Action::ResetTerminal);
+                    actions.push(Action::ResetTerminal(self.active_tab, Some(i)));
                 }
                 if out.resized.is_some() {
                     let size = pane.size();
@@ -5252,6 +5255,8 @@ fn tab_menu(
         "Disconnect",
         Action::DisconnectTab(i),
     );
+    // Also here: with the right button pasting, the terminal has no menu.
+    item(ui, true, "Reset Terminal", Action::ResetTerminal(i, None));
     ui.separator();
     item(ui, true, "Close", Action::RequestClose(vec![i]));
     // The other tabs are those of the same window.
