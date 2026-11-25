@@ -7,6 +7,8 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.0.0-rc.10] - 2026-11-25
+
 ### Added
 
 - **+** › *Diagnostics…*: the version, the system, the graphics card and
@@ -944,7 +946,7 @@ All notable changes to PrzmTerm are recorded here. The format follows
 - Desktop app with a session tree, terminal widget, xterm key mapping and a demo shell.
 - CI on Linux, macOS and Windows and a release workflow for version tags.
 
-[Unreleased]: https://github.com/rodrigoprazim/przmterm/compare/v1.0.0-rc.9...main
+[Unreleased]: https://github.com/rodrigoprazim/przmterm/compare/v1.0.0-rc.10...main
 [0.1.0]: https://github.com/rodrigoprazim/przmterm/releases/tag/v0.1.0
 [0.2.0]: https://github.com/rodrigoprazim/przmterm/compare/v0.1.0...v0.2.0
 [0.3.0]: https://github.com/rodrigoprazim/przmterm/compare/v0.2.0...v0.3.0
@@ -963,3 +965,4 @@ All notable changes to PrzmTerm are recorded here. The format follows
 [1.0.0-rc.7]: https://github.com/rodrigoprazim/przmterm/compare/v1.0.0-rc.6...v1.0.0-rc.7
 [1.0.0-rc.8]: https://github.com/rodrigoprazim/przmterm/compare/v1.0.0-rc.7...v1.0.0-rc.8
 [1.0.0-rc.9]: https://github.com/rodrigoprazim/przmterm/compare/v1.0.0-rc.8...v1.0.0-rc.9
+[1.0.0-rc.10]: https://github.com/rodrigoprazim/przmterm/compare/v1.0.0-rc.9...v1.0.0-rc.10
