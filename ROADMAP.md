@@ -219,7 +219,7 @@ and, when a device is at hand, a serial console (Xmodem or Ymodem).
   select, paste button, hide pointer, Ctrl+click URLs, triple-click
   newline); keyword sets managed from the session settings
 - [x] Diagnostics: a log file on every system (keeping the run before),
-  graphics details and errors, a detailed log switch, *Compatible drawing*
+  graphics details and errors, a detailed log switch
 - [x] User guide and scripting reference: [docs/GUIDE.md](docs/GUIDE.md)
   and [docs/SCRIPTING.md](docs/SCRIPTING.md)
 - [x] Buttons and shortcuts that type a password can require the prompt

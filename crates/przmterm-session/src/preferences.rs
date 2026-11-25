@@ -26,10 +26,6 @@ pub struct Preferences {
     /// The log file has PrzmTerm's steps in detail (*Diagnostics…*).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub debug_log: bool,
-    /// The terminal drawn by egui instead of PrzmTerm's own graphics-card
-    /// renderer: slower, for graphics drivers that draw it wrong.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub compatible_drawing: bool,
 }
 
 /// What the mouse does in the terminal (`[mouse]`). Everything is off
@@ -91,7 +87,6 @@ impl Default for Preferences {
             skipped_version: None,
             mouse: MouseOptions::default(),
             debug_log: false,
-            compatible_drawing: false,
         }
     }
 }
@@ -136,7 +131,6 @@ mod tests {
                 ..MouseOptions::default()
             },
             debug_log: true,
-            compatible_drawing: true,
         };
         assert_eq!(
             Preferences::load(tmp.path()).look,

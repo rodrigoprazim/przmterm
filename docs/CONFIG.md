@@ -446,7 +446,6 @@ triple_click_newline = false
 | `look` | `"dark"`, `"light"` or `"system"` | `"dark"` | The interface's look (*Settings…*). `system` follows the computer's mode. |
 | `skipped_version` | text | none | A release chosen with *Skip This Version*: PrzmTerm does not announce it when it starts. *Check for Updates…* still shows it. |
 | `debug_log` | `true` or `false` | `false` | The log file has PrzmTerm's steps in detail (*Diagnostics…* › *Detailed log*). |
-| `compatible_drawing` | `true` or `false` | `false` | The terminal drawn by egui instead of the graphics-card renderer (*Settings…* › *Graphics*), for drivers that draw it wrong. |
 
 `[mouse]`, what the mouse does in the terminal (*Settings…*). All off
 unless chosen:

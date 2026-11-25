@@ -7,24 +7,12 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
-### Added
-
-- *Settings…* › *Graphics* › *Compatible drawing*: the terminal drawn by
-  the interface's own painter instead of the graphics-card renderer, at
-  once, for graphics drivers that show its colours or cursor wrong.
-
 ### Fixed
 
 - With some installed fonts the terminal's text lost its colours and came
   out all white (Lucida Console on Windows, a usual choice in SecureCRT
   settings): their small-size bitmap glyphs were drawn as pictures in their
   own colour. Those bitmaps are now left out and the fonts' outlines used.
-
-### Changed
-
-- The graphics-card renderer reads colours the way the GPU converts them
-  itself (as egui's own drawing does) instead of unpacking them in the
-  shader: less for a driver to get wrong.
 
 ## [1.0.0-rc.10] - 2026-11-25
 
