@@ -596,6 +596,12 @@ impl Pane {
     }
 
     pub fn open(session: &Session, env: &Env, size: Size, waker: Waker) -> Self {
+        tracing::info!(
+            "opening {} {} ({})",
+            session.protocol,
+            session.display_target(),
+            session.name
+        );
         let transport = connect(session, env, size, waker.clone());
         let mut pane = Self::with(
             Terminal::with_scrollback(
@@ -775,6 +781,12 @@ impl Pane {
         match przmterm_session::read_keyword_set(dir, name) {
             Ok(set) => {
                 let (h, mut problems) = przmterm_term::highlight::Highlighter::new(&set);
+                tracing::debug!(
+                    "keyword set {name} on {}: {} rules, {} problems",
+                    session.name,
+                    set.rules.len(),
+                    problems.len()
+                );
                 if !set.unknown.is_empty() {
                     problems.push(format!(
                         "unknown setting(s) ignored: {}",
@@ -792,7 +804,7 @@ impl Pane {
             Err(przmterm_session::SessionError::Io { source, .. })
                 if source.kind() == std::io::ErrorKind::NotFound =>
             {
-                tracing::debug!("keyword set {name} not found");
+                tracing::info!("keyword set {name} (of {}) not found", session.name);
             }
             Err(e) => self
                 .term
@@ -900,6 +912,11 @@ impl Pane {
             return;
         };
         let ending = self.transport.ending();
+        tracing::info!(
+            "{} closed: {}",
+            session.name,
+            ending.map_or("ended".into(), |e| format!("{e:?}").to_lowercase())
+        );
         let retry =
             session.auto_reconnect && matches!(ending, Some(Ending::Lost | Ending::Unreachable));
         if !retry {

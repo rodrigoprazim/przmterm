@@ -7,6 +7,14 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **+** › *Diagnostics…*: the version, the system, the graphics card and
+  driver in use and how the terminal is drawn, to copy; the log file, which
+  PrzmTerm now writes on every system (Windows had none), keeping the run
+  before; and a *Detailed log* switch. Graphics errors are written to the
+  log instead of closing the app, and crashes leave their reason in it.
+
 ## [1.0.0-rc.9] - 2026-11-22
 
 ### Added

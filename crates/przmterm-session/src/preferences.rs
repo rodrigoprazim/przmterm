@@ -23,6 +23,9 @@ pub struct Preferences {
     pub skipped_version: Option<String>,
     /// What the mouse does in the terminal.
     pub mouse: MouseOptions,
+    /// The log file has PrzmTerm's steps in detail (*Diagnostics…*).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub debug_log: bool,
 }
 
 /// What the mouse does in the terminal (`[mouse]`). Everything is off
@@ -83,6 +86,7 @@ impl Default for Preferences {
             look: Look::Dark,
             skipped_version: None,
             mouse: MouseOptions::default(),
+            debug_log: false,
         }
     }
 }
@@ -126,6 +130,7 @@ mod tests {
                 paste_button: PasteButton::Right,
                 ..MouseOptions::default()
             },
+            debug_log: true,
         };
         assert_eq!(
             Preferences::load(tmp.path()).look,
