@@ -1963,12 +1963,12 @@ impl Editor {
             przmterm_session::DEFAULT_FOREGROUND,
         );
         ui.label("Background");
-        if ui.color_edit_button_srgb(&mut bg).changed() {
+        if crate::colorpick::button(ui, &mut bg).changed() {
             self.background = Some(przmterm_session::color_text(bg));
         }
         ui.end_row();
         ui.label("Text");
-        if ui.color_edit_button_srgb(&mut fg).changed() {
+        if crate::colorpick::button(ui, &mut fg).changed() {
             self.foreground = Some(przmterm_session::color_text(fg));
         }
         ui.end_row();
@@ -2004,7 +2004,7 @@ impl Editor {
                 .or_else(|| cx.inherited.terminal.cursor_color.clone())
                 .and_then(|c| przmterm_session::parse_color(&c));
             let mut color = effective.unwrap_or(default_cursor());
-            if ui.color_edit_button_srgb(&mut color).changed() {
+            if crate::colorpick::button(ui, &mut color).changed() {
                 self.cursor_color = Some(przmterm_session::color_text(color));
             }
         });

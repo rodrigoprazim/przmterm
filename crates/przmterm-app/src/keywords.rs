@@ -785,7 +785,7 @@ fn color_pick(ui: &mut egui::Ui, value: &mut Option<String>, default: [u8; 3], h
         }
         if let Some(text) = value {
             let mut rgb = parse_color(text).unwrap_or(default);
-            if ui.color_edit_button_srgb(&mut rgb).changed() {
+            if crate::colorpick::button(ui, &mut rgb).changed() {
                 *text = format_color(rgb);
             }
         }

@@ -26,6 +26,10 @@ pub struct Preferences {
     /// The log file has PrzmTerm's steps in detail (*Diagnostics…*).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub debug_log: bool,
+    /// Folders of the session list left closed, as their path from the
+    /// sessions folder (`"Data Center/Network"`); the others open.
+    #[serde(skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub closed_folders: std::collections::BTreeSet<String>,
 }
 
 /// What the mouse does in the terminal (`[mouse]`). Everything is off
@@ -87,6 +91,7 @@ impl Default for Preferences {
             skipped_version: None,
             mouse: MouseOptions::default(),
             debug_log: false,
+            closed_folders: Default::default(),
         }
     }
 }
@@ -131,6 +136,7 @@ mod tests {
                 ..MouseOptions::default()
             },
             debug_log: true,
+            closed_folders: ["Data Center/Network".to_string()].into(),
         };
         assert_eq!(
             Preferences::load(tmp.path()).look,

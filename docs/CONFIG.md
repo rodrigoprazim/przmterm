@@ -446,6 +446,7 @@ triple_click_newline = false
 | `look` | `"dark"`, `"light"` or `"system"` | `"dark"` | The interface's look (*Settings…*). `system` follows the computer's mode. |
 | `skipped_version` | text | none | A release chosen with *Skip This Version*: PrzmTerm does not announce it when it starts. *Check for Updates…* still shows it. |
 | `debug_log` | `true` or `false` | `false` | The log file has PrzmTerm's steps in detail (*Diagnostics…* › *Detailed log*). |
+| `closed_folders` | list of folder paths | `[]` | Folders of the session list left closed, by their path from the sessions folder (`"Data Center/Network"`); kept as they are opened and closed. |
 
 `[mouse]`, what the mouse does in the terminal (*Settings…*). All off
 unless chosen:

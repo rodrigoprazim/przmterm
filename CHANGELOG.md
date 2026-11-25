@@ -7,6 +7,19 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A colour picker of PrzmTerm's own for every colour (cursor, terminal,
+  keywords, highlights): a palette, the colours picked lately, a
+  saturation and brightness square with a hue bar, and the colour as hue,
+  saturation and lightness, red, green and blue, or hex to type in, with
+  the colour before beside the new one.
+
+### Changed
+
+- The session list remembers which folders were closed: they stay closed
+  the next time PrzmTerm starts (`closed_folders` in `preferences.toml`).
+
 ## [1.0.0-rc.10] - 2026-11-25
 
 ### Added
