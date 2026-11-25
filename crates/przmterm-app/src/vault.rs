@@ -104,6 +104,9 @@ impl VaultUi {
     }
 
     pub fn lock(&mut self) {
+        if self.vault.is_some() {
+            tracing::info!("vault locked");
+        }
         self.vault = None;
         self.snapshot = None;
         self.edit = None;
@@ -157,10 +160,12 @@ impl VaultUi {
     fn unlock(&mut self, config_dir: &Path) -> bool {
         match Vault::open(&vault_path(config_dir), &self.master) {
             Ok(vault) => {
+                tracing::info!("vault unlocked ({} entries)", vault.entries.len());
                 self.opened(vault);
                 true
             }
             Err(e) => {
+                tracing::info!("vault not unlocked: {e}");
                 self.error = Some(match e {
                     VaultError::WrongPassword => "Wrong master password.".to_string(),
                     e => e.to_string(),

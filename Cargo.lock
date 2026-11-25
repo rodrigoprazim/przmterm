@@ -4378,6 +4378,7 @@ version = "1.0.0-rc.9"
 dependencies = [
  "fancy-regex",
  "przmterm-core",
+ "tracing",
  "unicode-width",
  "vte",
 ]

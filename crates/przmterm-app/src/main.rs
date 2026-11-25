@@ -904,6 +904,8 @@ struct PrzmApp {
     appearance_window: bool,
     /// The Diagnostics window is open.
     diagnostics_window: bool,
+    /// The scale last written to the log.
+    logged_ppp: f32,
     /// The interface look last set, to follow `prefs.look`.
     look_shown: przmterm_session::preferences::Look,
     /// Questions from scripts, asked one at a time.
@@ -1066,6 +1068,7 @@ impl PrzmApp {
             update_window: false,
             appearance_window: false,
             diagnostics_window: false,
+            logged_ppp: 0.0,
             look_shown: przmterm_session::preferences::Look::Dark,
             transfer_dialog: None,
             paste_confirm: None,
@@ -1149,6 +1152,9 @@ impl PrzmApp {
         if changes.is_empty() {
             return;
         }
+        for change in changes {
+            tracing::info!("keyword set {change:?}");
+        }
         if changes
             .iter()
             .any(|c| !matches!(c, keywords::KeywordChange::Saved(_)))
@@ -1187,6 +1193,15 @@ impl PrzmApp {
     fn reload_sessions(&mut self) -> Vec<String> {
         if let Some(dir) = &self.config_dir {
             self.sessions = SessionTree::load(dir);
+            tracing::debug!(
+                "sessions read from {}: {} sessions, {} problems",
+                dir.display(),
+                self.sessions.root.all_sessions().len(),
+                self.sessions.errors.len()
+            );
+            for problem in &self.sessions.errors {
+                tracing::warn!("settings: {problem}");
+            }
         }
         self.share_sessions();
         self.refresh_open_sessions()
@@ -1895,6 +1910,7 @@ impl PrzmApp {
                 self.active_tab = self.tabs.len() - 1;
             }
             Action::CloseTab(index) => {
+                tracing::debug!("tab {index} closed");
                 let mut tab = self.tabs.remove(index);
                 for pane in &mut tab.panes {
                     let _ = pane.transport.close();
@@ -3037,6 +3053,7 @@ impl PrzmApp {
                 );
             });
         if look != self.prefs.look || mouse != self.prefs.mouse {
+            tracing::info!("settings: look {look:?}, mouse {mouse:?}");
             self.prefs.mouse = mouse;
             self.prefs.look = look;
             if let Some(dir) = &self.config_dir
@@ -3899,6 +3916,8 @@ impl PrzmApp {
                     actions.push(Action::SendBreak);
                 }
                 if out.resized.is_some() {
+                    let size = pane.size();
+                    tracing::debug!("{}: {}x{}", pane.title(), size.cols, size.rows);
                     match pane.transport.resize(pane.size()) {
                         Ok(()) | Err(TransportError::Closed) => {}
                         Err(e) => tracing::warn!("resize failed: {e}"),
@@ -4939,6 +4958,7 @@ impl PrzmApp {
                 EditorResult::Open => {}
                 EditorResult::Cancel => self.editor = None,
                 EditorResult::Saved(name) => {
+                    tracing::info!("settings saved: {name}");
                     self.editor = None;
                     let reconnect = self.reload_sessions();
                     self.notice = Some(if reconnect.is_empty() {
@@ -5760,6 +5780,13 @@ impl eframe::App for PrzmApp {
     /// before each frame, and also while the window is minimized or hidden,
     /// when it draws nothing and calls no `ui`.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // The scale (a window moved to another screen, a zoom): it changes
+        // how everything is drawn.
+        let ppp = ctx.pixels_per_point();
+        if ppp != self.logged_ppp {
+            tracing::info!("scale {ppp:.2}");
+            self.logged_ppp = ppp;
+        }
         // Every pane keeps reading, visible or not.
         let mut got = false;
         for tab in &mut self.tabs {

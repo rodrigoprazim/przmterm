@@ -203,6 +203,13 @@ impl Check {
             .name("update-check".into())
             .spawn(move || {
                 let outcome = ask_github();
+                match &outcome {
+                    Outcome::UpToDate => tracing::info!("update check: up to date"),
+                    Outcome::Newer(found) => {
+                        tracing::info!("update check: {} available", found.version);
+                    }
+                    Outcome::Failed(e) => tracing::warn!("update check failed: {e}"),
+                }
                 if let Ok(mut slot) = slot.lock() {
                     *slot = Some(outcome);
                 }

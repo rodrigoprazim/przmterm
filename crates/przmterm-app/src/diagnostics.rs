@@ -22,7 +22,7 @@ const NORMAL: &str = "warn,przmterm=info,przmterm_app=info,przmterm_session=info
 /// With *Detailed log* on: PrzmTerm's own steps, and the graphics library's.
 const DETAILED: &str = "warn,przmterm=debug,przmterm_app=debug,przmterm_session=debug,\
                         przmterm_connect=debug,przmterm_transport=debug,przmterm_term=debug,\
-                        przmterm_script=debug,wgpu_core=info,wgpu_hal=info";
+                        przmterm_script=debug,russh=info,wgpu_core=info,wgpu_hal=info";
 
 const LOG_NAME: &str = "przmterm.log";
 const PREVIOUS_NAME: &str = "przmterm.previous.log";

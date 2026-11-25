@@ -14,6 +14,13 @@ All notable changes to PrzmTerm are recorded here. The format follows
   PrzmTerm now writes on every system (Windows had none), keeping the run
   before; and a *Detailed log* switch. Graphics errors are written to the
   log instead of closing the app, and crashes leave their reason in it.
+  The log notes sessions opened and closed (and why), connection steps
+  and errors, file transfers, scripts, session logs, the vault locked and
+  unlocked, settings saved and the update check; the detailed log adds
+  each step of a connection (as *Debug login*), the file browser's
+  operations, escape sequences the terminal does not support, keyword
+  sets loaded, window scale and terminal sizes. No passwords and nothing
+  typed or shown in the terminal go into it.
 
 ## [1.0.0-rc.9] - 2026-11-22
 

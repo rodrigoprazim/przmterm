@@ -554,6 +554,7 @@ impl Pane {
             modem::Status::Failed(e) => format!("{kind}: transfer failed: {e}"),
             modem::Status::Running => unreachable!(),
         };
+        tracing::info!("{message}");
         if t.in_band {
             self.term
                 .feed(format!("\r\n\x1b[2m[{message}]\x1b[0m\r\n").as_bytes());
@@ -641,6 +642,7 @@ impl Pane {
         waker: Waker,
     ) {
         self.stop_script();
+        tracing::info!("script {} started", path.display());
         let info = match &self.origin {
             Some(s) => SessionInfo {
                 name: s.name.clone(),
@@ -882,6 +884,12 @@ impl Pane {
         self.retry = None;
         self.term.feed(b"\r\n");
         let _ = self.transport.close();
+        tracing::info!(
+            "reconnecting {} ({} {})",
+            session.name,
+            session.protocol,
+            session.display_target()
+        );
         self.transport = connect(&session, env, self.size(), waker.clone());
         self.closed_announced = false;
         self.heard = false;
@@ -954,17 +962,23 @@ impl Pane {
         };
         match SessionLog::start(path.clone(), &session.name) {
             Ok(log) => {
+                tracing::debug!("session log of {} to {}", session.name, log.path.display());
                 self.log_path = Some(log.path.clone());
                 self.log = Some(log);
             }
-            Err(e) => self
-                .term
-                .feed(format!("\x1b[31m[Cannot write the log file: {e}]\x1b[0m\r\n").as_bytes()),
+            Err(e) => {
+                tracing::warn!("session log {}: {e}", path.display());
+                self.term.feed(
+                    format!("\x1b[31m[Cannot write the log file: {e}]\x1b[0m\r\n").as_bytes(),
+                );
+            }
         }
     }
 
     pub fn stop_log(&mut self) {
-        self.log = None;
+        if self.log.take().is_some() {
+            tracing::debug!("session log stopped");
+        }
     }
 
     /// Logs to `path` from now on, for this pane only (the session's own
