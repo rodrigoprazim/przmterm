@@ -27,6 +27,7 @@ mod problems;
 mod scriptguide;
 mod sftp;
 mod theme;
+mod titlebar;
 mod transfer;
 mod update;
 mod vault;
@@ -111,12 +112,6 @@ fn main() -> eframe::Result {
             if app.prefs.debug_log {
                 diagnostics::set_detailed(true);
             }
-            // Windows keeps a title bar's old colours while the window is
-            // active when the look changes, and its buttons come out in the
-            // new ones (a dark bar with dark buttons): the title bar follows
-            // Windows' own light or dark mode instead, as most apps' do.
-            #[cfg(windows)]
-            cc.egui_ctx.options_mut(|o| o.sync_window_theme = false);
             theme::apply(&cc.egui_ctx, app.prefs.look);
             // ⌘+, ⌘− and ⌘0 zoom the terminal's font (shortcuts), not the
             // whole window.
@@ -914,6 +909,8 @@ struct PrzmApp {
     logged_ppp: f32,
     /// The interface look last set, to follow `prefs.look`.
     look_shown: przmterm_session::preferences::Look,
+    /// Windows: the title bar in the interface's colours.
+    title_bar: titlebar::TitleBar,
     /// Questions from scripts, asked one at a time.
     script_prompts: std::collections::VecDeque<ScriptPrompt>,
     /// A backup or export being restored or imported, and the folder name
@@ -1076,6 +1073,7 @@ impl PrzmApp {
             diagnostics_window: false,
             logged_ppp: 0.0,
             look_shown: przmterm_session::preferences::Look::Dark,
+            title_bar: titlebar::TitleBar::default(),
             transfer_dialog: None,
             paste_confirm: None,
             fonts,
@@ -5814,7 +5812,7 @@ impl eframe::App for PrzmApp {
         self.run_transfers(ctx);
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         // A glyph atlas that filled up last frame starts over.
         grid::atlas().begin_frame();
         let ctx = ui.ctx().clone();
@@ -5823,6 +5821,7 @@ impl eframe::App for PrzmApp {
             theme::set_look(&ctx, self.look_shown);
         }
         theme::sync(&ctx);
+        self.title_bar.follow(&ctx, frame);
         for command in appmenu::take() {
             self.app_command(&ctx, command);
         }

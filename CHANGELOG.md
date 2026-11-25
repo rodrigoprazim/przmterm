@@ -30,9 +30,10 @@ All notable changes to PrzmTerm are recorded here. The format follows
   (it answers 60 requests an hour per address, shared by a whole company
   network): the release is then found from the releases' feed and files
   on github.com. Why the API refused, and until when, goes to the log.
-- Windows: the title bar follows Windows' light or dark mode. It kept the
-  old colours when the look changed, with buttons in the new ones (a dark
-  bar with a close button that could not be seen).
+- Windows: the title bar is drawn in the interface's own colours (Windows
+  11), as part of the window, and changes with the look at once. It kept
+  the old colours when the look changed, with buttons in the new ones (a
+  dark bar with a close button that could not be seen).
 
 ## [1.0.0-rc.9] - 2026-11-22
 
