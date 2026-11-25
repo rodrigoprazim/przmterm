@@ -7,6 +7,13 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- *Reset terminal* in the terminal's right-click menu (and as a keyboard
+  shortcut to set): undoes what a program left set when it did not end
+  cleanly, such as its screen, arrow keys on the mouse wheel or a scroll
+  region, keeping the text and the history. Nothing is sent to the server.
+
 ### Fixed
 
 - Editing in nano garbled lines and put the cursor in the wrong place (a

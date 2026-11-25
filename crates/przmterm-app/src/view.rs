@@ -250,6 +250,8 @@ pub struct ViewOutput {
     pub clicked: bool,
     /// "Send BREAK" was chosen in the context menu.
     pub send_break: bool,
+    /// "Reset terminal" was chosen in the context menu.
+    pub reset_terminal: bool,
     /// Pasted text with line breaks, to confirm before it is sent.
     pub paste: Option<String>,
     /// "Highlight" was chosen in the context menu: the text selected
@@ -443,6 +445,14 @@ fn read_clipboard() -> Option<String> {
 }
 
 impl TerminalView {
+    /// After *Reset terminal*: no selection, nothing half-typed, the view
+    /// at the bottom.
+    pub fn after_reset(&mut self) {
+        self.selection = None;
+        self.preedit.clear();
+        self.scroll_accum = 0.0;
+    }
+
     /// The selected text; a whole-line selection (triple-click) ends with
     /// its line break when the session asks for it.
     fn selected_text(&self, screen: &Screen) -> Option<String> {
@@ -692,6 +702,7 @@ impl TerminalView {
             resized,
             clicked,
             send_break: menu.send_break,
+            reset_terminal: menu.reset_terminal,
             paste: self.pending_paste.take(),
             highlight: menu.highlight,
             find: menu.find,
@@ -1121,6 +1132,18 @@ impl TerminalView {
                 });
                 ui.close();
             }
+            ui.separator();
+            if ui
+                .button("Reset terminal")
+                .on_hover_text(
+                    "Undo what a program left set: the screen it drew, keys, \
+                     scrolling. The text and the history stay.",
+                )
+                .clicked()
+            {
+                choice.reset_terminal = true;
+                ui.close();
+            }
             if self.offer_break {
                 ui.separator();
                 if ui
@@ -1141,6 +1164,7 @@ impl TerminalView {
 #[derive(Default)]
 struct MenuChoice {
     send_break: bool,
+    reset_terminal: bool,
     highlight: Option<String>,
     find: Option<String>,
 }

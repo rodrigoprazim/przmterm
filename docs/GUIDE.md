@@ -275,8 +275,15 @@ size it had. To keep a size, set it in *Font, Colors and Cursor…*.
 
 Drag to select, double-click selects a word, triple-click a line. Right-click
 opens Copy / Paste, Find and Highlight (the text selected, when there is
-one) and Select all. Text with line breaks is shown before it is pasted, to
-check or edit it.
+one), Select all and Reset terminal. Text with line breaks is shown before
+it is pasted, to check or edit it.
+
+**Reset terminal** undoes what a program left set when it did not end
+cleanly (or a file of escape sequences was shown with `cat`): its screen
+stays, the mouse wheel sends arrow keys, only part of the screen scrolls.
+The text and the history stay, and nothing is sent to the other side, so it
+works on equipment without a shell too (`reset` or `printf '\ec'` do the
+same from a Unix shell). It can have a shortcut in *Keyboard shortcuts*.
 
 **+** › *Settings…* (*PrzmTerm* › *Settings…* on macOS) has the *Mouse*
 options, for the whole app, all off until chosen:

@@ -371,6 +371,7 @@ Each shortcut has `keys` and exactly one of `command`, `send`, `script` and
 | `reconnect` | Reconnect | — |
 | `disconnect` | Disconnect | — |
 | `send_break` | Send BREAK | `Cmd+Shift+B` |
+| `reset_terminal` | Reset terminal: the active pane's terminal modes back to their defaults, text kept | — |
 | `toggle_sessions` | Hide / show the session list | `Cmd+Shift+S` |
 | `zoom_in` | Zoom in: the active pane's font a point bigger, not saved (`Equals` also takes `+`) | `Cmd+Equals` |
 | `zoom_out` | Zoom out: a point smaller | `Cmd+Minus` |

@@ -929,6 +929,28 @@ impl Screen {
         }
     }
 
+    /// Back to the normal screen with every mode at its default, keeping
+    /// what is shown and the history: what a program left set (the scroll
+    /// region, application keys, the alternate screen…) no longer applies.
+    fn reset_modes(&mut self) {
+        self.leave_alt_screen();
+        self.pen = Style::default();
+        self.wrap_pending = false;
+        self.autowrap = true;
+        self.cursor_visible = true;
+        self.app_cursor_keys = false;
+        self.bracketed_paste = false;
+        self.scroll_top = 0;
+        self.scroll_bottom = self.rows - 1;
+        self.charsets = [Charset::Ascii; 2];
+        self.gl = 0;
+        self.saved = Saved::default();
+        self.tabs = default_tabs(self.cols);
+        self.insert_mode = false;
+        self.last_char = None;
+        self.display_offset = 0;
+    }
+
     fn reset(&mut self) {
         let fresh = Screen::new(self.cols, self.rows, self.scrollback_limit);
         let scrollback = std::mem::take(&mut self.scrollback);
@@ -1245,6 +1267,15 @@ impl Terminal {
         self.generation += 1;
     }
 
+    /// *Reset terminal*: the normal screen, every mode at its default and
+    /// a half-read escape sequence dropped; the text shown and the history
+    /// stay. Nothing is sent to the other side.
+    pub fn reset(&mut self) {
+        self.parser = Parser::new();
+        self.screen.reset_modes();
+        self.generation += 1;
+    }
+
     /// Bytes the terminal must send back to the remote side (DSR, DA replies).
     pub fn take_output(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.screen.output)
@@ -1369,6 +1400,29 @@ mod tests {
               \x08\x08 \x08\x08 \x08\x08 \x08\x1b[Z \x1b[Z\r",
         );
         assert_eq!(t.screen().line_text(5), "    server_name");
+    }
+
+    #[test]
+    fn reset_undoes_what_a_program_left_set() {
+        let mut t = term(20, 6, "shell$ ");
+        // A full-screen program's start, cut short: alternate screen, a
+        // scroll region, application keys, insert mode, half a sequence.
+        t.feed(b"\x1b[?1049h\x1b[2;3r\x1b[?1h\x1b[4h\x1b[?25l\x1b(0nano\x1b[1;");
+        t.reset();
+        let s = t.screen();
+        assert!(!s.in_alt_screen());
+        assert!(!s.app_cursor_keys());
+        assert!(s.cursor_visible());
+        assert_eq!(s.line_text(0), "shell$", "the normal screen's text stays");
+        t.feed(b"ab\x1b[1;1Hx\r\n1\n2\n3\n4\n5\n6");
+        let s = t.screen();
+        assert_eq!(s.line_text(0), "1", "the whole screen scrolls again");
+        assert!(s.scrollback_len() > 0);
+        assert_eq!(
+            s.scrollback_line(0).map(|l| l[0].ch),
+            Some('x'),
+            "no insert, plain text"
+        );
     }
 
     #[test]

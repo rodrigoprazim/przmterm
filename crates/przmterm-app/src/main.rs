@@ -755,6 +755,8 @@ enum Action {
     /// Opens the session editor, where the log file is set.
     LogSettings,
     SendBreak,
+    /// The active pane's terminal back to its defaults (*Reset terminal*).
+    ResetTerminal,
     Macro(buttonbar::Press),
     ToggleBroadcast,
     ToggleButtons,
@@ -2355,6 +2357,13 @@ impl PrzmApp {
                     }
                 }
             }
+            Action::ResetTerminal => {
+                let pane = self.tab_mut().pane_mut();
+                pane.term.reset();
+                pane.view.after_reset();
+                tracing::info!("{}: terminal reset", pane.title());
+                self.notice = Some("Terminal reset.".into());
+            }
             Action::ToggleLog => {
                 let pane = self.tab_mut().pane_mut();
                 if pane.log.is_some() {
@@ -2618,6 +2627,7 @@ impl PrzmApp {
                 "reconnect" => Action::ReconnectTab(t),
                 "disconnect" => Action::DisconnectTab(t),
                 "send_break" => Action::SendBreak,
+                "reset_terminal" => Action::ResetTerminal,
                 "toggle_sessions" => Action::ToggleSessions,
                 "zoom_in" => Action::Zoom(1.0),
                 "zoom_out" => Action::Zoom(-1.0),
@@ -3922,6 +3932,12 @@ impl PrzmApp {
                         actions.push(Action::FocusPane(i));
                     }
                     actions.push(Action::SendBreak);
+                }
+                if out.reset_terminal {
+                    if !active {
+                        actions.push(Action::FocusPane(i));
+                    }
+                    actions.push(Action::ResetTerminal);
                 }
                 if out.resized.is_some() {
                     let size = pane.size();
