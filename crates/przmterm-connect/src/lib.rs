@@ -83,6 +83,7 @@ pub fn ssh_config(session: &Session, env: &Env, depth: usize) -> Result<SshConfi
         });
     }
     config.term_type = session.term_type.clone();
+    config.erase = session.backspace.byte();
     config.identity_files = session.identity_file.iter().cloned().collect();
     config.debug = session.debug;
     config.keepalive = session.keepalive;

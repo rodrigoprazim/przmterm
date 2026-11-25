@@ -7,6 +7,19 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Editing in nano garbled lines and put the cursor in the wrong place (a
+  character seemed left over, a space seemed added): nano went back to a
+  tab stop with CBT (`CSI Z`), which the terminal ignored. It now follows
+  tab stops as xterm does: CBT, CHT (`CSI I`), and stops set and cleared
+  (HTS, TBC). It also supports insert mode (IRM) and REP, which
+  `xterm-256color` promises and full-screen programs may use.
+- SSH: the remote terminal's erase character is what Backspace sends, and
+  it knows the text is UTF-8 (as OpenSSH tells the server). With `^H`
+  (the default), Backspace erased nothing in programs that read a plain
+  line, such as `read` or a password prompt.
+
 ## [1.0.0-rc.10] - 2026-11-25
 
 ### Added

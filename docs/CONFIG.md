@@ -217,7 +217,7 @@ Used when `protocol = "serial"`.
 | `cursor_color` | `"#rrggbb"` | `"#6ec8ff"` | Cursor colour. `""` is the default one. |
 | `background` | `"#rrggbb"` | `"#181a1f"` | The terminal's background. `""` is the default one. |
 | `foreground` | `"#rrggbb"` | `"#d8dee9"` | The colour of plain text. `""` is the default one. |
-| `backspace` | `"backspace"` or `"delete"` | `"backspace"` | What Backspace sends: `^H` (BS, 0x08, as SecureCRT) or `^?` (DEL, 0x7F, as Linux terminals). Huawei VRP and Nokia need `"backspace"`: they read DEL as "delete the character under the cursor". |
+| `backspace` | `"backspace"` or `"delete"` | `"backspace"` | What Backspace sends: `^H` (BS, 0x08, as SecureCRT) or `^?` (DEL, 0x7F, as Linux terminals). Huawei VRP and Nokia need `"backspace"`: they read DEL as "delete the character under the cursor". Over SSH it is also the remote terminal's erase character (`stty erase`). |
 
 ### `[log]`
 
