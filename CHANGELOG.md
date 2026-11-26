@@ -27,6 +27,12 @@ All notable changes to PrzmTerm are recorded here. The format follows
 - SSH tunnels in the session settings: the address field takes the rest
   of the row, so it shows whole, and + follows the last tunnel (as in
   login triggers) instead of staying on the first.
+- Progress bars (downloading an update, file browser transfers) are thin
+  and flat, with what is being done and the percentage above the bar,
+  instead of egui's rounded bar with the text inside it. When the size is
+  not known, a piece of bar slides along.
+- Menu items no longer end in "…" (*Settings*, *Edit*, *Export session*,
+  *Font, Colors and Cursor*…), nor do the file browser's buttons.
 
 ### Fixed
 

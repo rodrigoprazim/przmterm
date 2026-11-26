@@ -3,7 +3,7 @@
 PrzmTerm scripts drive a session for you. A script types commands, waits
 for the answers, reads them and reacts. Scripts are written in
 [Rhai](https://rhai.rs), a small language that looks like JavaScript or
-Rust. This page lists everything a script can use. *Script guide…* (in the
+Rust. This page lists everything a script can use. *Script guide* (in the
 **+** menu, or *Help* on macOS) teaches the same with snippets you can edit,
 check and save.
 
@@ -26,7 +26,7 @@ full path (or `~/…`) is used as it is.
 
 | From | How |
 | --- | --- |
-| A tab | *Run Script…* in the tab's menu picks a file. |
+| A tab | *Run Script* in the tab's menu picks a file. |
 | A button | The *Script* field of the button dialog (`script` in [`buttons.toml`](CONFIG.md#button-bar-buttonstoml)). |
 | A shortcut | *Run script* in the shortcut dialog (`script` in [`keymap.toml`](CONFIG.md#keyboard-shortcuts-keymaptoml)). |
 | Each connection | The session's **Logon script** (`logon_script`). It starts with the connection, and again on every reconnect. |

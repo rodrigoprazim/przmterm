@@ -1704,7 +1704,7 @@ impl Editor {
                                 ui.selectable_value(&mut self.credential, Some(name.clone()), name);
                             }
                             ui.separator();
-                            if ui.button("Unlock to see every entry…").clicked() {
+                            if ui.button("Unlock to see every entry").clicked() {
                                 self.unlock_request = true;
                                 ui.close();
                             }
@@ -2349,7 +2349,7 @@ fn folder_picker(ui: &mut egui::Ui, root: &Folder, trail: &mut Vec<String>, pick
             ui.separator();
             if pick.new_name.is_none() {
                 let parent = shown(trail);
-                if new_folder_row(ui, &format!("New folder in {parent}…")) {
+                if new_folder_row(ui, &format!("New folder in {parent}")) {
                     pick.new_name = Some(String::new());
                     pick.error = None;
                     pick.focus = true;

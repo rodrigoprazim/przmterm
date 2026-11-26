@@ -195,7 +195,7 @@ impl ButtonBarUi {
     /// Rename, add and delete groups, and the tooltips of the shown one.
     fn group_menu(&mut self, ui: &mut egui::Ui, changed: &mut bool) {
         let i = self.active;
-        if ui.button("Rename group…").clicked() {
+        if ui.button("Rename group").clicked() {
             self.tab_edit = Some(TabEdit {
                 index: Some(i),
                 name: self.bar.tabs[i].name.clone(),
@@ -203,7 +203,7 @@ impl ButtonBarUi {
             });
             ui.close();
         }
-        if ui.button("New group…").clicked() {
+        if ui.button("New group").clicked() {
             self.tab_edit = Some(TabEdit {
                 index: None,
                 name: String::new(),
@@ -211,7 +211,7 @@ impl ButtonBarUi {
             });
             ui.close();
         }
-        if ui.button("Delete group…").clicked() {
+        if ui.button("Delete group").clicked() {
             self.delete_tab = Some(i);
             ui.close();
         }
@@ -301,7 +301,7 @@ impl ButtonBarUi {
                 }
                 response.context_menu(|ui| {
                     crate::theme::compact_menu(ui);
-                    if ui.button("Edit…").clicked() {
+                    if ui.button("Edit").clicked() {
                         if uses_vault(&button.send) {
                             // Its password is not shown, but its Only when
                             // could be taken off: the master password first.
@@ -690,7 +690,7 @@ pub fn vault_menu(ui: &mut egui::Ui, text: &mut String, names: Option<&[String]>
         match names {
             None => {
                 ui.weak("The vault is locked.");
-                if ui.button("Unlock the vault…").clicked() {
+                if ui.button("Unlock the vault").clicked() {
                     unlock = true;
                     ui.close();
                 }

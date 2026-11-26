@@ -59,7 +59,7 @@ longer want your sessions (see
   `.tar.gz` and run `przmterm`. For serial ports, add yourself to the
   `dialout` group (`sudo usermod -aG dialout $USER`, then log in again).
 
-*Check for Updates…* (the PrzmTerm menu on macOS, the **+** menu elsewhere)
+*Check for Updates* (the PrzmTerm menu on macOS, the **+** menu elsewhere)
 looks for a newer release on GitHub; PrzmTerm also looks when it starts and
 shows a newer version in the status bar. The window shows what is new.
 *Install and Restart* downloads the release, checks it against the signed
@@ -160,7 +160,7 @@ ready to sign through SignPath, each signing approved by hand.
 **Privacy:** PrzmTerm does not send any information to other networked
 systems unless the user asks for it: it connects to the hosts you open and,
 when it starts, asks GitHub for the list of PrzmTerm releases to tell you of
-a newer one (turn that off in *Check for Updates…*), and downloads a release
+a newer one (turn that off in *Check for Updates*), and downloads a release
 only when you choose to install it. No telemetry.
 
 ## Contributing

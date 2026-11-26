@@ -136,14 +136,14 @@ fn item_menu(ui: &mut egui::Ui, targets: &[(String, bool)]) -> Option<MenuChoice
     {
         chosen = Some(MenuChoice::Open(name.clone()));
     }
-    if ui.button("Download…").clicked() {
+    if ui.button("Download").clicked() {
         chosen = Some(MenuChoice::Download(names.clone()));
     }
     ui.separator();
-    if ui.add_enabled(one, egui::Button::new("Rename…")).clicked() {
+    if ui.add_enabled(one, egui::Button::new("Rename")).clicked() {
         chosen = Some(MenuChoice::Rename(names[0].clone()));
     }
-    if ui.button("Delete…").clicked() {
+    if ui.button("Delete").clicked() {
         chosen = Some(MenuChoice::Delete(targets.to_vec()));
     }
     ui.separator();
@@ -181,13 +181,13 @@ fn folder_menu(ui: &mut egui::Ui) -> Option<MenuChoice> {
 /// What can be done in the folder shown.
 fn folder_items(ui: &mut egui::Ui) -> Option<MenuChoice> {
     let mut chosen = None;
-    if ui.button("New Folder…").clicked() {
+    if ui.button("New Folder").clicked() {
         chosen = Some(MenuChoice::NewFolder);
     }
-    if ui.button("Upload Files…").clicked() {
+    if ui.button("Upload Files").clicked() {
         chosen = Some(MenuChoice::UploadFiles);
     }
-    if ui.button("Upload Folder…").clicked() {
+    if ui.button("Upload Folder").clicked() {
         chosen = Some(MenuChoice::UploadFolder);
     }
     if ui.button("Refresh").clicked() {
@@ -525,7 +525,7 @@ impl SftpBrowser {
         // Wraps when the window is narrow.
         ui.horizontal_wrapped(|ui| {
             ui.add_enabled_ui(live, |ui| {
-                if ui.button("Upload files…").clicked()
+                if ui.button("Upload files").clicked()
                     && let Some(files) = rfd::FileDialog::new()
                         .set_title("Upload files")
                         .pick_files()
@@ -534,7 +534,7 @@ impl SftpBrowser {
                         self.start_upload(f);
                     }
                 }
-                if ui.button("Upload folder…").clicked()
+                if ui.button("Upload folder").clicked()
                     && let Some(folder) = rfd::FileDialog::new()
                         .set_title("Upload a folder")
                         .pick_folder()
@@ -542,18 +542,18 @@ impl SftpBrowser {
                     self.start_upload(folder);
                 }
                 if ui
-                    .add_enabled(!selected.is_empty(), egui::Button::new("Download…"))
+                    .add_enabled(!selected.is_empty(), egui::Button::new("Download"))
                     .on_disabled_hover_text("Select files or folders first")
                     .clicked()
                 {
                     self.start_downloads(selected.iter().map(|(n, _)| n.clone()).collect());
                 }
                 ui.separator();
-                if ui.button("New folder…").clicked() {
+                if ui.button("New folder").clicked() {
                     self.ask = Some(Ask::NewFolder(String::new()));
                 }
                 if ui
-                    .add_enabled(selected.len() == 1, egui::Button::new("Rename…"))
+                    .add_enabled(selected.len() == 1, egui::Button::new("Rename"))
                     .clicked()
                 {
                     let name = selected[0].0.clone();
@@ -563,7 +563,7 @@ impl SftpBrowser {
                     });
                 }
                 if ui
-                    .add_enabled(!selected.is_empty(), egui::Button::new("Delete…"))
+                    .add_enabled(!selected.is_empty(), egui::Button::new("Delete"))
                     .clicked()
                 {
                     self.ask = Some(Ask::Delete(selected.clone()));
@@ -974,19 +974,13 @@ impl SftpBrowser {
                             );
                             match &t.state {
                                 State::Running => {
-                                    let fraction = if t.total > 0 {
-                                        t.done as f32 / t.total as f32
-                                    } else {
-                                        0.0
-                                    };
-                                    ui.add(
-                                        egui::ProgressBar::new(fraction).desired_width(260.0).text(
-                                            format!(
-                                                "{} of {}",
-                                                size_text(t.done),
-                                                size_text(t.total)
-                                            ),
-                                        ),
+                                    let fraction =
+                                        (t.total > 0).then(|| t.done as f32 / t.total as f32);
+                                    crate::theme::progress(
+                                        ui,
+                                        fraction,
+                                        &format!("{} of {}", size_text(t.done), size_text(t.total)),
+                                        260.0,
                                     );
                                     if ui.button("Cancel").clicked() {
                                         cancel = Some(t.id);

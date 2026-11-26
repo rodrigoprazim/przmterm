@@ -52,7 +52,7 @@ backups and imports. On macOS they are also in the PrzmTerm menu, and
 
 A session is a file, and a folder of sessions is a directory, in the
 **settings folder**: `$PRZMTERM_HOME` when it is set, the folder chosen in
-**+** › *Settings folder…* (see [Several computers](#several-computers)), or
+**+** › *Settings folder* (see [Several computers](#several-computers)), or
 by default:
 
 | OS | Directory |
@@ -105,7 +105,7 @@ session is saved, so Cancel leaves nothing behind.
 When a settings file has a problem (a session without a host, a typo in a
 file edited by hand, a setting from a newer version), a warning under the
 session list says how many. Click it for the list: each file, what is
-wrong, and what can be done: *Edit…* a session that is not listed until it
+wrong, and what can be done: *Edit* a session that is not listed until it
 is fixed, *Remove them* for unknown settings, *Open* the file, *Show in
 folder* or *Delete* it; *Reload* reads the files again after fixing one by
 hand.
@@ -173,7 +173,7 @@ changes, PrzmTerm refuses to connect and shows the old and new fingerprints.
 
 ## Passwords: keychain and vault
 
-**+** next to *Sessions* › *Password vault…* creates an encrypted vault of
+**+** next to *Sessions* › *Password vault* creates an encrypted vault of
 user names, passwords and key passphrases, opened with a master password
 (it cannot be recovered, so keep it safe). Give a session or a whole folder
 an entry under *Vault entry* in its settings: its user name replaces the
@@ -267,12 +267,12 @@ display's cookie from `xauth`; the server only ever sees a random stand-in.
 | Reset the zoom | Ctrl+0, or ⟲ in the status bar | ⌘0, or ⟲ |
 | Find in the session | Ctrl+Shift+F, or the magnifier in the status bar | ⌘F |
 | Global settings (of the sessions) | the gear above the sessions | same |
-| PrzmTerm's settings (look, mouse) | **+** › *Settings…* | ⌘, |
+| PrzmTerm's settings (look, mouse) | **+** › *Settings* | ⌘, |
 
 Zooming changes the font of the pane under the pointer (the keys: the
 active pane), a point at a time, and is not saved. While a pane is zoomed,
 the status bar shows its size and the reset arrow, which goes back to the
-size it had. To keep a size, set it in *Font, Colors and Cursor…*.
+size it had. To keep a size, set it in *Font, Colors and Cursor*.
 
 Drag to select, double-click selects a word, triple-click a line. Right-click
 opens Copy / Paste, Find and Highlight (the text selected, when there is
@@ -288,7 +288,7 @@ same from a Unix shell). It is also in the tab's right-click menu, for
 all of the tab's panes (and when the right button pastes, the terminal has
 no menu), and can have a shortcut in *Keyboard shortcuts*.
 
-**+** › *Settings…* (*PrzmTerm* › *Settings…* on macOS) has the *Mouse*
+**+** › *Settings* (*PrzmTerm* › *Settings* on macOS) has the *Mouse*
 options, for the whole app, all off until chosen:
 
 - *Copy on select*: what is selected is copied at once.
@@ -305,16 +305,16 @@ equipment need it (they read `^?` as "delete the character under the
 cursor"). `^?` (DEL, what Linux terminals send) is for the rare program that
 erases only with it, such as `cat` or a script's `read`, which show `^H`.
 
-*Font, Colors and Cursor…* in a tab's menu picks the font (the built-in one or
+*Font, Colors and Cursor* in a tab's menu picks the font (the built-in one or
 any installed monospace font), its size, the terminal's background and text
 colours, the cursor (block, underline or bar), its colour and whether it blinks;
 *Save* keeps them for the session. They are also in the session settings
 (*Terminal* page), so a folder or the defaults can set them for many sessions.
 
-*Settings…* also switches the interface between dark and light, or follows the system's mode. The terminal
+*Settings* also switches the interface between dark and light, or follows the system's mode. The terminal
 keeps its own colours whichever is chosen.
 
-On macOS the PrzmTerm menu in the menu bar has *About PrzmTerm*, *Settings…*
+On macOS the PrzmTerm menu in the menu bar has *About PrzmTerm*, *Settings*
 (PrzmTerm's own) and the other app windows (shortcuts, vault, settings
 folder), without icons,
 and *Help* has the script guide and the project's page. Elsewhere they are in
@@ -350,9 +350,9 @@ its group it leaves it.
 
 **Tab groups.** *Group › New Group* in a tab's menu starts a group: its tabs
 sit together after a coloured label, each with a bar of its colour, and *Group › Add to …* puts more tabs in
-it. Clicking the label offers *Send Command to Group…* (one or more commands,
+it. Clicking the label offers *Send Command to Group* (one or more commands,
 to every connected session of the group, with Enter after each line),
-*Rename Group…*, *Ungroup* and *Close Group*.
+*Rename Group*, *Ungroup* and *Close Group*.
 
 **Windows.** *Window › Move to New Window* opens the tab in a window of its
 own, the connection and all; *Clone to New Window* opens a second connection
@@ -361,7 +361,7 @@ windows have their tabs and panes; dialogs and the session list stay in the
 main one. Closing a window closes its tabs (asking first if any is
 connected).
 
-**Locking.** *Lock…* hides a tab's screen behind a password: nothing is typed
+**Locking.** *Lock* hides a tab's screen behind a password: nothing is typed
 into it, it does not close, and its session cannot be cloned or browsed until
 the password is given again. The connection stays up and keeps receiving.
 The password is only kept in memory (as an Argon2 hash).
@@ -413,7 +413,7 @@ description = "Saves the running configuration"
 
 ### Keyboard shortcuts
 
-These are the built-in shortcuts. **+** › *Keyboard shortcuts…* changes them
+These are the built-in shortcuts. **+** › *Keyboard shortcuts* changes them
 and adds others: a key can send text (`show ip interface brief\r`), run an app
 command, run a script or press a button. They are kept in
 `<config>/keymap.toml`:
@@ -482,7 +482,7 @@ bold = true
 ```
 
 SecureCRT keyword lists (`Config/Keywords/*.ini`) come in with
-*Import from SecureCRT…*, and open sessions that use them highlight with
+*Import from SecureCRT*, and open sessions that use them highlight with
 them at once. Only text the remote side left uncoloured is
 recoloured, so `ls --color` or `vim` keep their own colours.
 
@@ -525,11 +525,11 @@ colours or escape sequences. The codes are listed in the
 
 Right-click **Log** for more:
 
-- *Log to File…* logs the current pane to a file you name, anywhere,
+- *Log to File* logs the current pane to a file you name, anywhere,
   from now on. It is for this pane only and is forgotten when it closes;
   the session's own log settings do not change. Stopping and starting the
   log again adds to the same file.
-- *Save History As…* writes what the pane's history and screen hold now
+- *Save History As* writes what the pane's history and screen hold now
   to a text file.
 
 ## Files: SFTP, SCP, Zmodem
@@ -539,12 +539,12 @@ Right-click **Log** for more:
 *File Browser › SFTP* in a tab's menu, or in an SSH session's menu in the
 list (it connects first if needed), opens a file browser on the same connection, without
 logging in again. Double-click a folder to open it and a file to download
-it; *Download…* takes several files or whole folders. *Upload files…*,
-*Upload folder…* or dropping files on the window sends them to the folder
+it; *Download* takes several files or whole folders. *Upload files*,
+*Upload folder* or dropping files on the window sends them to the folder
 shown. Transfers run in the background with a progress bar and *Cancel*.
-Right-click a file or folder for its menu: *Open* (folders), *Download…*,
-*Rename…*, *Delete…*, *Copy Path* and *Copy Name*, and the folder's *New
-Folder…*, *Upload Files…*, *Upload Folder…* and *Refresh*. It acts on the
+Right-click a file or folder for its menu: *Open* (folders), *Download*,
+*Rename*, *Delete*, *Copy Path* and *Copy Name*, and the folder's *New
+Folder*, *Upload Files*, *Upload Folder* and *Refresh*. It acts on the
 selection; right-clicking something not selected selects it first. The
 empty part of the list has the folder's menu, with *Copy Folder Path*.
 
@@ -587,7 +587,7 @@ Xmodem and Ymodem wait for an answer after each block.
 
 Scripts are [Rhai](https://rhai.rs) files (`.rhai`) that drive a session:
 they type commands, wait for the answers, read them and react. They are kept
-in `<config>/scripts/`. Run one with *Run Script…* in the tab menu, put it on a
+in `<config>/scripts/`. Run one with *Run Script* in the tab menu, put it on a
 button or a shortcut, or give a session a **Logon script** that runs each time
 it connects. **■ Stop** in the status bar stops it.
 
@@ -600,7 +600,7 @@ let version = session.read_until("#", 30);   // the output before "#"
 log("version: " + version.len() + " characters");
 ```
 
-**+** › *Script guide…* teaches scripting in the app, with a snippet per
+**+** › *Script guide* teaches scripting in the app, with a snippet per
 topic and ready examples ([`examples/scripts/`](../examples/scripts/)) that
 can be edited, checked and saved as your own. Every function, how waiting
 works, errors and the examples are in the
@@ -707,14 +707,14 @@ What a script run this way may do is in the
 
 ## Backup, sharing and sync
 
-**+** next to *Sessions* › *Back up settings…* writes one `.przm` file with
+**+** next to *Sessions* › *Back up settings* writes one `.przm` file with
 everything: global settings, folders, sessions, keyword sets, buttons, known
-hosts and the password vault (still encrypted). *Restore or import…* takes it
+hosts and the password vault (still encrypted). *Restore or import* takes it
 back, on this or another machine; files with the same name are replaced, and
 the settings in use are first saved in `<config>/backups/`.
 
-To share sessions, right-click a folder or session › *Export folder…* or
-*Export session…*. Whoever gets the file picks *Restore or import…* and the
+To share sessions, right-click a folder or session › *Export folder* or
+*Export session*. Whoever gets the file picks *Restore or import* and the
 sessions arrive in a new folder; nothing of theirs is replaced. Passwords are
 never in these files (they stay in the system keychain), but triggers are
 copied as typed, so check them before sharing if they answer password
@@ -760,7 +760,7 @@ completes what is in it).
 
 ### Several computers
 
-**+** › *Settings folder…* moves the settings to any folder, such as one synced by iCloud
+**+** › *Settings folder* moves the settings to any folder, such as one synced by iCloud
 Drive, Dropbox or OneDrive, so several computers share the sessions. An empty
 folder gets a copy of the current settings (the old ones stay where they
 were); a folder that already holds PrzmTerm settings is used as it is, which is
@@ -773,7 +773,7 @@ newer version knows is left out by an older one, which says so (see
 
 ## Moving from SecureCRT
 
-**+** next to *Sessions* › *Import from SecureCRT…* takes SecureCRT's XML
+**+** next to *Sessions* › *Import from SecureCRT* takes SecureCRT's XML
 export (*File › Export Settings*) or session `.ini` files; *Import a SecureCRT
 Sessions folder…* takes the whole `Config/Sessions` folder (macOS:
 `~/Library/Application Support/VanDyke/SecureCRT/Config/Sessions`), or the
@@ -804,7 +804,7 @@ Buttons for menu functions, scripts or programs are listed as skipped.
 
 ## When something goes wrong
 
-**+** › *Diagnostics…* (*PrzmTerm* › *Diagnostics…* on macOS) shows the
+**+** › *Diagnostics* (*PrzmTerm* › *Diagnostics* on macOS) shows the
 version, the system, the graphics card and driver in use, how the terminal
 is drawn and where the log file is. *Copy details* copies it all, to paste
 in an issue or a message.
@@ -826,7 +826,7 @@ until it is turned off; turn it on, do what goes wrong, then send the log.
 `RUST_LOG` (for example `RUST_LOG=debug`) sets the level by hand.
 
 If the terminal's colours or cursor look wrong on one computer, try the
-built-in font first (*Font, Colors and Cursor…*): a font installed there
+built-in font first (*Font, Colors and Cursor*): a font installed there
 may draw differently. Then the graphics card is the suspect. Start PrzmTerm with `PRZMTERM_RENDERER=egui` to
 draw the terminal without the card's help, or with `WGPU_BACKEND=vulkan`
 (Windows: Direct3D 12 by default) to try another way of using it. On
