@@ -469,8 +469,8 @@ impl Screen {
         // Stops set stay; new columns get the default ones.
         let old = self.tabs.len();
         self.tabs.resize(cols, false);
-        for c in old..cols {
-            self.tabs[c] = c % 8 == 0;
+        for (c, stop) in self.tabs.iter_mut().enumerate().skip(old) {
+            *stop = c % 8 == 0;
         }
         // A new width re-wraps the text (as other terminals do), so lines cut
         // by a narrower pane come back whole when it widens again. Full-screen
