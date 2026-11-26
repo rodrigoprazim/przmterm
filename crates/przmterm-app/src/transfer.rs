@@ -197,7 +197,7 @@ impl TransferDialog {
             ui.add(
                 egui::TextEdit::singleline(&mut self.remote)
                     .hint_text("home folder")
-                    .desired_width(f32::INFINITY),
+                    .desired_width(field_width(ui)),
             );
             ui.end_row();
         } else {
@@ -205,7 +205,7 @@ impl TransferDialog {
             ui.add(
                 egui::TextEdit::singleline(&mut self.remote)
                     .hint_text("/var/log/messages, or a folder")
-                    .desired_width(f32::INFINITY),
+                    .desired_width(field_width(ui)),
             );
             ui.end_row();
             self.save_to_row(ui);
@@ -243,7 +243,7 @@ impl TransferDialog {
                 egui::TextEdit::singleline(&mut *self.password)
                     .password(true)
                     .hint_text("if the shell asks for one")
-                    .desired_width(f32::INFINITY),
+                    .desired_width(field_width(ui)),
             );
             ui.end_row();
         }
@@ -303,14 +303,17 @@ impl TransferDialog {
     pub fn show(&mut self, ctx: &egui::Context) -> Answer {
         let mut answer = Answer::Open;
         let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        // One width for every protocol and direction: fields that fill the
+        // row (the remote file's name, the SCP path) reach the same edge as
+        // the tabs and the buttons, instead of widening the dialog past them.
+        const WIDTH: f32 = 420.0;
         egui::Window::new("File transfer")
             .pivot(egui::Align2::CENTER_CENTER)
             .default_pos(ctx.content_rect().center())
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
-                // Fields reach the dialog's edge.
-                ui.set_width(420.0);
+                ui.set_width(WIDTH);
                 // Send and Receive as tabs, half the row each.
                 ui.horizontal(|ui| {
                     let gap = ui.spacing().item_spacing.x;
@@ -385,7 +388,7 @@ impl TransferDialog {
                                 ui.add(
                                     egui::TextEdit::singleline(&mut self.name)
                                         .hint_text("firmware.bin")
-                                        .desired_width(f32::INFINITY),
+                                        .desired_width(field_width(ui)),
                                 );
                                 ui.end_row();
                             }
@@ -452,6 +455,13 @@ impl TransferDialog {
             });
         answer
     }
+}
+
+/// What is left of the dialog's width for a field in the grid's second
+/// column. `f32::INFINITY` would take the grid's whole width and push the
+/// dialog wider than its tabs and buttons.
+fn field_width(ui: &egui::Ui) -> f32 {
+    (ui.max_rect().right() - ui.cursor().left()).max(80.0)
 }
 
 #[cfg(test)]

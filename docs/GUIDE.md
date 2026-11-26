@@ -536,9 +536,10 @@ Right-click **Log** for more:
 
 ### SFTP
 
-*File Browser › SFTP* in a tab's menu, or in an SSH session's menu in the
-list (it connects first if needed), opens a file browser on the same connection, without
-logging in again. Double-click a folder to open it and a file to download
+*File Browser › SFTP* in a tab's menu, the folder icon at the top right
+(beside the split icons, for the session shown), or an SSH session's menu
+in the list (it connects first if needed) opens a file browser on the
+same connection, without logging in again. Double-click a folder to open it and a file to download
 it; *Download* takes several files or whole folders. *Upload files*,
 *Upload folder* or dropping files on the window sends them to the folder
 shown. Transfers run in the background with a progress bar and *Cancel*.

@@ -5454,33 +5454,40 @@ fn browser_menu(ui: &mut egui::Ui, enabled: bool, shell: Option<&str>) -> Option
     ui.add_enabled_ui(enabled, |ui| {
         ui.menu_button("File Browser", |ui| {
             crate::theme::compact_menu(ui);
-            if ui
-                .button("SFTP")
-                .on_hover_text("Browse and transfer files over SFTP")
-                .clicked()
-            {
-                picked = Some(false);
-                ui.close();
-            }
-            let scp = match shell {
-                Some(shell) => format!("SCP  ({shell})"),
-                None => "SCP".to_string(),
-            };
-            if ui
-                .button(scp)
-                .on_hover_text(
-                    "Browse and transfer files over SCP, in the session's SCP shell \
-                     (sudo su - to work as root)",
-                )
-                .clicked()
-            {
-                picked = Some(true);
-                ui.close();
-            }
+            picked = browser_items(ui, shell);
         })
         .response
         .on_disabled_hover_text("Needs a connected SSH session");
     });
+    picked
+}
+
+/// The file browser's two kinds, SFTP and SCP: `Some(true)` for SCP.
+fn browser_items(ui: &mut egui::Ui, shell: Option<&str>) -> Option<bool> {
+    let mut picked = None;
+    if ui
+        .button("SFTP")
+        .on_hover_text("Browse and transfer files over SFTP")
+        .clicked()
+    {
+        picked = Some(false);
+        ui.close();
+    }
+    let scp = match shell {
+        Some(shell) => format!("SCP  ({shell})"),
+        None => "SCP".to_string(),
+    };
+    if ui
+        .button(scp)
+        .on_hover_text(
+            "Browse and transfer files over SCP, in the session's SCP shell \
+             (sudo su - to work as root)",
+        )
+        .clicked()
+    {
+        picked = Some(true);
+        ui.close();
+    }
     picked
 }
 
@@ -5976,12 +5983,37 @@ impl eframe::App for PrzmApp {
                         ),
                     ] {
                         if icons::button(ui, icon, false)
-                            .on_hover_text(format!("{what}…{}", self.keys_hint(id)))
+                            .on_hover_text(format!("{what}{}", self.keys_hint(id)))
                             .clicked()
                         {
                             actions.push(Action::Split(layout));
                         }
                     }
+                    // The file browser of the session shown, SFTP or SCP,
+                    // apart from the splitting.
+                    ui.separator();
+                    let pane = tab.pane();
+                    let ssh_live = pane
+                        .origin
+                        .as_ref()
+                        .is_some_and(|s| s.protocol == przmterm_core::Protocol::Ssh)
+                        && !pane.transport.is_closed();
+                    let shell = pane.origin.as_ref().and_then(|s| s.scp_shell.as_deref());
+                    let files = ui
+                        .add_enabled_ui(ssh_live, |ui| {
+                            icons::button(ui, icons::Icon::Folder, false)
+                        })
+                        .inner
+                        .on_hover_text("File Browser: SFTP or SCP on this session")
+                        .on_disabled_hover_text("File Browser: needs a connected SSH session");
+                    egui::Popup::menu(&files).show(|ui| {
+                        crate::theme::compact_menu(ui);
+                        match browser_items(ui, shell) {
+                            Some(true) => actions.push(Action::OpenScp(self.active_tab)),
+                            Some(false) => actions.push(Action::OpenSftp(self.active_tab)),
+                            None => {}
+                        }
+                    });
                     egui::Popup::menu(&more).show(|ui| {
                         crate::theme::menu(ui);
                         ui.weak("A PrzmTerm shell or sessions of other tabs");
