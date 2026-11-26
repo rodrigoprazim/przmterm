@@ -19,6 +19,9 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 - The session list remembers which folders were closed: they stay closed
   the next time PrzmTerm starts (`closed_folders` in `preferences.toml`).
+- SSH tunnels in the session settings: the address field takes the rest
+  of the row, so it shows whole, and + follows the last tunnel (as in
+  login triggers) instead of staying on the first.
 
 ## [1.0.0-rc.10] - 2026-11-25
 

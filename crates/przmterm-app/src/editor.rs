@@ -1427,6 +1427,7 @@ impl Editor {
             };
             let mut remove = None;
             let mut add = false;
+            let last = list.len().saturating_sub(1);
             for (i, t) in list.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
                     ui.add(
@@ -1453,7 +1454,7 @@ impl Editor {
                     {
                         remove = Some(i);
                     }
-                    if i == 0
+                    if i == last
                         && crate::icons::button(ui, crate::icons::Icon::Plus, false)
                             .on_hover_text("Add a trigger")
                             .clicked()
@@ -1498,6 +1499,9 @@ impl Editor {
             };
             let mut remove = None;
             let mut add = false;
+            let last = list.len().saturating_sub(1);
+            // Room kept at the end of each row for × and +.
+            let buttons = 2.0 * (ui.spacing().interact_size.y + ui.spacing().item_spacing.x);
             for (i, f) in list.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
                     crate::theme::sunken_combos(ui);
@@ -1525,10 +1529,12 @@ impl Editor {
                         ui.weak("SOCKS proxy");
                     } else {
                         ui.label("→");
+                        // The rest of the row: an address shows whole.
+                        let width = (ui.available_width() - buttons).max(110.0);
                         ui.add(
                             egui::TextEdit::singleline(&mut f.target)
                                 .hint_text("host:port")
-                                .desired_width(110.0),
+                                .desired_width(width),
                         );
                     }
                     if crate::icons::button(ui, crate::icons::Icon::Close, false)
@@ -1537,7 +1543,8 @@ impl Editor {
                     {
                         remove = Some(i);
                     }
-                    if i == 0
+                    // + after the last tunnel: a new one goes below it.
+                    if i == last
                         && crate::icons::button(ui, crate::icons::Icon::Plus, false)
                             .on_hover_text("Add a tunnel")
                             .clicked()
