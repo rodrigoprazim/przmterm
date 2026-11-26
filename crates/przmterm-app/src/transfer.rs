@@ -306,14 +306,16 @@ impl TransferDialog {
         // One width for every protocol and direction: fields that fill the
         // row (the remote file's name, the SCP path) reach the same edge as
         // the tabs and the buttons, instead of widening the dialog past them.
-        const WIDTH: f32 = 420.0;
+        // The window's width, its margins included.
+        const WIDTH: f32 = 448.0;
         egui::Window::new("File transfer")
             .pivot(egui::Align2::CENTER_CENTER)
             .default_pos(ctx.content_rect().center())
             .collapsible(false)
             .resizable(false)
+            .min_width(WIDTH)
+            .max_width(WIDTH)
             .show(ctx, |ui| {
-                ui.set_width(WIDTH);
                 // Send and Receive as tabs, half the row each.
                 ui.horizontal(|ui| {
                     let gap = ui.spacing().item_spacing.x;
