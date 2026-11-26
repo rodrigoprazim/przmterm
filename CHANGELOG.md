@@ -26,6 +26,10 @@ All notable changes to PrzmTerm are recorded here. The format follows
   it knows the text is UTF-8 (as OpenSSH tells the server). With `^H`
   (the default), Backspace erased nothing in programs that read a plain
   line, such as `read` or a password prompt.
+- With some installed fonts the terminal's text lost its colours and came
+  out all white (Lucida Console on Windows, a usual choice in SecureCRT
+  settings): their small-size bitmap glyphs were drawn as pictures in their
+  own colour. Those bitmaps are now left out and the fonts' outlines used.
 
 ## [1.0.0-rc.10] - 2026-11-25
 
