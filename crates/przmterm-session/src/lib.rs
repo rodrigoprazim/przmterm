@@ -188,8 +188,9 @@ pub struct TerminalSettings {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Backspace {
-    /// DEL, `^?` (0x7F): what Linux terminals send; programs reading a
-    /// line without editing it (`cat`, `read`) erase only with this one.
+    /// DEL, `^?` (0x7F): what Linux terminals send. Over SSH either one is
+    /// the remote terminal's erase character, so `read` and password
+    /// prompts erase with it.
     Delete,
     /// BS, `^H` (0x08), as SecureCRT sends: shells and network equipment
     /// (Huawei VRP and Nokia read DEL as "delete the character under the

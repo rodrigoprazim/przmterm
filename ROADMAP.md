@@ -218,8 +218,12 @@ and, when a device is at hand, a serial console (Xmodem or Ymodem).
 - [x] Backspace `^H` option per session; mouse preferences (copy on
   select, paste button, hide pointer, Ctrl+click URLs, triple-click
   newline); keyword sets managed from the session settings
+- [x] A colour picker of its own (palette, recent colours, HSL/RGB/hex);
+  closed session folders remembered
 - [x] Diagnostics: a log file on every system (keeping the run before),
   graphics details and errors, a detailed log switch
+- [x] Terminal fidelity: tab stops (CBT, CHT, HTS, TBC), insert mode, REP;
+  the SSH erase character as Backspace sends; *Reset terminal*
 - [x] User guide and scripting reference: [docs/GUIDE.md](docs/GUIDE.md)
   and [docs/SCRIPTING.md](docs/SCRIPTING.md)
 - [x] Buttons and shortcuts that type a password can require the prompt

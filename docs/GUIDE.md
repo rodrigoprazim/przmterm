@@ -92,7 +92,8 @@ a folder to add a session or subfolder there, rename it, give it a colour
 (*Color*, also in its settings), edit the settings its sessions inherit, or
 delete it. Right-click the free space below the list for a new session or
 folder at the top level, *Expand all*, *Collapse all*, *Reload*, the
-global settings and the settings folder. Deleting a folder can keep what is in
+global settings and the settings folder. Folders closed stay closed the next
+time PrzmTerm starts. Deleting a folder can keep what is in
 it: its sessions and subfolders move up a level and keep the folder's
 settings (written into each), so they connect as before.
 
@@ -275,8 +276,17 @@ size it had. To keep a size, set it in *Font, Colors and Cursor…*.
 
 Drag to select, double-click selects a word, triple-click a line. Right-click
 opens Copy / Paste, Find and Highlight (the text selected, when there is
-one) and Select all. Text with line breaks is shown before it is pasted, to
-check or edit it.
+one), Select all and Reset terminal. Text with line breaks is shown before
+it is pasted, to check or edit it.
+
+**Reset terminal** undoes what a program left set when it did not end
+cleanly (or a file of escape sequences was shown with `cat`): its screen
+stays, the mouse wheel sends arrow keys, only part of the screen scrolls.
+The text and the history stay, and nothing is sent to the other side, so it
+works on equipment without a shell too (`reset` or `printf '\ec'` do the
+same from a Unix shell). It is also in the tab's right-click menu, for
+all of the tab's panes (and when the right button pastes, the terminal has
+no menu), and can have a shortcut in *Keyboard shortcuts*.
 
 **+** › *Settings…* (*PrzmTerm* › *Settings…* on macOS) has the *Mouse*
 options, for the whole app, all off until chosen:
@@ -815,8 +825,9 @@ away after a restart can still be looked at. The logs are in:
 until it is turned off; turn it on, do what goes wrong, then send the log.
 `RUST_LOG` (for example `RUST_LOG=debug`) sets the level by hand.
 
-If the terminal's colours or cursor look wrong on one computer, the graphics
-card is the first suspect. Start PrzmTerm with `PRZMTERM_RENDERER=egui` to
+If the terminal's colours or cursor look wrong on one computer, try the
+built-in font first (*Font, Colors and Cursor…*): a font installed there
+may draw differently. Then the graphics card is the suspect. Start PrzmTerm with `PRZMTERM_RENDERER=egui` to
 draw the terminal without the card's help, or with `WGPU_BACKEND=vulkan`
 (Windows: Direct3D 12 by default) to try another way of using it. On
 Windows, from a Command Prompt:

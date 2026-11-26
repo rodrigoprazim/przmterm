@@ -246,12 +246,60 @@ fn load(system: &System, family: &str) -> Option<egui::FontData> {
         style: fontdb::Style::Normal,
     };
     let id = system.db.query(&query)?;
-    let (bytes, index) = system
+    let (mut bytes, index) = system
         .db
         .with_face_data(id, |data, index| (data.to_vec(), index))?;
+    if drop_bitmap_strikes(&mut bytes) {
+        tracing::debug!("font {family:?}: its bitmap strikes left out, its outlines used");
+    }
     let mut font = egui::FontData::from_owned(bytes);
     font.index = index;
     Some(font)
+}
+
+/// Hides a font's black-and-white bitmap glyphs (`EBDT`, Apple's `bdat`),
+/// which older Windows fonts such as Lucida Console carry for small sizes,
+/// so its outlines are drawn instead. egui draws bitmap glyphs as pictures
+/// in their own colour: the terminal's text came out all white. The tables
+/// are only renamed (`EBDS`, `bdas`), which keeps the table directory in
+/// order. Colour glyphs (`CBDT`, `sbix`, `COLR`) are left alone. Whether
+/// any was hidden.
+fn drop_bitmap_strikes(font: &mut [u8]) -> bool {
+    let read_u32 = |font: &[u8], at: usize| -> Option<u32> {
+        Some(u32::from_be_bytes(font.get(at..at + 4)?.try_into().ok()?))
+    };
+    // A collection lists the offset of each font's directory.
+    let directories: Vec<usize> = if font.get(0..4) == Some(b"ttcf") {
+        let count = read_u32(font, 8).unwrap_or(0) as usize;
+        (0..count.min(256))
+            .filter_map(|i| read_u32(font, 12 + 4 * i))
+            .map(|o| o as usize)
+            .collect()
+    } else {
+        vec![0]
+    };
+    let mut hidden = false;
+    for start in directories {
+        let Some(count) = font
+            .get(start + 4..start + 6)
+            .map(|b| usize::from(u16::from_be_bytes([b[0], b[1]])))
+        else {
+            continue;
+        };
+        for i in 0..count {
+            let at = start + 12 + 16 * i;
+            let Some(tag) = font.get_mut(at..at + 4) else {
+                break;
+            };
+            match &*tag {
+                b"EBDT" => tag.copy_from_slice(b"EBDS"),
+                b"bdat" => tag.copy_from_slice(b"bdas"),
+                _ => continue,
+            }
+            hidden = true;
+        }
+    }
+    hidden
 }
 
 /// egui's fonts, with the interface text falling back to the monospace
@@ -286,3 +334,67 @@ fn base_definitions() -> egui::FontDefinitions {
 const SYMBOLS: &str = "Hack-symbols";
 const SYMBOL_SCALE: f32 = 1.1;
 const SYMBOL_RAISE: f32 = -0.12;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A font's table directory with `tags`, in order (no table data).
+    fn directory(tags: &[&[u8; 4]]) -> Vec<u8> {
+        let mut font = vec![0, 1, 0, 0];
+        font.extend((tags.len() as u16).to_be_bytes());
+        font.extend([0; 6]);
+        for tag in tags {
+            font.extend(*tag);
+            font.extend([0; 12]);
+        }
+        font
+    }
+
+    fn tags(font: &[u8], start: usize) -> Vec<String> {
+        let count = usize::from(u16::from_be_bytes([font[start + 4], font[start + 5]]));
+        (0..count)
+            .map(|i| {
+                let at = start + 12 + 16 * i;
+                String::from_utf8_lossy(&font[at..at + 4]).into_owned()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn bitmap_strikes_are_hidden_in_order() {
+        let mut font = directory(&[b"DSIG", b"EBDT", b"EBLC", b"glyf", b"head"]);
+        assert!(drop_bitmap_strikes(&mut font));
+        let found = tags(&font, 0);
+        assert_eq!(found, ["DSIG", "EBDS", "EBLC", "glyf", "head"]);
+        let mut sorted = found.clone();
+        sorted.sort();
+        assert_eq!(
+            found, sorted,
+            "still sorted: tables are looked up by search"
+        );
+
+        let mut plain = directory(&[b"CBDT", b"CBLC", b"COLR", b"glyf"]);
+        assert!(!drop_bitmap_strikes(&mut plain), "colour glyphs stay");
+    }
+
+    #[test]
+    fn every_font_of_a_collection() {
+        let one = directory(&[b"EBDT", b"glyf"]);
+        let two = directory(&[b"bdat", b"glyf"]);
+        let mut ttc = b"ttcf".to_vec();
+        ttc.extend([0, 1, 0, 0]);
+        ttc.extend(2u32.to_be_bytes());
+        let first = 20;
+        ttc.extend((first as u32).to_be_bytes());
+        ttc.extend(((first + one.len()) as u32).to_be_bytes());
+        ttc.extend(&one);
+        ttc.extend(&two);
+        assert!(drop_bitmap_strikes(&mut ttc));
+        assert_eq!(tags(&ttc, first), ["EBDS", "glyf"]);
+        assert_eq!(tags(&ttc, first + one.len()), ["bdas", "glyf"]);
+        // Cut short: nothing read past the end.
+        let mut short = ttc[..30].to_vec();
+        drop_bitmap_strikes(&mut short);
+    }
+}

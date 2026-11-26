@@ -236,6 +236,18 @@ pub struct Screen {
     display_offset: usize,
     /// Lines ever dropped from the front of the scrollback.
     history_base: u64,
+    /// Tab stops, by column: every 8 until set or cleared (HTS, TBC).
+    tabs: Vec<bool>,
+    /// Insert mode (IRM, `CSI 4 h`): printing shifts the rest of the line.
+    insert_mode: bool,
+    /// The last character printed, for REP (`CSI n b`), while nothing else
+    /// came after it.
+    last_char: Option<char>,
+}
+
+/// Tab stops every 8 columns.
+fn default_tabs(cols: usize) -> Vec<bool> {
+    (0..cols).map(|c| c > 0 && c % 8 == 0).collect()
 }
 
 impl Screen {
@@ -266,6 +278,9 @@ impl Screen {
             gl: 0,
             display_offset: 0,
             history_base: 0,
+            tabs: default_tabs(cols),
+            insert_mode: false,
+            last_char: None,
         }
     }
 
@@ -450,6 +465,12 @@ impl Screen {
         let rows = rows.max(1);
         if cols == self.cols && rows == self.rows {
             return;
+        }
+        // Stops set stay; new columns get the default ones.
+        let old = self.tabs.len();
+        self.tabs.resize(cols, false);
+        for (c, stop) in self.tabs.iter_mut().enumerate().skip(old) {
+            *stop = c % 8 == 0;
         }
         // A new width re-wraps the text (as other terminals do), so lines cut
         // by a narrower pane come back whole when it widens again. Full-screen
@@ -643,6 +664,9 @@ impl Screen {
                 width = 1;
             }
         }
+        if self.insert_mode {
+            self.insert_chars(width);
+        }
         let pen = self.pen;
         let Cursor { row, col } = self.cursor;
         self.unlink_wide(row, col);
@@ -820,6 +844,28 @@ impl Screen {
         self.cursor.col = 0;
     }
 
+    /// The next tab stop to the right, or the last column (HT, CHT).
+    fn tab_forward(&mut self, n: usize) {
+        let mut col = self.cursor.col;
+        for _ in 0..n {
+            col = (col + 1..self.cols)
+                .find(|&c| self.tabs[c])
+                .unwrap_or(self.cols - 1);
+        }
+        self.cursor.col = col;
+        self.wrap_pending = false;
+    }
+
+    /// The previous tab stop, or the first column (CBT, `CSI Z`).
+    fn tab_back(&mut self, n: usize) {
+        let mut col = self.cursor.col;
+        for _ in 0..n {
+            col = (0..col).rev().find(|&c| self.tabs[c]).unwrap_or(0);
+        }
+        self.cursor.col = col;
+        self.wrap_pending = false;
+    }
+
     fn insert_chars(&mut self, n: usize) {
         let Cursor { row, col } = self.cursor;
         let blank = self.blank_cell();
@@ -883,6 +929,28 @@ impl Screen {
         }
     }
 
+    /// Back to the normal screen with every mode at its default, keeping
+    /// what is shown and the history: what a program left set (the scroll
+    /// region, application keys, the alternate screen…) no longer applies.
+    fn reset_modes(&mut self) {
+        self.leave_alt_screen();
+        self.pen = Style::default();
+        self.wrap_pending = false;
+        self.autowrap = true;
+        self.cursor_visible = true;
+        self.app_cursor_keys = false;
+        self.bracketed_paste = false;
+        self.scroll_top = 0;
+        self.scroll_bottom = self.rows - 1;
+        self.charsets = [Charset::Ascii; 2];
+        self.gl = 0;
+        self.saved = Saved::default();
+        self.tabs = default_tabs(self.cols);
+        self.insert_mode = false;
+        self.last_char = None;
+        self.display_offset = 0;
+    }
+
     fn reset(&mut self) {
         let fresh = Screen::new(self.cols, self.rows, self.scrollback_limit);
         let scrollback = std::mem::take(&mut self.scrollback);
@@ -904,6 +972,7 @@ impl Screen {
                     }
                 }
                 (true, 2004) => self.bracketed_paste = on,
+                (false, 4) => self.insert_mode = on,
                 (private, mode) => unsupported(&format!(
                     "mode {}{mode} {}",
                     if private { "?" } else { "" },
@@ -990,19 +1059,18 @@ fn cells_text(cells: &[Cell]) -> String {
 impl Perform for Screen {
     fn print(&mut self, c: char) {
         self.put_char(c);
+        self.last_char = Some(c);
     }
 
     fn execute(&mut self, byte: u8) {
+        self.last_char = None;
         match byte {
             0x07 => self.bell = true,
             0x08 => {
                 self.cursor.col = self.cursor.col.saturating_sub(1);
                 self.wrap_pending = false;
             }
-            0x09 => {
-                let next = (self.cursor.col / 8 + 1) * 8;
-                self.cursor.col = next.min(self.cols - 1);
-            }
+            0x09 => self.tab_forward(1),
             0x0A..=0x0C => {
                 self.linefeed();
                 self.wrap_pending = false;
@@ -1031,6 +1099,7 @@ impl Perform for Screen {
             }
         };
         let Cursor { row, col } = self.cursor;
+        let last_char = self.last_char.take();
         match (action, private) {
             ('A', false) => self.move_to(row.saturating_sub(arg(0, 1)), col),
             ('B' | 'e', false) => self.move_to(row + arg(0, 1), col),
@@ -1048,6 +1117,22 @@ impl Perform for Screen {
             ('@', false) => self.insert_chars(arg(0, 1)),
             ('P', false) => self.delete_chars(arg(0, 1)),
             ('X', false) => self.erase_cells(row, col, col + arg(0, 1)),
+            ('I', false) => self.tab_forward(arg(0, 1)),
+            ('Z', false) => self.tab_back(arg(0, 1)),
+            ('g', false) => match raw.first().copied().unwrap_or(0) {
+                0 => self.tabs[col] = false,
+                3 => self.tabs.fill(false),
+                _ => {}
+            },
+            // REP: the last character again, no more than a screenful.
+            ('b', false) => {
+                if let Some(c) = last_char {
+                    for _ in 0..arg(0, 1).min(self.cols * self.rows) {
+                        self.put_char(c);
+                    }
+                    self.last_char = Some(c);
+                }
+            }
             ('S', false) => self.scroll_up(arg(0, 1)),
             ('T', false) => self.scroll_down(arg(0, 1)),
             ('m', false) => self.sgr(params),
@@ -1102,8 +1187,13 @@ impl Perform for Screen {
         if !intermediates.is_empty() {
             return;
         }
+        self.last_char = None;
         match byte {
             b'7' => self.save_cursor(),
+            b'H' => {
+                let col = self.cursor.col;
+                self.tabs[col] = true;
+            }
             b'8' => self.restore_cursor(),
             b'D' => self.linefeed(),
             b'E' => {
@@ -1174,6 +1264,15 @@ impl Terminal {
 
     pub fn resize(&mut self, cols: usize, rows: usize) {
         self.screen.resize(cols, rows);
+        self.generation += 1;
+    }
+
+    /// *Reset terminal*: the normal screen, every mode at its default and
+    /// a half-read escape sequence dropped; the text shown and the history
+    /// stay. Nothing is sent to the other side.
+    pub fn reset(&mut self) {
+        self.parser = Parser::new();
+        self.screen.reset_modes();
         self.generation += 1;
     }
 
@@ -1266,6 +1365,85 @@ mod tests {
         assert_eq!(t.screen().line_text(0), "ab");
         assert_eq!(t.screen().line_text(1), "cd");
         assert_eq!(t.screen().cursor(), Cursor { row: 1, col: 2 });
+    }
+
+    #[test]
+    fn tab_stops_forward_and_back() {
+        // HT and CHT go to the next stop, CBT (`CSI Z`) to the previous one.
+        let t = term(40, 2, "ab\tc\x1b[2Id");
+        assert_eq!(t.screen().line_text(0), "ab      c               d");
+        let t = term(40, 2, "\x1b[1;20H\x1b[Zx\x1b[2Zy");
+        assert_eq!(t.screen().line_text(0), "        y       x");
+        // HTS sets a stop, TBC clears one or all.
+        let t = term(40, 2, "\x1b[1;4H\x1bH\r\tx");
+        assert_eq!(t.screen().line_text(0), "   x");
+        let t = term(40, 2, "\x1b[1;4H\x1bH\x1b[g\r\ty");
+        assert_eq!(
+            t.screen().line_text(0),
+            "        y",
+            "the cleared stop is skipped"
+        );
+        let t = term(40, 2, "\x1b[3g\tz");
+        assert_eq!(t.screen().cursor().col, 40 - 1, "no stops: the last column");
+    }
+
+    #[test]
+    fn nano_erasing_with_back_tabs() {
+        // What nano 8.1 (through ncurses) sent while a domain was erased with
+        // Backspace: some steps go back to a tab stop with CBT (`CSI Z`)
+        // instead of BS. Without CBT the line came out garbled.
+        let mut t = Terminal::new(184, 53);
+        t.feed(b"\x1b[6;5Hserver_name repo.sample.net.br;");
+        t.feed(
+            b"\x1b[6;35H \x08\x08 \x08\x1b[Z \x1b[Z\x08 \x08\x08 \x08\x08 \x08\x08 \x08\x08 \x08\
+              \x08 \x08\x08 \x08\x1b[Z \x1b[Z\x08 \x08\x08 \x08\r\x1b[51d\x1b[K\x1b[6;22H \x08\x08 \
+              \x08\x08 \x08\x08 \x08\x08 \x08\x1b[Z \x1b[Z\r",
+        );
+        assert_eq!(t.screen().line_text(5), "    server_name");
+    }
+
+    #[test]
+    fn reset_undoes_what_a_program_left_set() {
+        let mut t = term(20, 6, "shell$ ");
+        // A full-screen program's start, cut short: alternate screen, a
+        // scroll region, application keys, insert mode, half a sequence.
+        t.feed(b"\x1b[?1049h\x1b[2;3r\x1b[?1h\x1b[4h\x1b[?25l\x1b(0nano\x1b[1;");
+        t.reset();
+        let s = t.screen();
+        assert!(!s.in_alt_screen());
+        assert!(!s.app_cursor_keys());
+        assert!(s.cursor_visible());
+        assert_eq!(s.line_text(0), "shell$", "the normal screen's text stays");
+        t.feed(b"ab\x1b[1;1Hx\r\n1\n2\n3\n4\n5\n6");
+        let s = t.screen();
+        assert_eq!(s.line_text(0), "1", "the whole screen scrolls again");
+        assert!(s.scrollback_len() > 0);
+        assert_eq!(
+            s.scrollback_line(0).map(|l| l[0].ch),
+            Some('x'),
+            "no insert, plain text"
+        );
+    }
+
+    #[test]
+    fn insert_mode_shifts_the_line() {
+        let t = term(10, 2, "abcdef\x1b[1;3H\x1b[4hXY\x1b[4lZ");
+        assert_eq!(t.screen().line_text(0), "abXYZdef");
+        let t = term(6, 2, "abcdef\x1b[1;1H\x1b[4hXY");
+        assert_eq!(
+            t.screen().line_text(0),
+            "XYabcd",
+            "what is pushed past the edge is lost"
+        );
+    }
+
+    #[test]
+    fn repeats_the_last_character() {
+        let t = term(20, 2, "a-\x1b[5bb");
+        assert_eq!(t.screen().line_text(0), "a------b");
+        // Not after a control character or another sequence.
+        let t = term(20, 2, "a\r\x1b[3bb\x1b[1C\x1b[3b");
+        assert_eq!(t.screen().line_text(0), "b");
     }
 
     #[test]

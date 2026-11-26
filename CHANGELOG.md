@@ -7,6 +7,44 @@ All notable changes to PrzmTerm are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- *Reset terminal* in the terminal's right-click menu, the tab's menu (all
+  of its panes) and as a keyboard shortcut to set: undoes what a program
+  left set when it did not end cleanly, such as its screen, arrow keys on
+  the mouse wheel or a scroll region, keeping the text and the history.
+  Nothing is sent to the server.
+- A colour picker of PrzmTerm's own for every colour (cursor, terminal,
+  keywords, highlights): a palette, the colours picked lately, a
+  saturation and brightness square with a hue bar, and the colour as hue,
+  saturation and lightness, red, green and blue, or hex to type in, with
+  the colour before beside the new one.
+
+### Changed
+
+- The session list remembers which folders were closed: they stay closed
+  the next time PrzmTerm starts (`closed_folders` in `preferences.toml`).
+- SSH tunnels in the session settings: the address field takes the rest
+  of the row, so it shows whole, and + follows the last tunnel (as in
+  login triggers) instead of staying on the first.
+
+### Fixed
+
+- Editing in nano garbled lines and put the cursor in the wrong place (a
+  character seemed left over, a space seemed added): nano went back to a
+  tab stop with CBT (`CSI Z`), which the terminal ignored. It now follows
+  tab stops as xterm does: CBT, CHT (`CSI I`), and stops set and cleared
+  (HTS, TBC). It also supports insert mode (IRM) and REP, which
+  `xterm-256color` promises and full-screen programs may use.
+- SSH: the remote terminal's erase character is what Backspace sends, and
+  it knows the text is UTF-8 (as OpenSSH tells the server). With `^H`
+  (the default), Backspace erased nothing in programs that read a plain
+  line, such as `read` or a password prompt.
+- With some installed fonts the terminal's text lost its colours and came
+  out all white (Lucida Console on Windows, a usual choice in SecureCRT
+  settings): their small-size bitmap glyphs were drawn as pictures in their
+  own colour. Those bitmaps are now left out and the fonts' outlines used.
+
 ## [1.0.0-rc.10] - 2026-11-25
 
 ### Added

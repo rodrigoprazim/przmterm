@@ -85,6 +85,10 @@ pub struct SshConfig {
     /// Asked for in the terminal (`login as:`) when `None`.
     pub username: Option<String>,
     pub term_type: String,
+    /// What the Backspace key sends (`^H` or `^?`): the remote terminal's
+    /// erase character, so programs that read a plain line (`read`, a
+    /// password prompt) erase with it too.
+    pub erase: u8,
     /// Key files tried before the default ones.
     pub identity_files: Vec<PathBuf>,
     /// Also try `~/.ssh/id_ed25519`, `id_ecdsa` and `id_rsa`.
@@ -225,6 +229,7 @@ impl SshConfig {
             port,
             username: None,
             term_type: "xterm-256color".into(),
+            erase: 0x7f,
             identity_files: Vec::new(),
             use_default_identities: true,
             use_agent: true,
@@ -935,7 +940,7 @@ async fn channel_task(
     out.notice(&format!(
         "New session on the existing connection to {host} (no new login)."
     ));
-    let result = run_channel(&handle, &config.term_type, &input, &out, true, None).await;
+    let result = run_channel(&handle, &config, &input, &out, true, None).await;
     release(handle).await;
     let end = match result {
         Ok(status) => End::Closed(status),
@@ -1004,15 +1009,7 @@ async fn run_session(
         *slot = Some(Arc::downgrade(&handle));
     }
     let tunnels = crate::forward::start(&handle, &config.forwards, &remote, out).await;
-    let result = run_channel(
-        &handle,
-        &config.term_type,
-        input,
-        out,
-        false,
-        x11.as_deref(),
-    )
-    .await;
+    let result = run_channel(&handle, config, input, out, false, x11.as_deref()).await;
     // The tunnels belong to this pane's session.
     for task in tunnels {
         task.abort();
@@ -1191,7 +1188,7 @@ async fn connect_tcp(config: &SshConfig, out: &Output) -> Result<tokio::net::Tcp
 /// `confirm`, refusals are reported as [`End::Refused`] (shared connections).
 async fn run_channel(
     handle: &Handle,
-    term_type: &str,
+    config: &SshConfig,
     input: &Arc<Mutex<Input>>,
     out: &Output,
     confirm: bool,
@@ -1205,6 +1202,13 @@ async fn run_channel(
     };
     let mut input = input.lock().await;
     let size = input.size;
+    let term_type = config.term_type.as_str();
+    // As OpenSSH sends the local terminal's: Backspace erases in programs
+    // that read a plain line, and the line discipline knows UTF-8.
+    let modes = [
+        (russh::Pty::VERASE, u32::from(config.erase)),
+        (russh::Pty::IUTF8, 1),
+    ];
     out.debug(&format!(
         "Requesting a {term_type} terminal, {}x{}",
         size.cols, size.rows
@@ -1217,7 +1221,7 @@ async fn run_channel(
             u32::from(size.rows),
             0,
             0,
-            &[],
+            &modes,
         )
         .await
         .map_err(failed("PTY request failed"))?;

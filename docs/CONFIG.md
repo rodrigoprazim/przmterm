@@ -217,7 +217,7 @@ Used when `protocol = "serial"`.
 | `cursor_color` | `"#rrggbb"` | `"#6ec8ff"` | Cursor colour. `""` is the default one. |
 | `background` | `"#rrggbb"` | `"#181a1f"` | The terminal's background. `""` is the default one. |
 | `foreground` | `"#rrggbb"` | `"#d8dee9"` | The colour of plain text. `""` is the default one. |
-| `backspace` | `"backspace"` or `"delete"` | `"backspace"` | What Backspace sends: `^H` (BS, 0x08, as SecureCRT) or `^?` (DEL, 0x7F, as Linux terminals). Huawei VRP and Nokia need `"backspace"`: they read DEL as "delete the character under the cursor". |
+| `backspace` | `"backspace"` or `"delete"` | `"backspace"` | What Backspace sends: `^H` (BS, 0x08, as SecureCRT) or `^?` (DEL, 0x7F, as Linux terminals). Huawei VRP and Nokia need `"backspace"`: they read DEL as "delete the character under the cursor". Over SSH it is also the remote terminal's erase character (`stty erase`). |
 
 ### `[log]`
 
@@ -371,6 +371,7 @@ Each shortcut has `keys` and exactly one of `command`, `send`, `script` and
 | `reconnect` | Reconnect | — |
 | `disconnect` | Disconnect | — |
 | `send_break` | Send BREAK | `Cmd+Shift+B` |
+| `reset_terminal` | Reset terminal: the active pane's terminal modes back to their defaults, text kept | — |
 | `toggle_sessions` | Hide / show the session list | `Cmd+Shift+S` |
 | `zoom_in` | Zoom in: the active pane's font a point bigger, not saved (`Equals` also takes `+`) | `Cmd+Equals` |
 | `zoom_out` | Zoom out: a point smaller | `Cmd+Minus` |
@@ -446,6 +447,7 @@ triple_click_newline = false
 | `look` | `"dark"`, `"light"` or `"system"` | `"dark"` | The interface's look (*Settings…*). `system` follows the computer's mode. |
 | `skipped_version` | text | none | A release chosen with *Skip This Version*: PrzmTerm does not announce it when it starts. *Check for Updates…* still shows it. |
 | `debug_log` | `true` or `false` | `false` | The log file has PrzmTerm's steps in detail (*Diagnostics…* › *Detailed log*). |
+| `closed_folders` | list of folder paths | `[]` | Folders of the session list left closed, by their path from the sessions folder (`"Data Center/Network"`); kept as they are opened and closed. |
 
 `[mouse]`, what the mouse does in the terminal (*Settings…*). All off
 unless chosen:

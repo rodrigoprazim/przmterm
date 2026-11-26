@@ -17,7 +17,7 @@ pub struct Command {
     pub default: Option<&'static str>,
 }
 
-pub const COMMANDS: [Command; 29] = [
+pub const COMMANDS: [Command; 30] = [
     Command {
         id: "new_tab",
         label: "New tab (same session)",
@@ -87,6 +87,11 @@ pub const COMMANDS: [Command; 29] = [
         id: "send_break",
         label: "Send BREAK",
         default: Some("Cmd+Shift+B"),
+    },
+    Command {
+        id: "reset_terminal",
+        label: "Reset terminal",
+        default: None,
     },
     Command {
         id: "toggle_sessions",

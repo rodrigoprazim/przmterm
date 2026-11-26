@@ -7,6 +7,7 @@
 mod appmenu;
 mod atlas;
 mod buttonbar;
+mod colorpick;
 mod desktop;
 mod diagnostics;
 mod editor;
@@ -755,6 +756,9 @@ enum Action {
     /// Opens the session editor, where the log file is set.
     LogSettings,
     SendBreak,
+    /// A tab's terminal back to its defaults (*Reset terminal*): one pane,
+    /// or all of the tab's (from the tab's menu).
+    ResetTerminal(usize, Option<usize>),
     Macro(buttonbar::Press),
     ToggleBroadcast,
     ToggleButtons,
@@ -962,6 +966,9 @@ enum TreeAction {
     FolderColor(PathBuf, Option<String>),
     /// Open (`true`) or close every folder.
     ExpandAll(bool),
+    /// A folder opened (`true`) or closed, by its path in the list: kept
+    /// for the next start.
+    FolderOpen(String, bool),
     /// Read the sessions again.
     Reload,
     GlobalSettings,
@@ -2355,6 +2362,18 @@ impl PrzmApp {
                     }
                 }
             }
+            Action::ResetTerminal(t, only) => {
+                if let Some(tab) = self.tabs.get_mut(t) {
+                    for (i, pane) in tab.panes.iter_mut().enumerate() {
+                        if only.is_none_or(|p| p == i) {
+                            pane.term.reset();
+                            pane.view.after_reset();
+                            tracing::info!("{}: terminal reset", pane.title());
+                        }
+                    }
+                    self.notice = Some("Terminal reset.".into());
+                }
+            }
             Action::ToggleLog => {
                 let pane = self.tab_mut().pane_mut();
                 if pane.log.is_some() {
@@ -2618,6 +2637,7 @@ impl PrzmApp {
                 "reconnect" => Action::ReconnectTab(t),
                 "disconnect" => Action::DisconnectTab(t),
                 "send_break" => Action::SendBreak,
+                "reset_terminal" => Action::ResetTerminal(t, Some(self.tabs[t].active)),
                 "toggle_sessions" => Action::ToggleSessions,
                 "zoom_in" => Action::Zoom(1.0),
                 "zoom_out" => Action::Zoom(-1.0),
@@ -2981,6 +3001,15 @@ impl PrzmApp {
         }
     }
 
+    /// Writes `preferences.toml`, saying so when it cannot.
+    fn save_prefs(&mut self) {
+        if let Some(dir) = &self.config_dir
+            && let Err(e) = self.prefs.save(dir)
+        {
+            self.notice = Some(format!("Preferences not saved: {e}"));
+        }
+    }
+
     /// The Settings window: the interface's look and the mouse.
     fn appearance_ui(&mut self, ctx: &egui::Context) {
         use przmterm_session::preferences::{Look, PasteButton};
@@ -3061,11 +3090,7 @@ impl PrzmApp {
             tracing::info!("settings: look {look:?}, mouse {mouse:?}");
             self.prefs.mouse = mouse;
             self.prefs.look = look;
-            if let Some(dir) = &self.config_dir
-                && let Err(e) = self.prefs.save(dir)
-            {
-                self.notice = Some(format!("Preferences not saved: {e}"));
-            }
+            self.save_prefs();
         }
         if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.appearance_window = false;
@@ -3923,6 +3948,9 @@ impl PrzmApp {
                     }
                     actions.push(Action::SendBreak);
                 }
+                if out.reset_terminal {
+                    actions.push(Action::ResetTerminal(self.active_tab, Some(i)));
+                }
                 if out.resized.is_some() {
                     let size = pane.size();
                     tracing::debug!("{}: {}x{}", pane.title(), size.cols, size.rows);
@@ -4680,12 +4708,12 @@ impl PrzmApp {
                             .spacing([12.0, 8.0])
                             .show(ui, |ui| {
                                 ui.label("Background");
-                                if ui.color_edit_button_srgb(&mut ink.bg).changed() {
+                                if crate::colorpick::button(ui, &mut ink.bg).changed() {
                                     background = Some(ink.bg);
                                 }
                                 ui.end_row();
                                 ui.label("Text");
-                                if ui.color_edit_button_srgb(&mut ink.fg).changed() {
+                                if crate::colorpick::button(ui, &mut ink.fg).changed() {
                                     foreground = Some(ink.fg);
                                 }
                                 ui.end_row();
@@ -4715,7 +4743,7 @@ impl PrzmApp {
                                 ui.horizontal(|ui| {
                                     let shown = tab.pane().view.cursor_color();
                                     let mut rgb = [shown.r(), shown.g(), shown.b()];
-                                    if ui.color_edit_button_srgb(&mut rgb).changed() {
+                                    if crate::colorpick::button(ui, &mut rgb).changed() {
                                         color = Some(rgb);
                                     }
                                 });
@@ -5236,6 +5264,8 @@ fn tab_menu(
         "Disconnect",
         Action::DisconnectTab(i),
     );
+    // Also here: with the right button pasting, the terminal has no menu.
+    item(ui, true, "Reset Terminal", Action::ResetTerminal(i, None));
     ui.separator();
     item(ui, true, "Close", Action::RequestClose(vec![i]));
     // The other tabs are those of the same window.
@@ -5595,6 +5625,20 @@ fn list_menu(ui: &mut egui::Ui, picked: &mut Vec<TreeAction>) {
     item(ui, "Show settings folder", TreeAction::ShowSettingsFolder);
 }
 
+/// A folder's key in `closed_folders`: its path from the sessions folder.
+fn folder_key(f: &Folder) -> String {
+    f.trail.join("/")
+}
+
+/// Every folder's key, for *Collapse all*.
+fn all_folder_keys(folder: &Folder, keys: &mut std::collections::BTreeSet<String>) {
+    for f in &folder.folders {
+        keys.insert(folder_key(f));
+        all_folder_keys(f, keys);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn folder_ui(
     ui: &mut egui::Ui,
     folder: &Folder,
@@ -5603,14 +5647,20 @@ fn folder_ui(
     filter: &str,
     open: &std::collections::HashSet<PathBuf>,
     expand: Option<bool>,
+    closed: &std::collections::BTreeSet<String>,
 ) {
     for f in &folder.folders {
         if !filter.is_empty() && !f.all_sessions().iter().any(|s| session_matches(s, filter)) {
             continue;
         }
         let id = ui.make_persistent_id(("folder", &f.dir));
-        let mut state =
-            egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true);
+        let key = folder_key(f);
+        let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
+            ui.ctx(),
+            id,
+            !closed.contains(&key),
+        );
+        let was_open = state.is_open();
         if !filter.is_empty() {
             state.set_open(true); // show every match while searching
         } else if let Some(open) = expand {
@@ -5621,7 +5671,7 @@ fn folder_ui(
                 let color = theme::folder_color(f.own.color.as_deref());
                 tree_row(ui, drag, RowKind::Folder(color), f.name.clone().into())
             })
-            .body(|ui| folder_ui(ui, f, picked, drag, filter, open, expand));
+            .body(|ui| folder_ui(ui, f, picked, drag, filter, open, expand, closed));
         let r = header.inner;
         // A click on the name opens or closes it, like the arrow.
         if r.clicked()
@@ -5629,6 +5679,12 @@ fn folder_ui(
         {
             state.toggle(ui);
             state.store(ui.ctx());
+        }
+        // Opened or closed by hand (not by a search or Expand all): kept.
+        let now_open = egui::collapsing_header::CollapsingState::load(ui.ctx(), id)
+            .is_some_and(|s| s.is_open());
+        if filter.is_empty() && expand.is_none() && now_open != was_open {
+            picked.push(TreeAction::FolderOpen(key, now_open));
         }
         if drag {
             drag_item(ui, &r, &f.dir, &f.name);
@@ -6476,6 +6532,7 @@ impl eframe::App for PrzmApp {
                                 &filter,
                                 &open,
                                 self.tree_expand.take(),
+                                &self.prefs.closed_folders,
                             );
                         }
                         if !self.sessions.errors.is_empty() {
@@ -6601,7 +6658,23 @@ impl eframe::App for PrzmApp {
                                         }
                                         self.reload_sessions();
                                     }
-                                    TreeAction::ExpandAll(open) => self.tree_expand = Some(open),
+                                    TreeAction::ExpandAll(open) => {
+                                        self.tree_expand = Some(open);
+                                        let mut closed = std::collections::BTreeSet::new();
+                                        if !open {
+                                            all_folder_keys(&self.sessions.root, &mut closed);
+                                        }
+                                        self.prefs.closed_folders = closed;
+                                        self.save_prefs();
+                                    }
+                                    TreeAction::FolderOpen(key, open) => {
+                                        if open {
+                                            self.prefs.closed_folders.remove(&key);
+                                        } else {
+                                            self.prefs.closed_folders.insert(key);
+                                        }
+                                        self.save_prefs();
+                                    }
                                     TreeAction::Reload => {
                                         self.reload_sessions();
                                         self.notice = Some("Read the sessions again.".into());
