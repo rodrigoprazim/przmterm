@@ -49,7 +49,7 @@ Every user-visible change adds a line under `## [Unreleased]` in
 
 ## Updates in the app
 
-*Check for Updates…* lists the GitHub releases and shows the newest one's
+*Check for Updates* lists the GitHub releases and shows the newest one's
 notes (the release body, taken from CHANGELOG.md). When GitHub's API
 refuses (it answers 60 requests an hour per address, which a company
 network shares), the app reads the releases' Atom feed instead, the file

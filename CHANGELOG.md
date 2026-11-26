@@ -27,9 +27,20 @@ All notable changes to PrzmTerm are recorded here. The format follows
 - SSH tunnels in the session settings: the address field takes the rest
   of the row, so it shows whole, and + follows the last tunnel (as in
   login triggers) instead of staying on the first.
+- Progress bars (downloading an update, file browser transfers) are thin
+  and flat, with what is being done and the percentage above the bar,
+  instead of egui's rounded bar with the text inside it. When the size is
+  not known, a piece of bar slides along.
+- Menu items no longer end in "…" (*Settings*, *Edit*, *Export session*,
+  *Font, Colors and Cursor*…), nor do the file browser's buttons.
+- A folder icon at the top right, beside the split icons, opens the file
+  browser of the session shown: SFTP or SCP.
 
 ### Fixed
 
+- The file transfer dialog kept the same width whatever the protocol: a
+  field filling its row (the file to receive, the SCP path) made it wider
+  than its tabs and buttons, leaving an empty strip on the right.
 - Editing in nano garbled lines and put the cursor in the wrong place (a
   character seemed left over, a space seemed added): nano went back to a
   tab stop with CBT (`CSI Z`), which the terminal ignored. It now follows

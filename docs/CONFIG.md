@@ -22,7 +22,7 @@ describes every file and key. It also states what stays compatible from
 PrzmTerm looks for the settings folder (`<config>` below) in this order:
 
 1. `$PRZMTERM_HOME`, when the variable is set.
-2. The folder chosen in *Settings folder…*. Its path is kept in
+2. The folder chosen in *Settings folder*. Its path is kept in
    `location.toml` in the system folder (next item), and that is the only
    file left there.
 3. The system folder for application settings:
@@ -81,7 +81,7 @@ still used:
   file with what is wrong, and *Remove them* writes it again without the
   unknown keys;
 - for `buttons.toml`, the note shows on the button bar;
-- for `keymap.toml`, the note shows in *Keyboard shortcuts…*;
+- for `keymap.toml`, the note shows in *Keyboard shortcuts*;
 - for keyword sets, the note shows in the terminal of the session that
   uses the set.
 
@@ -444,12 +444,12 @@ triple_click_newline = false
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `check_for_updates` | `true` or `false` | `true` | Look for a newer release on GitHub when PrzmTerm starts. |
-| `look` | `"dark"`, `"light"` or `"system"` | `"dark"` | The interface's look (*Settings…*). `system` follows the computer's mode. |
-| `skipped_version` | text | none | A release chosen with *Skip This Version*: PrzmTerm does not announce it when it starts. *Check for Updates…* still shows it. |
-| `debug_log` | `true` or `false` | `false` | The log file has PrzmTerm's steps in detail (*Diagnostics…* › *Detailed log*). |
+| `look` | `"dark"`, `"light"` or `"system"` | `"dark"` | The interface's look (*Settings*). `system` follows the computer's mode. |
+| `skipped_version` | text | none | A release chosen with *Skip This Version*: PrzmTerm does not announce it when it starts. *Check for Updates* still shows it. |
+| `debug_log` | `true` or `false` | `false` | The log file has PrzmTerm's steps in detail (*Diagnostics* › *Detailed log*). |
 | `closed_folders` | list of folder paths | `[]` | Folders of the session list left closed, by their path from the sessions folder (`"Data Center/Network"`); kept as they are opened and closed. |
 
-`[mouse]`, what the mouse does in the terminal (*Settings…*). All off
+`[mouse]`, what the mouse does in the terminal (*Settings*). All off
 unless chosen:
 
 | Key | Type | Default | Meaning |
@@ -482,7 +482,7 @@ The header is authenticated with the data. Changing the costs or the salt
 makes the vault fail to open, rather than open with weaker settings. Each
 entry has a `name`, which sessions refer to with `credential = "<name>"`,
 and a `username`, a `password` and a `passphrase`. Edit the vault in the
-app (*Password vault…*), never by hand.
+app (*Password vault*), never by hand.
 
 ## Other files and folders
 
@@ -496,7 +496,7 @@ app (*Password vault…*), never by hand.
 
 ## Backups and exports: `.przm`
 
-*Back up settings…* and *Export session…* write one `.przm` file, which is
+*Back up settings* and *Export session* write one `.przm` file, which is
 TOML too:
 
 ```toml

@@ -140,7 +140,7 @@ pub const COMMANDS: [Command; 30] = [
     },
     Command {
         id: "run_script",
-        label: "Run a script…",
+        label: "Run a script",
         default: None,
     },
     Command {

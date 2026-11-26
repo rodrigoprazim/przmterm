@@ -2756,7 +2756,7 @@ impl PrzmApp {
                 ui.close();
             }
             if ui
-                .button("Log to File…")
+                .button("Log to File")
                 .on_hover_text(
                     "Log this session to a file you name, wherever you want. Only until \
                      it closes: the session's own log settings stay as they are.",
@@ -2767,7 +2767,7 @@ impl PrzmApp {
                 ui.close();
             }
             if ui
-                .button("Save History As…")
+                .button("Save History As")
                 .on_hover_text("Write what the session's history and screen hold now to a file")
                 .clicked()
             {
@@ -2795,7 +2795,7 @@ impl PrzmApp {
             ui.separator();
             let saved = pane.origin.as_ref().is_some_and(|s| s.path.is_file());
             if ui
-                .add_enabled(saved, egui::Button::new("Log Settings…"))
+                .add_enabled(saved, egui::Button::new("Log Settings"))
                 .on_hover_text("The log folder and file name, in the session's settings")
                 .on_disabled_hover_text("Only for saved sessions")
                 .clicked()
@@ -3262,13 +3262,16 @@ impl PrzmApp {
                         match &stage {
                             Some(update::Stage::Fetching { done, total }) => {
                                 let mb = |b: u64| b as f64 / 1_048_576.0;
-                                ui.add(egui::ProgressBar::new(*done as f32 / *total as f32).text(
-                                    format!(
+                                theme::progress(
+                                    ui,
+                                    (*total > 0).then(|| *done as f32 / *total as f32),
+                                    &format!(
                                         "Downloading… {:.1} of {:.1} MB",
                                         mb(*done),
                                         mb(*total)
                                     ),
-                                ));
+                                    ui.available_width(),
+                                );
                                 ui.add_space(6.0);
                                 ui.horizontal(|ui| {
                                     ui.with_layout(
@@ -5217,8 +5220,8 @@ fn group_label(ui: &mut egui::Ui, group: &Group, actions: &mut Vec<Action>) {
                 ui.close();
             }
         };
-        item(ui, "Send Command to Group…", Action::SendToGroup(group.id));
-        item(ui, "Rename Group…", Action::RenameGroup(group.id));
+        item(ui, "Send Command to Group", Action::SendToGroup(group.id));
+        item(ui, "Rename Group", Action::RenameGroup(group.id));
         ui.separator();
         item(ui, "Ungroup", Action::Ungroup(group.id));
         item(ui, "Close Group", Action::CloseGroup(group.id));
@@ -5250,7 +5253,7 @@ fn tab_menu(
             ui.close();
         }
     };
-    item(ui, true, "Rename…", Action::RenameTab(i));
+    item(ui, true, "Rename", Action::RenameTab(i));
     item(
         ui,
         tab.name.is_some(),
@@ -5346,7 +5349,7 @@ fn tab_menu(
             Action::ToMainWindow(i),
         );
     });
-    item(ui, tab.lock.is_none(), "Lock…", Action::LockTab(i));
+    item(ui, tab.lock.is_none(), "Lock", Action::LockTab(i));
     ui.separator();
     item(ui, has_session, "Clone Session", Action::CloneTab(i));
     item(
@@ -5365,13 +5368,13 @@ fn tab_menu(
         ui,
         has_session,
         if quick {
-            "Save Session…"
+            "Save Session"
         } else {
-            "Session Options…"
+            "Session Options"
         },
         Action::SessionOptions(i),
     );
-    item(ui, true, "Font, Colors and Cursor…", Action::FontTab(i));
+    item(ui, true, "Font, Colors and Cursor", Action::FontTab(i));
     ui.separator();
     match tab.pane().script_name() {
         Some(name) => item(
@@ -5380,9 +5383,9 @@ fn tab_menu(
             &format!("Stop Script {name}"),
             Action::StopScript(i),
         ),
-        None => item(ui, true, "Run Script…", Action::RunScript(i)),
+        None => item(ui, true, "Run Script", Action::RunScript(i)),
     }
-    item(ui, true, "Script Guide…", Action::ScriptGuide);
+    item(ui, true, "Script Guide", Action::ScriptGuide);
     ui.separator();
     let ssh_live = tab
         .pane()
@@ -5451,33 +5454,40 @@ fn browser_menu(ui: &mut egui::Ui, enabled: bool, shell: Option<&str>) -> Option
     ui.add_enabled_ui(enabled, |ui| {
         ui.menu_button("File Browser", |ui| {
             crate::theme::compact_menu(ui);
-            if ui
-                .button("SFTP")
-                .on_hover_text("Browse and transfer files over SFTP")
-                .clicked()
-            {
-                picked = Some(false);
-                ui.close();
-            }
-            let scp = match shell {
-                Some(shell) => format!("SCP  ({shell})"),
-                None => "SCP".to_string(),
-            };
-            if ui
-                .button(scp)
-                .on_hover_text(
-                    "Browse and transfer files over SCP, in the session's SCP shell \
-                     (sudo su - to work as root)",
-                )
-                .clicked()
-            {
-                picked = Some(true);
-                ui.close();
-            }
+            picked = browser_items(ui, shell);
         })
         .response
         .on_disabled_hover_text("Needs a connected SSH session");
     });
+    picked
+}
+
+/// The file browser's two kinds, SFTP and SCP: `Some(true)` for SCP.
+fn browser_items(ui: &mut egui::Ui, shell: Option<&str>) -> Option<bool> {
+    let mut picked = None;
+    if ui
+        .button("SFTP")
+        .on_hover_text("Browse and transfer files over SFTP")
+        .clicked()
+    {
+        picked = Some(false);
+        ui.close();
+    }
+    let scp = match shell {
+        Some(shell) => format!("SCP  ({shell})"),
+        None => "SCP".to_string(),
+    };
+    if ui
+        .button(scp)
+        .on_hover_text(
+            "Browse and transfer files over SCP, in the session's SCP shell \
+             (sudo su - to work as root)",
+        )
+        .clicked()
+    {
+        picked = Some(true);
+        ui.close();
+    }
     picked
 }
 
@@ -5614,14 +5624,14 @@ fn list_menu(ui: &mut egui::Ui, picked: &mut Vec<TreeAction>) {
             ui.close();
         }
     };
-    item(ui, "New session…", TreeAction::NewSession(Vec::new()));
-    item(ui, "New folder…", TreeAction::NewFolder(PathBuf::new()));
+    item(ui, "New session", TreeAction::NewSession(Vec::new()));
+    item(ui, "New folder", TreeAction::NewFolder(PathBuf::new()));
     ui.separator();
     item(ui, "Expand all", TreeAction::ExpandAll(true));
     item(ui, "Collapse all", TreeAction::ExpandAll(false));
     item(ui, "Reload", TreeAction::Reload);
     ui.separator();
-    item(ui, "Global settings…", TreeAction::GlobalSettings);
+    item(ui, "Global settings", TreeAction::GlobalSettings);
     item(ui, "Show settings folder", TreeAction::ShowSettingsFolder);
 }
 
@@ -5721,21 +5731,21 @@ fn folder_ui(
         })
         .context_menu(|ui| {
             crate::theme::compact_menu(ui);
-            if ui.button("New session here…").clicked() {
+            if ui.button("New session here").clicked() {
                 picked.push(TreeAction::NewSession(f.trail.clone()));
                 ui.close();
             }
-            if ui.button("New folder inside…").clicked() {
+            if ui.button("New folder inside").clicked() {
                 picked.push(TreeAction::NewFolder(f.dir.clone()));
                 ui.close();
             }
             ui.separator();
-            if ui.button("Rename…").clicked() {
+            if ui.button("Rename").clicked() {
                 picked.push(TreeAction::RenameFolder(f.dir.clone(), f.name.clone()));
                 ui.close();
             }
             if ui
-                .button("Folder settings…")
+                .button("Folder settings")
                 .on_hover_text("Values every session in this folder inherits")
                 .clicked()
             {
@@ -5749,7 +5759,7 @@ fn folder_ui(
                 }
             });
             if ui
-                .button("Export folder…")
+                .button("Export folder")
                 .on_hover_text("Save this folder and its sessions to a file to share")
                 .clicked()
             {
@@ -5757,7 +5767,7 @@ fn folder_ui(
                 ui.close();
             }
             ui.separator();
-            if ui.button("Delete…").clicked() {
+            if ui.button("Delete").clicked() {
                 picked.push(TreeAction::DeleteFolder(
                     f.dir.clone(),
                     f.name.clone(),
@@ -5809,11 +5819,11 @@ fn folder_ui(
             {
                 picked.push(TreeAction::Browse(s.clone(), scp));
             }
-            if ui.button("Edit…").clicked() {
+            if ui.button("Edit").clicked() {
                 picked.push(TreeAction::Edit(s.clone()));
                 ui.close();
             }
-            if ui.button("Duplicate…").clicked() {
+            if ui.button("Duplicate").clicked() {
                 picked.push(TreeAction::Duplicate(s.clone()));
                 ui.close();
             }
@@ -5822,7 +5832,7 @@ fn folder_ui(
                 ui.close();
             }
             if ui
-                .button("Export session…")
+                .button("Export session")
                 .on_hover_text("Save this session to a file to share")
                 .clicked()
             {
@@ -5830,7 +5840,7 @@ fn folder_ui(
                 ui.close();
             }
             ui.separator();
-            if ui.button("Delete…").clicked() {
+            if ui.button("Delete").clicked() {
                 picked.push(TreeAction::Delete(s.clone()));
                 ui.close();
             }
@@ -5973,12 +5983,37 @@ impl eframe::App for PrzmApp {
                         ),
                     ] {
                         if icons::button(ui, icon, false)
-                            .on_hover_text(format!("{what}…{}", self.keys_hint(id)))
+                            .on_hover_text(format!("{what}{}", self.keys_hint(id)))
                             .clicked()
                         {
                             actions.push(Action::Split(layout));
                         }
                     }
+                    // The file browser of the session shown, SFTP or SCP,
+                    // apart from the splitting.
+                    ui.separator();
+                    let pane = tab.pane();
+                    let ssh_live = pane
+                        .origin
+                        .as_ref()
+                        .is_some_and(|s| s.protocol == przmterm_core::Protocol::Ssh)
+                        && !pane.transport.is_closed();
+                    let shell = pane.origin.as_ref().and_then(|s| s.scp_shell.as_deref());
+                    let files = ui
+                        .add_enabled_ui(ssh_live, |ui| {
+                            icons::button(ui, icons::Icon::Folder, false)
+                        })
+                        .inner
+                        .on_hover_text("File Browser: SFTP or SCP on this session")
+                        .on_disabled_hover_text("File Browser: needs a connected SSH session");
+                    egui::Popup::menu(&files).show(|ui| {
+                        crate::theme::compact_menu(ui);
+                        match browser_items(ui, shell) {
+                            Some(true) => actions.push(Action::OpenScp(self.active_tab)),
+                            Some(false) => actions.push(Action::OpenSftp(self.active_tab)),
+                            None => {}
+                        }
+                    });
                     egui::Popup::menu(&more).show(|ui| {
                         crate::theme::menu(ui);
                         ui.weak("A PrzmTerm shell or sessions of other tabs");
@@ -5988,10 +6023,7 @@ impl eframe::App for PrzmApp {
                             (Layout::Rows, "split_rows"),
                         ] {
                             if ui
-                                .add(
-                                    egui::Button::new(format!("{}…", layout.label()))
-                                        .shortcut_text(keys(id)),
-                                )
+                                .add(egui::Button::new(layout.label()).shortcut_text(keys(id)))
                                 .clicked()
                             {
                                 actions.push(Action::Split(layout));
@@ -6315,11 +6347,11 @@ impl eframe::App for PrzmApp {
                             .on_hover_text("New session or folder, backup, vault, shortcuts…");
                         egui::Popup::menu(&plus).show(|ui| {
                             crate::theme::menu(ui);
-                            if ui.button("New session…").clicked() {
+                            if ui.button("New session").clicked() {
                                 self.editor = Some(Editor::new_session(&[]));
                                 ui.close();
                             }
-                            if ui.button("New folder…").clicked() {
+                            if ui.button("New folder").clicked() {
                                 self.name_dialog = Some(NameDialog {
                                     title: "New folder",
                                     dir: self.sessions.root.dir.clone(),
@@ -6332,7 +6364,7 @@ impl eframe::App for PrzmApp {
                             }
                             ui.separator();
                             if ui
-                                .button("Back up settings…")
+                                .button("Back up settings")
                                 .on_hover_text(
                                     "Everything (sessions, folders, keywords, buttons, \
                                      known hosts) in one file; passwords stay in the keychain",
@@ -6343,7 +6375,7 @@ impl eframe::App for PrzmApp {
                                 self.back_up();
                             }
                             if ui
-                                .button("Restore or import…")
+                                .button("Restore or import")
                                 .on_hover_text("A backup, or sessions someone exported")
                                 .clicked()
                             {
@@ -6351,7 +6383,7 @@ impl eframe::App for PrzmApp {
                                 self.open_bundle();
                             }
                             if ui
-                                .button("Settings folder…")
+                                .button("Settings folder")
                                 .on_hover_text(
                                     "Where PrzmTerm keeps its settings: a synced folder \
                                      shares them between computers",
@@ -6363,7 +6395,7 @@ impl eframe::App for PrzmApp {
                             }
                             ui.separator();
                             if ui
-                                .button("Password vault…")
+                                .button("Password vault")
                                 .on_hover_text(
                                     "User names, passwords and key passphrases in one \
                                      encrypted file",
@@ -6374,7 +6406,7 @@ impl eframe::App for PrzmApp {
                                 ui.close();
                             }
                             if ui
-                                .button("Keyboard shortcuts…")
+                                .button("Keyboard shortcuts")
                                 .on_hover_text(
                                     "Choose the keys for commands, text, scripts and buttons",
                                 )
@@ -6384,7 +6416,7 @@ impl eframe::App for PrzmApp {
                                 ui.close();
                             }
                             if ui
-                                .button("Script guide…")
+                                .button("Script guide")
                                 .on_hover_text("How to write scripts, with examples")
                                 .clicked()
                             {
@@ -6393,7 +6425,7 @@ impl eframe::App for PrzmApp {
                             }
                             ui.separator();
                             if ui
-                                .button("Import from SecureCRT…")
+                                .button("Import from SecureCRT")
                                 .on_hover_text(
                                     "An XML export, session .ini files, keyword lists or the \
                                      button bars (ButtonBarV5.ini, in SecureCRT's Config folder)",
@@ -6404,7 +6436,7 @@ impl eframe::App for PrzmApp {
                                 self.pick_securecrt(false);
                             }
                             if ui
-                                .button("Import a SecureCRT Sessions folder…")
+                                .button("Import a SecureCRT Sessions folder")
                                 .on_hover_text(
                                     "SecureCRT's Config/Sessions folder, with its sub-folders, \
                                      and the button bars next to it",
@@ -6416,22 +6448,22 @@ impl eframe::App for PrzmApp {
                             }
                             ui.separator();
                             if ui
-                                .button("Settings…")
+                                .button("Settings")
                                 .on_hover_text("PrzmTerm's own: its look and the mouse")
                                 .clicked()
                             {
                                 menu_command = Some(appmenu::AppCommand::Appearance);
                                 ui.close();
                             }
-                            if ui.button("Check for Updates…").clicked() {
+                            if ui.button("Check for Updates").clicked() {
                                 menu_command = Some(appmenu::AppCommand::CheckUpdates);
                                 ui.close();
                             }
-                            if ui.button("Diagnostics…").clicked() {
+                            if ui.button("Diagnostics").clicked() {
                                 menu_command = Some(appmenu::AppCommand::Diagnostics);
                                 ui.close();
                             }
-                            if ui.button("About PrzmTerm…").clicked() {
+                            if ui.button("About PrzmTerm").clicked() {
                                 menu_command = Some(appmenu::AppCommand::About);
                                 ui.close();
                             }

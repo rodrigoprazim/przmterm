@@ -7,7 +7,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use eframe::egui::{
-    self, Color32, CornerRadius, FontFamily, FontId, IntoAtoms as _, Margin, Shadow, Stroke,
+    self, Color32, CornerRadius, FontFamily, FontId, IntoAtoms as _, Margin, Rect, Sense, Shadow,
+    Stroke, pos2, vec2,
 };
 
 const fn rgb(r: u8, g: u8, b: u8) -> Color32 {
@@ -288,6 +289,85 @@ pub fn window_title(ctx: &egui::Context, text: impl Into<String>) -> egui::Atoms
         text.into(),
     )
         .into_atoms()
+}
+
+/// A progress bar: `text` on the left and the percentage on the right in
+/// small type, over a thin bar with square-ish ends (not egui's pill).
+/// Without a `fraction` (size unknown) a short piece of bar slides along.
+pub fn progress(
+    ui: &mut egui::Ui,
+    fraction: Option<f32>,
+    text: &str,
+    width: f32,
+) -> egui::Response {
+    const BAR: f32 = 4.0;
+    const GAP: f32 = 3.0;
+    let font = FontId::proportional(11.5);
+    let row = ui.fonts_mut(|f| f.row_height(&font));
+    let (rect, response) = ui.allocate_exact_size(vec2(width, row + GAP + BAR), Sense::hover());
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+    let pal = p();
+    let painter = ui.painter_at(rect.expand(1.0));
+    let text_rect = Rect::from_min_size(rect.min, vec2(width, row));
+    let percent = fraction.map(|f| format!("{:.0}%", (f.clamp(0.0, 1.0) * 100.0).floor()));
+    let percent_width = percent.as_ref().map_or(0.0, |t| {
+        let galley = painter.layout_no_wrap(t.clone(), font.clone(), pal.text_strong);
+        let w = galley.size().x;
+        painter.galley(
+            pos2(
+                text_rect.right() - w,
+                text_rect.center().y - galley.size().y / 2.0,
+            ),
+            galley,
+            pal.text_strong,
+        );
+        w + 8.0
+    });
+    let label = painter.layout(
+        text.to_owned(),
+        font,
+        pal.text_weak,
+        (width - percent_width).max(0.0),
+    );
+    painter.galley(
+        pos2(
+            text_rect.left(),
+            text_rect.center().y - label.size().y / 2.0,
+        ),
+        label,
+        pal.text_weak,
+    );
+
+    let track = Rect::from_min_size(pos2(rect.left(), rect.bottom() - BAR), vec2(width, BAR));
+    let radius = CornerRadius::same(1);
+    painter.rect_filled(track, radius, pal.border);
+    match fraction {
+        Some(f) => {
+            let filled = track.width() * f.clamp(0.0, 1.0);
+            if filled > 0.0 {
+                let bar = Rect::from_min_size(track.min, vec2(filled.max(2.0), BAR));
+                painter.rect_filled(bar, radius, pal.accent);
+            }
+        }
+        None => {
+            // Size unknown: a quarter of the track sliding across.
+            let t = ui.input(|i| i.time) as f32;
+            let piece = track.width() / 4.0;
+            let x = (t * 0.8).fract() * (track.width() + piece) - piece;
+            let bar = Rect::from_min_max(
+                pos2((track.left() + x).max(track.left()), track.top()),
+                pos2(
+                    (track.left() + x + piece).min(track.right()),
+                    track.bottom(),
+                ),
+            );
+            painter.rect_filled(bar, radius, pal.accent);
+            ui.ctx().request_repaint();
+        }
+    }
+    response
 }
 
 /// egui's close button answers only on its small cross, a row high: a

@@ -1100,7 +1100,7 @@ impl TerminalView {
             let quoted = one_line.map(|t| format!("“{}”", ellipsis(t, 24)));
             let label = match &quoted {
                 Some(q) => format!("Find {q}"),
-                None => "Find…".to_string(),
+                None => "Find".to_string(),
             };
             if ui.button(label).clicked() {
                 choice.find = Some(one_line.unwrap_or_default().to_string());
@@ -1108,7 +1108,7 @@ impl TerminalView {
             }
             let label = match &quoted {
                 Some(q) => format!("Highlight {q}"),
-                None => "Highlights…".to_string(),
+                None => "Highlights".to_string(),
             };
             if ui
                 .button(label)
