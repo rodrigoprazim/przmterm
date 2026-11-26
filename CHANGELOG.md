@@ -13,6 +13,19 @@ All notable changes to PrzmTerm are recorded here. The format follows
   of its panes) and as a keyboard shortcut to set: undoes what a program left set when it did not end
   cleanly, such as its screen, arrow keys on the mouse wheel or a scroll
   region, keeping the text and the history. Nothing is sent to the server.
+- A colour picker of PrzmTerm's own for every colour (cursor, terminal,
+  keywords, highlights): a palette, the colours picked lately, a
+  saturation and brightness square with a hue bar, and the colour as hue,
+  saturation and lightness, red, green and blue, or hex to type in, with
+  the colour before beside the new one.
+
+### Changed
+
+- The session list remembers which folders were closed: they stay closed
+  the next time PrzmTerm starts (`closed_folders` in `preferences.toml`).
+- SSH tunnels in the session settings: the address field takes the rest
+  of the row, so it shows whole, and + follows the last tunnel (as in
+  login triggers) instead of staying on the first.
 
 ### Fixed
 
